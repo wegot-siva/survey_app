@@ -7,7 +7,7 @@ import 'package:sqflite/sqflite.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 2;
+const int _dbVersion = 3;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -21,6 +21,10 @@ Future<Database> openAppDatabase() async {
       // v1 -> v2: add source points.
       if (oldVersion < 2) {
         await _createSourcePointsTable(db);
+      }
+      // v2 -> v3: add inlet points.
+      if (oldVersion < 3) {
+        await _createInletPointsTable(db);
       }
     },
     onCreate: (db, version) async {
@@ -66,6 +70,7 @@ Future<Database> openAppDatabase() async {
       ''');
 
       await _createSourcePointsTable(db);
+      await _createInletPointsTable(db);
     },
   );
 }
@@ -105,6 +110,42 @@ Future<void> _createSourcePointsTable(Database db) async {
       antenna_required                  INTEGER,
       transmitting_part_open_to_air     INTEGER,
       nrv_feasibility                   INTEGER,
+      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+}
+
+/// Inlet points table (v3). A site has many. Distinct from source points:
+/// no source-only checks (pipe full, valve, reducer, etc.); adds series,
+/// access mode, cable run length and conduit/civil-work fields.
+Future<void> _createInletPointsTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE inlet_points (
+      id                            TEXT PRIMARY KEY,
+      site_id                       TEXT NOT NULL,
+      block                         TEXT,
+      apartment_bhk                 TEXT,
+      sensor_size                   TEXT,
+      series                        TEXT,
+      sensor_od                     TEXT,
+      pipe_size                     TEXT,
+      pipe_type                     TEXT,
+      qty                           INTEGER,
+      sensor_type                   TEXT,
+      rework                        INTEGER,
+      rework_details                TEXT,
+      linear_distance_clearance_10x INTEGER,
+      reverse_flow                  INTEGER,
+      oht_hns                       TEXT,
+      distance_from_motor_pump      INTEGER,
+      max_and_continuous_pressure_bar REAL,
+      strainer_screen_filter        INTEGER,
+      flow_direction                TEXT,
+      access_mode                   TEXT,
+      cable_run_length              TEXT,
+      conduit_clamping              INTEGER,
+      civil_work_needed             INTEGER,
+      civil_work_details            TEXT,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');

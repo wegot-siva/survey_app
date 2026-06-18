@@ -1,4 +1,5 @@
 import '../models/client_inputs.dart';
+import '../models/inlet_point.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../services/id_service.dart';
@@ -12,6 +13,7 @@ class InMemorySurveyRepository implements SurveyRepository {
   final IdService _idService;
   final Map<String, Site> _sites = {};
   final Map<String, SourcePoint> _sourcePoints = {};
+  final Map<String, InletPoint> _inletPoints = {};
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -68,5 +70,28 @@ class InMemorySurveyRepository implements SurveyRepository {
   @override
   Future<void> deleteSourcePoint(String id) async {
     _sourcePoints.remove(id);
+  }
+
+  @override
+  Future<List<InletPoint>> getInletPoints(String siteId) async => _inletPoints
+      .values
+      .where((ip) => ip.siteId == siteId)
+      .toList(growable: false);
+
+  @override
+  Future<InletPoint> addInletPoint(InletPoint inletPoint) async {
+    final stored = inletPoint.copyWithId(_idService.newId());
+    _inletPoints[stored.id] = stored;
+    return stored;
+  }
+
+  @override
+  Future<void> updateInletPoint(InletPoint inletPoint) async {
+    _inletPoints[inletPoint.id] = inletPoint;
+  }
+
+  @override
+  Future<void> deleteInletPoint(String id) async {
+    _inletPoints.remove(id);
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/survey_repository.dart';
 import '../models/site.dart';
 import 'client_inputs_screen.dart';
+import 'inlet_points_list_screen.dart';
 import 'source_points_list_screen.dart';
 
 /// The hub for one site: jump to any section (Client inputs, Source points,
@@ -25,6 +26,7 @@ class SiteHubScreen extends StatefulWidget {
 class _SiteHubScreenState extends State<SiteHubScreen> {
   Site? _site;
   int _sourcePointCount = 0;
+  int _inletPointCount = 0;
   bool _loading = true;
 
   @override
@@ -36,11 +38,13 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     final site = await widget.repository.getSiteById(widget.siteId);
-    final points = await widget.repository.getSourcePoints(widget.siteId);
+    final sourcePoints = await widget.repository.getSourcePoints(widget.siteId);
+    final inletPoints = await widget.repository.getInletPoints(widget.siteId);
     if (!mounted) return;
     setState(() {
       _site = site;
-      _sourcePointCount = points.length;
+      _sourcePointCount = sourcePoints.length;
+      _inletPointCount = inletPoints.length;
       _loading = false;
     });
   }
@@ -60,6 +64,16 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
       MaterialPageRoute<void>(
         builder: (_) =>
             SourcePointsListScreen(repository: widget.repository, site: site),
+      ),
+    );
+    await _load();
+  }
+
+  Future<void> _openInletPoints(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            InletPointsListScreen(repository: widget.repository, site: site),
       ),
     );
     await _load();
@@ -101,9 +115,9 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
                 _SectionTile(
                   icon: Icons.input_outlined,
                   title: 'Inlet points',
-                  subtitle: 'Coming soon',
-                  trailing: const Icon(Icons.lock_outline),
-                  onTap: null,
+                  subtitle: '$_inletPointCount recorded',
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openInletPoints(site),
                 ),
               ],
             ),

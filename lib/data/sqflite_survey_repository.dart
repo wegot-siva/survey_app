@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../models/client_inputs.dart';
+import '../models/inlet_point.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../models/survey_options.dart';
@@ -173,6 +174,41 @@ class SqfliteSurveyRepository implements SurveyRepository {
   Future<void> deleteSourcePoint(String id) async {
     await _db.delete('source_points', where: 'id = ?', whereArgs: [id]);
   }
+
+  // ---- Inlet points ---------------------------------------------------------
+
+  @override
+  Future<List<InletPoint>> getInletPoints(String siteId) async {
+    final rows = await _db.query(
+      'inlet_points',
+      where: 'site_id = ?',
+      whereArgs: [siteId],
+      orderBy: 'rowid',
+    );
+    return rows.map(_inletPointFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<InletPoint> addInletPoint(InletPoint inletPoint) async {
+    final stored = inletPoint.copyWithId(_idService.newId());
+    await _db.insert('inlet_points', _inletPointToRow(stored));
+    return stored;
+  }
+
+  @override
+  Future<void> updateInletPoint(InletPoint inletPoint) async {
+    await _db.update(
+      'inlet_points',
+      _inletPointToRow(inletPoint),
+      where: 'id = ?',
+      whereArgs: [inletPoint.id],
+    );
+  }
+
+  @override
+  Future<void> deleteInletPoint(String id) async {
+    await _db.delete('inlet_points', where: 'id = ?', whereArgs: [id]);
+  }
 }
 
 // ---- Row <-> model mapping (hand-written, no codegen) -----------------------
@@ -331,5 +367,74 @@ SourcePoint _sourcePointFromRow(Map<String, Object?> r) {
       r['transmitting_part_open_to_air'] as int?,
     ),
     nrvFeasibility: _intToBool(r['nrv_feasibility'] as int?),
+  );
+}
+
+Map<String, Object?> _inletPointToRow(InletPoint i) {
+  return {
+    'id': i.id,
+    'site_id': i.siteId,
+    'block': i.block,
+    'apartment_bhk': i.apartmentBhk,
+    'sensor_size': i.sensorSize?.name,
+    'series': i.series,
+    'sensor_od': i.sensorOd?.name,
+    'pipe_size': i.pipeSize?.name,
+    'pipe_type': i.pipeType?.name,
+    'qty': i.qty,
+    'sensor_type': i.sensorType?.name,
+    'rework': _boolToInt(i.rework),
+    'rework_details': i.reworkDetails,
+    'linear_distance_clearance_10x': _boolToInt(i.linearDistanceClearance10x),
+    'reverse_flow': _boolToInt(i.reverseFlow),
+    'oht_hns': i.ohtHns?.name,
+    'distance_from_motor_pump': _boolToInt(i.distanceFromMotorPump),
+    'max_and_continuous_pressure_bar': i.maxAndContinuousPressureBar,
+    'strainer_screen_filter': _boolToInt(i.strainerScreenFilter),
+    'flow_direction': i.flowDirection?.name,
+    'access_mode': i.accessMode?.name,
+    'cable_run_length': i.cableRunLength?.name,
+    'conduit_clamping': _boolToInt(i.conduitClamping),
+    'civil_work_needed': _boolToInt(i.civilWorkNeeded),
+    'civil_work_details': i.civilWorkDetails,
+  };
+}
+
+InletPoint _inletPointFromRow(Map<String, Object?> r) {
+  return InletPoint(
+    id: r['id']! as String,
+    siteId: r['site_id']! as String,
+    block: r['block'] as String?,
+    apartmentBhk: (r['apartment_bhk'] as String?) ?? '',
+    sensorSize: _enumByName(SensorSize.values, r['sensor_size'] as String?),
+    series: (r['series'] as String?) ?? '',
+    sensorOd: _enumByName(SensorOd.values, r['sensor_od'] as String?),
+    pipeSize: _enumByName(PipeSize.values, r['pipe_size'] as String?),
+    pipeType: _enumByName(PipeType.values, r['pipe_type'] as String?),
+    qty: r['qty'] as int?,
+    sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
+    rework: _intToBool(r['rework'] as int?),
+    reworkDetails: (r['rework_details'] as String?) ?? '',
+    linearDistanceClearance10x: _intToBool(
+      r['linear_distance_clearance_10x'] as int?,
+    ),
+    reverseFlow: _intToBool(r['reverse_flow'] as int?),
+    ohtHns: _enumByName(OhtHns.values, r['oht_hns'] as String?),
+    distanceFromMotorPump: _intToBool(r['distance_from_motor_pump'] as int?),
+    maxAndContinuousPressureBar:
+        (r['max_and_continuous_pressure_bar'] as num?)?.toDouble(),
+    strainerScreenFilter: _intToBool(r['strainer_screen_filter'] as int?),
+    flowDirection: _enumByName(
+      FlowDirection.values,
+      r['flow_direction'] as String?,
+    ),
+    accessMode: _enumByName(AccessMode.values, r['access_mode'] as String?),
+    cableRunLength: _enumByName(
+      CableRunLength.values,
+      r['cable_run_length'] as String?,
+    ),
+    conduitClamping: _intToBool(r['conduit_clamping'] as int?),
+    civilWorkNeeded: _intToBool(r['civil_work_needed'] as int?),
+    civilWorkDetails: (r['civil_work_details'] as String?) ?? '',
   );
 }

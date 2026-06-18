@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../data/survey_repository.dart';
 import '../models/client_inputs.dart';
 import '../models/site.dart';
+import '../models/survey_options.dart';
 
 /// The per-site "Client inputs" form. All fields are optional — partial
 /// entries can be saved. Pre-fills from any previously saved inputs.

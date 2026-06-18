@@ -61,3 +61,31 @@ enum FlowDirection {
   const FlowDirection(this.label);
   final String label;
 }
+
+/// OHT / HNS. `both` is offered on the Client inputs form; the Inlet form
+/// offers only `oht` and `hns`.
+enum OhtHns {
+  oht('OHT'),
+  hns('HNS'),
+  both('Both');
+
+  const OhtHns(this.label);
+  final String label;
+}
+
+enum AccessMode {
+  shaft('Shaft'),
+  ropeAscender('Rope Ascender'),
+  tanker('Tanker');
+
+  const AccessMode(this.label);
+  final String label;
+}
+
+enum CableRunLength {
+  m3p5('3.5m'),
+  m5('5m');
+
+  const CableRunLength(this.label);
+  final String label;
+}

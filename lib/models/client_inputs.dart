@@ -4,6 +4,8 @@
 /// default to empty strings; choice fields default to null ("not answered").
 library;
 
+import 'survey_options.dart';
+
 enum InformationSource {
   physicalSurvey('Physical survey'),
   drawing('Drawing');
@@ -22,15 +24,6 @@ enum WaterSource {
   ro('RO');
 
   const WaterSource(this.label);
-  final String label;
-}
-
-enum OhtHns {
-  oht('OHT'),
-  hns('HNS'),
-  both('Both');
-
-  const OhtHns(this.label);
   final String label;
 }
 
