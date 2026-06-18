@@ -1,30 +1,21 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// Phase 0 smoke test: the app boots to the Sites home screen with an empty
+// state and a "New site" button. Uses the in-memory repository.
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:survey_app/data/in_memory_survey_repository.dart';
 import 'package:survey_app/main.dart';
+import 'package:survey_app/services/id_service.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('boots to empty Sites home screen', (tester) async {
+    await tester.pumpWidget(
+      SurveyApp(repository: InMemorySurveyRepository(IdService())),
+    );
+    await tester.pumpAndSettle();
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('Sites'), findsOneWidget);
+    expect(find.text('New site'), findsOneWidget);
+    expect(find.text('No sites yet'), findsOneWidget);
   });
 }
