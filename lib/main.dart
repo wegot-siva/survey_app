@@ -1,14 +1,21 @@
 import 'package:flutter/material.dart';
 
-import 'data/in_memory_survey_repository.dart';
+import 'data/sqflite_survey_repository.dart';
 import 'data/survey_repository.dart';
+import 'services/app_database.dart';
 import 'services/id_service.dart';
 import 'ui/home_screen.dart';
 
-void main() {
-  // Phase 0: in-memory repository. Swapped for a real DB later behind the
-  // same SurveyRepository interface — UI never depends on the implementation.
-  final SurveyRepository repository = InMemorySurveyRepository(IdService());
+Future<void> main() async {
+  // Needed before any platform-channel call (path_provider / sqflite).
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Phase 1: local SQLite persistence. The UI only ever sees the
+  // SurveyRepository interface, so swapping the implementation changed nothing
+  // in the screens. Supabase / sync still to come.
+  final db = await openAppDatabase();
+  final SurveyRepository repository = SqfliteSurveyRepository(db, IdService());
+
   runApp(SurveyApp(repository: repository));
 }
 
