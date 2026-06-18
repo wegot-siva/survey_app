@@ -4,16 +4,25 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:survey_app/data/in_memory_survey_repository.dart';
+import 'package:survey_app/data/supabase_survey_data_source.dart';
 import 'package:survey_app/main.dart';
 import 'package:survey_app/services/id_service.dart';
 import 'package:survey_app/services/supabase_service.dart';
+import 'package:survey_app/services/sync_service.dart';
 
 void main() {
   testWidgets('boots to empty Sites home screen', (tester) async {
+    final repository = InMemorySurveyRepository(IdService());
+    final supabaseService = SupabaseService();
     await tester.pumpWidget(
       SurveyApp(
-        repository: InMemorySurveyRepository(IdService()),
-        supabaseService: SupabaseService(),
+        repository: repository,
+        supabaseService: supabaseService,
+        syncService: SyncService(
+          repository,
+          supabaseService,
+          SupabaseSurveyDataSource(),
+        ),
       ),
     );
     await tester.pumpAndSettle();

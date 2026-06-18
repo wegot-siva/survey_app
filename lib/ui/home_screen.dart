@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/survey_repository.dart';
 import '../models/site.dart';
 import '../services/supabase_service.dart';
+import '../services/sync_service.dart';
 import 'create_site_screen.dart';
 import 'site_detail_screen.dart';
 
@@ -12,10 +13,12 @@ class HomeScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.supabaseService,
+    required this.syncService,
   });
 
   final SurveyRepository repository;
   final SupabaseService supabaseService;
+  final SyncService syncService;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -88,6 +91,43 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _syncNow() async {
+    final messenger = ScaffoldMessenger.of(context)
+      ..showSnackBar(
+        const SnackBar(content: Text('Syncing to Supabase…')),
+      );
+
+    final result = await widget.syncService.pushAll();
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(
+          result.success ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+        ),
+        title: Text(result.success ? 'Sync complete' : 'Sync failed'),
+        content: SingleChildScrollView(
+          child: result.success
+              ? Text(
+                  'Pushed to Supabase:\n\n'
+                  '• ${result.sites} site(s)\n'
+                  '• ${result.blocks} block(s)\n'
+                  '• ${result.clientInputs} client input form(s)',
+                )
+              : SelectableText(result.message ?? 'Unknown error.'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -97,7 +137,12 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(
             tooltip: 'Test Supabase connection',
             onPressed: _testSupabase,
-            icon: const Icon(Icons.cloud_sync_outlined),
+            icon: const Icon(Icons.cloud_outlined),
+          ),
+          IconButton(
+            tooltip: 'Sync now (push to Supabase)',
+            onPressed: _syncNow,
+            icon: const Icon(Icons.cloud_upload_outlined),
           ),
         ],
       ),
