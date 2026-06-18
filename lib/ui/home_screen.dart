@@ -2,14 +2,20 @@ import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
 import '../models/site.dart';
+import '../services/supabase_service.dart';
 import 'create_site_screen.dart';
 import 'site_detail_screen.dart';
 
 /// Lists all sites and offers a button to create a new one.
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.repository});
+  const HomeScreen({
+    super.key,
+    required this.repository,
+    required this.supabaseService,
+  });
 
   final SurveyRepository repository;
+  final SupabaseService supabaseService;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -54,10 +60,47 @@ class _HomeScreenState extends State<HomeScreen> {
     await _load();
   }
 
+  Future<void> _testSupabase() async {
+    final messenger = ScaffoldMessenger.of(context)
+      ..showSnackBar(
+        const SnackBar(content: Text('Testing Supabase connection…')),
+      );
+
+    final result = await widget.supabaseService.testConnection();
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(
+          result.success ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+        ),
+        title: Text(result.success ? 'Supabase connected' : 'Connection failed'),
+        content: SingleChildScrollView(child: SelectableText(result.message)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Sites')),
+      appBar: AppBar(
+        title: const Text('Sites'),
+        actions: [
+          IconButton(
+            tooltip: 'Test Supabase connection',
+            onPressed: _testSupabase,
+            icon: const Icon(Icons.cloud_sync_outlined),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openCreateSite,
         icon: const Icon(Icons.add_location_alt_outlined),

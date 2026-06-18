@@ -4,6 +4,10 @@
 *.pyc
 *.swp
 .DS_Store
+
+# Secrets — real Supabase keys live here, never commit (see .env.example)
+.env
+.env.local
 .atom/
 .build/
 .buildlog/
