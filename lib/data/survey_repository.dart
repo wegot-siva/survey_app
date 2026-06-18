@@ -1,11 +1,12 @@
 import '../models/client_inputs.dart';
 import '../models/site.dart';
+import '../models/source_point.dart';
 
 /// The single gateway between the UI and stored survey data.
 ///
 /// PROJECT RULE: UI/screens must NEVER touch storage directly — all reads and
-/// writes go through a [SurveyRepository]. The Phase 0 implementation is
-/// in-memory; later phases swap in a real DB behind this same interface.
+/// writes go through a [SurveyRepository]. The local implementation is sqflite;
+/// an in-memory stub backs widget tests.
 abstract class SurveyRepository {
   Future<List<Site>> getSites();
 
@@ -18,4 +19,15 @@ abstract class SurveyRepository {
 
   /// Saves (or replaces) the Client inputs form for an existing site.
   Future<void> saveClientInputs(String siteId, ClientInputs inputs);
+
+  // ---- Source points (a site has many) ------------------------------------
+
+  Future<List<SourcePoint>> getSourcePoints(String siteId);
+
+  /// Persists a new source point, assigning it an id, and returns it.
+  Future<SourcePoint> addSourcePoint(SourcePoint sourcePoint);
+
+  Future<void> updateSourcePoint(SourcePoint sourcePoint);
+
+  Future<void> deleteSourcePoint(String id);
 }

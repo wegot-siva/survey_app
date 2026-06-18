@@ -5,7 +5,7 @@ import '../models/site.dart';
 import '../services/supabase_service.dart';
 import '../services/sync_service.dart';
 import 'create_site_screen.dart';
-import 'site_detail_screen.dart';
+import 'site_hub_screen.dart';
 
 /// Lists all sites and offers a button to create a new one.
 class HomeScreen extends StatefulWidget {
@@ -57,7 +57,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) =>
-            SiteDetailScreen(repository: widget.repository, siteId: site.id),
+            SiteHubScreen(repository: widget.repository, siteId: site.id),
       ),
     );
     await _load();

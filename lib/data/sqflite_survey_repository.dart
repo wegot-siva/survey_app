@@ -2,6 +2,8 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/client_inputs.dart';
 import '../models/site.dart';
+import '../models/source_point.dart';
+import '../models/survey_options.dart';
 import '../services/id_service.dart';
 import 'survey_repository.dart';
 
@@ -136,6 +138,41 @@ class SqfliteSurveyRepository implements SurveyRepository {
       clientInputs: clientInputs,
     );
   }
+
+  // ---- Source points --------------------------------------------------------
+
+  @override
+  Future<List<SourcePoint>> getSourcePoints(String siteId) async {
+    final rows = await _db.query(
+      'source_points',
+      where: 'site_id = ?',
+      whereArgs: [siteId],
+      orderBy: 'rowid',
+    );
+    return rows.map(_sourcePointFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<SourcePoint> addSourcePoint(SourcePoint sourcePoint) async {
+    final stored = sourcePoint.copyWithId(_idService.newId());
+    await _db.insert('source_points', _sourcePointToRow(stored));
+    return stored;
+  }
+
+  @override
+  Future<void> updateSourcePoint(SourcePoint sourcePoint) async {
+    await _db.update(
+      'source_points',
+      _sourcePointToRow(sourcePoint),
+      where: 'id = ?',
+      whereArgs: [sourcePoint.id],
+    );
+  }
+
+  @override
+  Future<void> deleteSourcePoint(String id) async {
+    await _db.delete('source_points', where: 'id = ?', whereArgs: [id]);
+  }
 }
 
 // ---- Row <-> model mapping (hand-written, no codegen) -----------------------
@@ -211,4 +248,88 @@ T? _enumByName<T extends Enum>(List<T> values, String? name) {
     if (value.name == name) return value;
   }
   return null;
+}
+
+Map<String, Object?> _sourcePointToRow(SourcePoint s) {
+  return {
+    'id': s.id,
+    'site_id': s.siteId,
+    'block': s.block,
+    'apartment': s.apartment,
+    'inlet_description': s.inletDescription,
+    'sensor_size': s.sensorSize?.name,
+    'sensor_od': s.sensorOd?.name,
+    'pipe_size': s.pipeSize?.name,
+    'pipe_type': s.pipeType?.name,
+    'qty': s.qty,
+    'sensor_type': s.sensorType?.name,
+    'rework': _boolToInt(s.rework),
+    'rework_details': s.reworkDetails,
+    'flow_direction': s.flowDirection?.name,
+    'clearance_10x': _boolToInt(s.clearance10x),
+    'pipe_full': _boolToInt(s.pipeFull),
+    'valve_downstream': _boolToInt(s.valveDownstream),
+    'reducer_spec': _boolToInt(s.reducerSpec),
+    'reducer_spec_details': s.reducerSpecDetails,
+    'downstream_outlet_above_pipe_fig1': _boolToInt(
+      s.downstreamOutletAbovePipeFig1,
+    ),
+    'air_vent_needed_fig2': _boolToInt(s.airVentNeededFig2),
+    'reverse_flow': _boolToInt(s.reverseFlow),
+    'distance_from_motor_pump_fig3': _boolToInt(s.distanceFromMotorPumpFig3),
+    'no_flexible_pipe_within_20x': _boolToInt(s.noFlexiblePipeWithin20x),
+    'max_and_continuous_pressure_bar': s.maxAndContinuousPressureBar,
+    'strainer_screen_filter': _boolToInt(s.strainerScreenFilter),
+    'chamber_installation': _boolToInt(s.chamberInstallation),
+    'antenna_required': _boolToInt(s.antennaRequired),
+    'transmitting_part_open_to_air': _boolToInt(s.transmittingPartOpenToAir),
+    'nrv_feasibility': _boolToInt(s.nrvFeasibility),
+  };
+}
+
+SourcePoint _sourcePointFromRow(Map<String, Object?> r) {
+  return SourcePoint(
+    id: r['id']! as String,
+    siteId: r['site_id']! as String,
+    block: r['block'] as String?,
+    apartment: (r['apartment'] as String?) ?? '',
+    inletDescription: (r['inlet_description'] as String?) ?? '',
+    sensorSize: _enumByName(SensorSize.values, r['sensor_size'] as String?),
+    sensorOd: _enumByName(SensorOd.values, r['sensor_od'] as String?),
+    pipeSize: _enumByName(PipeSize.values, r['pipe_size'] as String?),
+    pipeType: _enumByName(PipeType.values, r['pipe_type'] as String?),
+    qty: r['qty'] as int?,
+    sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
+    rework: _intToBool(r['rework'] as int?),
+    reworkDetails: (r['rework_details'] as String?) ?? '',
+    flowDirection: _enumByName(
+      FlowDirection.values,
+      r['flow_direction'] as String?,
+    ),
+    clearance10x: _intToBool(r['clearance_10x'] as int?),
+    pipeFull: _intToBool(r['pipe_full'] as int?),
+    valveDownstream: _intToBool(r['valve_downstream'] as int?),
+    reducerSpec: _intToBool(r['reducer_spec'] as int?),
+    reducerSpecDetails: (r['reducer_spec_details'] as String?) ?? '',
+    downstreamOutletAbovePipeFig1: _intToBool(
+      r['downstream_outlet_above_pipe_fig1'] as int?,
+    ),
+    airVentNeededFig2: _intToBool(r['air_vent_needed_fig2'] as int?),
+    reverseFlow: _intToBool(r['reverse_flow'] as int?),
+    distanceFromMotorPumpFig3: _intToBool(
+      r['distance_from_motor_pump_fig3'] as int?,
+    ),
+    noFlexiblePipeWithin20x: _intToBool(
+      r['no_flexible_pipe_within_20x'] as int?,
+    ),
+    maxAndContinuousPressureBar:
+        (r['max_and_continuous_pressure_bar'] as num?)?.toDouble(),
+    strainerScreenFilter: _intToBool(r['strainer_screen_filter'] as int?),
+    chamberInstallation: _intToBool(r['chamber_installation'] as int?),
+    antennaRequired: _intToBool(r['antenna_required'] as int?),
+    transmittingPartOpenToAir: _intToBool(
+      r['transmitting_part_open_to_air'] as int?,
+    ),
+    nrvFeasibility: _intToBool(r['nrv_feasibility'] as int?),
+  );
 }

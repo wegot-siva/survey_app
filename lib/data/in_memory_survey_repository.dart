@@ -1,5 +1,6 @@
 import '../models/client_inputs.dart';
 import '../models/site.dart';
+import '../models/source_point.dart';
 import '../services/id_service.dart';
 import 'survey_repository.dart';
 
@@ -10,6 +11,7 @@ class InMemorySurveyRepository implements SurveyRepository {
 
   final IdService _idService;
   final Map<String, Site> _sites = {};
+  final Map<String, SourcePoint> _sourcePoints = {};
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -43,5 +45,28 @@ class InMemorySurveyRepository implements SurveyRepository {
       throw StateError('Cannot save client inputs: site "$siteId" not found.');
     }
     _sites[siteId] = site.copyWith(clientInputs: inputs);
+  }
+
+  @override
+  Future<List<SourcePoint>> getSourcePoints(String siteId) async => _sourcePoints
+      .values
+      .where((sp) => sp.siteId == siteId)
+      .toList(growable: false);
+
+  @override
+  Future<SourcePoint> addSourcePoint(SourcePoint sourcePoint) async {
+    final stored = sourcePoint.copyWithId(_idService.newId());
+    _sourcePoints[stored.id] = stored;
+    return stored;
+  }
+
+  @override
+  Future<void> updateSourcePoint(SourcePoint sourcePoint) async {
+    _sourcePoints[sourcePoint.id] = sourcePoint;
+  }
+
+  @override
+  Future<void> deleteSourcePoint(String id) async {
+    _sourcePoints.remove(id);
   }
 }

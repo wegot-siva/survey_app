@@ -7,7 +7,7 @@ import 'package:sqflite/sqflite.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 1;
+const int _dbVersion = 2;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -17,6 +17,12 @@ Future<Database> openAppDatabase() async {
     dbPath,
     version: _dbVersion,
     onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+    onUpgrade: (db, oldVersion, newVersion) async {
+      // v1 -> v2: add source points.
+      if (oldVersion < 2) {
+        await _createSourcePointsTable(db);
+      }
+    },
     onCreate: (db, version) async {
       await db.execute('''
         CREATE TABLE sites (
@@ -58,6 +64,48 @@ Future<Database> openAppDatabase() async {
           FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
         )
       ''');
+
+      await _createSourcePointsTable(db);
     },
   );
+}
+
+/// Source points table (v2). A site has many; booleans stored as INTEGER 0/1,
+/// enums as their `.name`, pressure as REAL.
+Future<void> _createSourcePointsTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE source_points (
+      id                                TEXT PRIMARY KEY,
+      site_id                           TEXT NOT NULL,
+      block                             TEXT,
+      apartment                         TEXT,
+      inlet_description                 TEXT,
+      sensor_size                       TEXT,
+      sensor_od                         TEXT,
+      pipe_size                         TEXT,
+      pipe_type                         TEXT,
+      qty                               INTEGER,
+      sensor_type                       TEXT,
+      rework                            INTEGER,
+      rework_details                    TEXT,
+      flow_direction                    TEXT,
+      clearance_10x                     INTEGER,
+      pipe_full                         INTEGER,
+      valve_downstream                  INTEGER,
+      reducer_spec                      INTEGER,
+      reducer_spec_details              TEXT,
+      downstream_outlet_above_pipe_fig1 INTEGER,
+      air_vent_needed_fig2              INTEGER,
+      reverse_flow                      INTEGER,
+      distance_from_motor_pump_fig3     INTEGER,
+      no_flexible_pipe_within_20x       INTEGER,
+      max_and_continuous_pressure_bar   REAL,
+      strainer_screen_filter            INTEGER,
+      chamber_installation              INTEGER,
+      antenna_required                  INTEGER,
+      transmitting_part_open_to_air     INTEGER,
+      nrv_feasibility                   INTEGER,
+      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
 }
