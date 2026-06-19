@@ -283,11 +283,19 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
 
           YesNoField(
             label: 'Downstream outlet above pipe (FIG1)',
+            labelTrailing: const ReferenceLink(
+              asset: 'assets/figures/FIG1_pipe_full_outlet_above.png',
+              title: 'FIG1',
+            ),
             value: _downstreamOutletAbovePipeFig1,
             onChanged: (v) => setState(() => _downstreamOutletAbovePipeFig1 = v),
           ),
           YesNoField(
             label: 'Air vent needed (FIG2)',
+            labelTrailing: const ReferenceLink(
+              asset: 'assets/figures/FIG2_air_vent.png',
+              title: 'FIG2',
+            ),
             value: _airVentNeededFig2,
             onChanged: (v) => setState(() => _airVentNeededFig2 = v),
           ),
@@ -298,6 +306,10 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
           ),
           YesNoField(
             label: 'Distance from motor/pump (FIG3)',
+            labelTrailing: const ReferenceLink(
+              asset: 'assets/figures/FIG3_distance_motor_reducer_valve.png',
+              title: 'FIG3',
+            ),
             value: _distanceFromMotorPumpFig3,
             onChanged: (v) => setState(() => _distanceFromMotorPumpFig3 = v),
           ),

@@ -101,11 +101,15 @@ class YesNoField extends StatelessWidget {
     required this.label,
     required this.value,
     required this.onChanged,
+    this.labelTrailing,
   });
 
   final String label;
   final bool? value;
   final ValueChanged<bool?> onChanged;
+
+  /// Optional widget shown to the right of the label, e.g. a [ReferenceLink].
+  final Widget? labelTrailing;
 
   @override
   Widget build(BuildContext context) {
@@ -114,7 +118,17 @@ class YesNoField extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+              ),
+              ?labelTrailing,
+            ],
+          ),
           const SizedBox(height: 4),
           SegmentedButton<bool>(
             emptySelectionAllowed: true,
@@ -166,6 +180,80 @@ class FormSectionLabel extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(top: 8, bottom: 12),
       child: Text(text, style: Theme.of(context).textTheme.titleMedium),
+    );
+  }
+}
+
+/// A small tappable "view reference" link that opens [asset] full-screen so the
+/// engineer can compare a figure against the field. Reference only — nothing is
+/// captured or saved.
+class ReferenceLink extends StatelessWidget {
+  const ReferenceLink({super.key, required this.asset, required this.title});
+
+  /// Asset path, e.g. `assets/figures/FIG1_pipe_full_outlet_above.png`.
+  final String asset;
+
+  /// Short label shown on the link and in the viewer app bar, e.g. `FIG1`.
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => _ReferenceImageScreen(asset: asset, title: title),
+        ),
+      ),
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.image_outlined, size: 18),
+            const SizedBox(width: 4),
+            Text(
+              'View $title',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReferenceImageScreen extends StatelessWidget {
+  const _ReferenceImageScreen({required this.asset, required this.title});
+
+  final String asset;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      backgroundColor: Colors.black,
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 5,
+          child: Image.asset(
+            asset,
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) => const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Reference image not found.',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

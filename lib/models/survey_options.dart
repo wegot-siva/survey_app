@@ -55,8 +55,11 @@ enum SensorType {
 
 enum FlowDirection {
   horizontal('Horizontal'),
-  verticalDownToUp('Vertical-flow down to up'),
-  verticalUpToDown('Vertical-flow up to down');
+  verticalDownToUp('Vertical-flow down to up');
+
+  // Note: `verticalUpToDown` was removed. Old saved records storing that name
+  // decode to null (shown unselected) — see `_enumByName`, which returns null
+  // for any unrecognised value.
 
   const FlowDirection(this.label);
   final String label;
