@@ -8,6 +8,8 @@ class Site {
     required this.name,
     this.blocks = const [],
     this.clientInputs,
+    this.status,
+    this.assignedTo,
   });
 
   final String id;
@@ -15,16 +17,26 @@ class Site {
   final List<String> blocks;
   final ClientInputs? clientInputs;
 
+  /// Reserved for a future assignment workflow — unused for now (always null).
+  final String? status;
+
+  /// Reserved for a future assignment workflow — unused for now (always null).
+  final String? assignedTo;
+
   Site copyWith({
     String? name,
     List<String>? blocks,
     ClientInputs? clientInputs,
+    String? status,
+    String? assignedTo,
   }) {
     return Site(
       id: id,
       name: name ?? this.name,
       blocks: blocks ?? this.blocks,
       clientInputs: clientInputs ?? this.clientInputs,
+      status: status ?? this.status,
+      assignedTo: assignedTo ?? this.assignedTo,
     );
   }
 }

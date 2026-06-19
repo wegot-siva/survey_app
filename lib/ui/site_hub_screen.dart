@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import '../data/survey_repository.dart';
 import '../models/site.dart';
 import 'client_inputs_screen.dart';
+import 'duct_loras_list_screen.dart';
+import 'footer_screen.dart';
+import 'gateways_list_screen.dart';
 import 'inlet_points_list_screen.dart';
 import 'manage_blocks_screen.dart';
 import 'source_points_list_screen.dart';
@@ -28,6 +31,9 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   Site? _site;
   int _sourcePointCount = 0;
   int _inletPointCount = 0;
+  int _ductLoraCount = 0;
+  int _gatewayCount = 0;
+  bool _footerFilled = false;
   bool _loading = true;
 
   @override
@@ -41,11 +47,17 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     final site = await widget.repository.getSiteById(widget.siteId);
     final sourcePoints = await widget.repository.getSourcePoints(widget.siteId);
     final inletPoints = await widget.repository.getInletPoints(widget.siteId);
+    final ductLoras = await widget.repository.getDuctLoras(widget.siteId);
+    final gateways = await widget.repository.getGateways(widget.siteId);
+    final footer = await widget.repository.getFooter(widget.siteId);
     if (!mounted) return;
     setState(() {
       _site = site;
       _sourcePointCount = sourcePoints.length;
       _inletPointCount = inletPoints.length;
+      _ductLoraCount = ductLoras.length;
+      _gatewayCount = gateways.length;
+      _footerFilled = footer != null;
       _loading = false;
     });
   }
@@ -75,6 +87,36 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
       MaterialPageRoute<void>(
         builder: (_) =>
             InletPointsListScreen(repository: widget.repository, site: site),
+      ),
+    );
+    await _load();
+  }
+
+  Future<void> _openDuctLoras(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            DuctLorasListScreen(repository: widget.repository, site: site),
+      ),
+    );
+    await _load();
+  }
+
+  Future<void> _openGateways(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            GatewaysListScreen(repository: widget.repository, site: site),
+      ),
+    );
+    await _load();
+  }
+
+  Future<void> _openFooter(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            FooterScreen(repository: widget.repository, site: site),
       ),
     );
     await _load();
@@ -135,6 +177,29 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
                   subtitle: '$_inletPointCount recorded',
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _openInletPoints(site),
+                ),
+                _SectionTile(
+                  icon: Icons.router_outlined,
+                  title: 'Duct LoRa',
+                  subtitle: '$_ductLoraCount recorded',
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openDuctLoras(site),
+                ),
+                _SectionTile(
+                  icon: Icons.cell_tower_outlined,
+                  title: 'Gateway',
+                  subtitle: '$_gatewayCount recorded',
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openGateways(site),
+                ),
+                _SectionTile(
+                  icon: Icons.notes_outlined,
+                  title: 'Footer',
+                  subtitle: _footerFilled ? 'Filled' : 'Not filled yet',
+                  trailing: _footerFilled
+                      ? const Icon(Icons.check_circle, color: Colors.green)
+                      : const Icon(Icons.chevron_right),
+                  onTap: () => _openFooter(site),
                 ),
               ],
             ),

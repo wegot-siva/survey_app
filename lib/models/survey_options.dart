@@ -92,3 +92,33 @@ enum CableRunLength {
   const CableRunLength(this.label);
   final String label;
 }
+
+/// Gateway placement (Phase 2 — Gateway form).
+enum GatewayPlacement {
+  indoor('Indoor'),
+  outdoor('Outdoor');
+
+  const GatewayPlacement(this.label);
+  final String label;
+}
+
+/// How a gateway reaches the internet (Phase 2 — Gateway form).
+enum UplinkType {
+  sim('SIM'),
+  router('Router'),
+  both('Both');
+
+  const UplinkType(this.label);
+  final String label;
+}
+
+/// Cellular coverage available at a gateway location (Phase 2 — Gateway form).
+enum SimCoverage {
+  airtel('Airtel'),
+  jio('Jio'),
+  both('Both'),
+  none('None');
+
+  const SimCoverage(this.label);
+  final String label;
+}

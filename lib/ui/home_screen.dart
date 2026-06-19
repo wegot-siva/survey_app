@@ -116,7 +116,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   '• ${result.blocks} block(s)\n'
                   '• ${result.clientInputs} client input form(s)\n'
                   '• ${result.sourcePoints} source point(s)\n'
-                  '• ${result.inletPoints} inlet point(s)',
+                  '• ${result.inletPoints} inlet point(s)\n'
+                  '• ${result.ductLoras} Duct LoRa unit(s)\n'
+                  '• ${result.gateways} gateway(s)\n'
+                  '• ${result.footers} footer form(s)',
                 )
               : SelectableText(result.message ?? 'Unknown error.'),
         ),

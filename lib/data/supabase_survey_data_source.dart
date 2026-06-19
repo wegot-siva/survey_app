@@ -1,6 +1,9 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/client_inputs.dart';
+import '../models/duct_lora.dart';
+import '../models/footer.dart';
+import '../models/gateway.dart';
 import '../models/inlet_point.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
@@ -15,7 +18,13 @@ class SupabaseSurveyDataSource {
   /// Pushes one site and its children. Order matters: the site row must exist
   /// before blocks / client_inputs (which reference it via FK).
   Future<void> pushSite(Site site) async {
-    await _client.from('sites').upsert({'id': site.id, 'name': site.name});
+    await _client.from('sites').upsert({
+      'id': site.id,
+      'name': site.name,
+      // Reserved assignment columns — currently always null.
+      'status': site.status,
+      'assigned_to': site.assignedTo,
+    });
 
     // Blocks carry no stable id in the domain model, so replace the whole set
     // for this site: delete existing rows, then insert the current ordered list.
@@ -45,6 +54,22 @@ class SupabaseSurveyDataSource {
   /// already have been pushed (FK).
   Future<void> pushInletPoint(InletPoint ip) async {
     await _client.from('inlet_points').upsert(_inletPointToRemoteRow(ip));
+  }
+
+  /// Upserts a Duct LoRa unit by its id (idempotent). Parent site must exist.
+  Future<void> pushDuctLora(DuctLora d) async {
+    await _client.from('duct_loras').upsert(_ductLoraToRemoteRow(d));
+  }
+
+  /// Upserts a gateway by its id (idempotent). Parent site must exist.
+  Future<void> pushGateway(Gateway g) async {
+    await _client.from('gateways').upsert(_gatewayToRemoteRow(g));
+  }
+
+  /// Upserts the per-site footer (idempotent, keyed by site_id). Parent site
+  /// must exist.
+  Future<void> pushFooter(String siteId, Footer f) async {
+    await _client.from('footers').upsert(_footerToRemoteRow(siteId, f));
   }
 }
 
@@ -135,5 +160,51 @@ Map<String, Object?> _inletPointToRemoteRow(InletPoint i) {
     'conduit_clamping': i.conduitClamping,
     'civil_work_needed': i.civilWorkNeeded,
     'civil_work_details': i.civilWorkDetails,
+  };
+}
+
+Map<String, Object?> _ductLoraToRemoteRow(DuctLora d) {
+  return {
+    'id': d.id,
+    'site_id': d.siteId,
+    'block': d.block,
+    // Comma-separated set, mirroring the local store and client_inputs.
+    'series_served': d.seriesServed.join(','),
+    'accessible_for_service': d.accessibleForService,
+    'rssi_if_tcl': d.rssiIfTcl,
+    'power_point_available_shielded': d.powerPointAvailableShielded,
+    'separate_mcb_for_series': d.separateMcbForSeries,
+    'ups_power_supply': d.upsPowerSupply,
+    'cable_length': d.cableLength,
+  };
+}
+
+Map<String, Object?> _gatewayToRemoteRow(Gateway g) {
+  return {
+    'id': g.id,
+    'site_id': g.siteId,
+    'placement': g.placement?.name,
+    'location_description': g.locationDescription,
+    'blocks_covered': g.blocksCovered.join(','),
+    'quantity': g.quantity,
+    'uplink_type': g.uplinkType?.name,
+    'wifi_interference_check': g.wifiInterferenceCheck,
+    'wifi_interference_details': g.wifiInterferenceDetails,
+    'sim_coverage': g.simCoverage?.name,
+    'uninterrupted_power_source': g.uninterruptedPowerSource,
+    'mounting_hardware_needed': g.mountingHardwareNeeded,
+  };
+}
+
+Map<String, Object?> _footerToRemoteRow(String siteId, Footer f) {
+  return {
+    'site_id': siteId,
+    'tds_ppm': f.tdsPpm,
+    'tss_ppm': f.tssPpm,
+    'tcl_service': f.tclService,
+    'tcl_service_details': f.tclServiceDetails,
+    'general_remarks': f.generalRemarks,
+    'survey_date': f.surveyDate?.toIso8601String(),
+    'surveyor_name': f.surveyorName,
   };
 }

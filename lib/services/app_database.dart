@@ -7,7 +7,7 @@ import 'package:sqflite/sqflite.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 3;
+const int _dbVersion = 4;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -26,12 +26,23 @@ Future<Database> openAppDatabase() async {
       if (oldVersion < 3) {
         await _createInletPointsTable(db);
       }
+      // v3 -> v4: add Duct LoRa, Gateway, Footer; reserve assignment columns
+      // on sites (unused for now — future assignment workflow).
+      if (oldVersion < 4) {
+        await db.execute('ALTER TABLE sites ADD COLUMN status TEXT');
+        await db.execute('ALTER TABLE sites ADD COLUMN assigned_to TEXT');
+        await _createDuctLorasTable(db);
+        await _createGatewaysTable(db);
+        await _createFootersTable(db);
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
         CREATE TABLE sites (
-          id   TEXT PRIMARY KEY,
-          name TEXT NOT NULL
+          id          TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          status      TEXT,
+          assigned_to TEXT
         )
       ''');
 
@@ -71,6 +82,9 @@ Future<Database> openAppDatabase() async {
 
       await _createSourcePointsTable(db);
       await _createInletPointsTable(db);
+      await _createDuctLorasTable(db);
+      await _createGatewaysTable(db);
+      await _createFootersTable(db);
     },
   );
 }
@@ -146,6 +160,65 @@ Future<void> _createInletPointsTable(Database db) async {
       conduit_clamping              INTEGER,
       civil_work_needed             INTEGER,
       civil_work_details            TEXT,
+      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+}
+
+/// Duct LoRa units table (v4). A site has many. `series_served` is a
+/// comma-separated set of series tokens (mirrors water_sources in client_inputs).
+Future<void> _createDuctLorasTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE duct_loras (
+      id                             TEXT PRIMARY KEY,
+      site_id                        TEXT NOT NULL,
+      block                          TEXT,
+      series_served                  TEXT,
+      accessible_for_service         INTEGER,
+      rssi_if_tcl                    REAL,
+      power_point_available_shielded INTEGER,
+      separate_mcb_for_series        INTEGER,
+      ups_power_supply               INTEGER,
+      cable_length                   REAL,
+      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+}
+
+/// Gateways table (v4). A site has many. `blocks_covered` is a comma-separated
+/// set of block labels.
+Future<void> _createGatewaysTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE gateways (
+      id                         TEXT PRIMARY KEY,
+      site_id                    TEXT NOT NULL,
+      placement                  TEXT,
+      location_description       TEXT,
+      blocks_covered             TEXT,
+      quantity                   INTEGER,
+      uplink_type                TEXT,
+      wifi_interference_check    INTEGER,
+      wifi_interference_details  TEXT,
+      sim_coverage               TEXT,
+      uninterrupted_power_source INTEGER,
+      mounting_hardware_needed   TEXT,
+      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+}
+
+/// Footer table (v4). One row per site (keyed by site_id), like client_inputs.
+Future<void> _createFootersTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE footers (
+      site_id             TEXT PRIMARY KEY,
+      tds_ppm             REAL,
+      tss_ppm             REAL,
+      tcl_service         INTEGER,
+      tcl_service_details TEXT,
+      general_remarks     TEXT,
+      survey_date         TEXT,
+      surveyor_name       TEXT,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');

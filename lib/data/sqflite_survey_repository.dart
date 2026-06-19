@@ -1,6 +1,9 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../models/client_inputs.dart';
+import '../models/duct_lora.dart';
+import '../models/footer.dart';
+import '../models/gateway.dart';
 import '../models/inlet_point.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
@@ -58,7 +61,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
     await _db.transaction((txn) async {
       await txn.update(
         'sites',
-        {'name': site.name},
+        {'name': site.name, 'status': site.status, 'assigned_to': site.assignedTo},
         where: 'id = ?',
         whereArgs: [site.id],
       );
@@ -145,6 +148,8 @@ class SqfliteSurveyRepository implements SurveyRepository {
       name: siteRow['name']! as String,
       blocks: blocks,
       clientInputs: clientInputs,
+      status: siteRow['status'] as String?,
+      assignedTo: siteRow['assigned_to'] as String?,
     );
   }
 
@@ -217,6 +222,100 @@ class SqfliteSurveyRepository implements SurveyRepository {
   Future<void> deleteInletPoint(String id) async {
     await _db.delete('inlet_points', where: 'id = ?', whereArgs: [id]);
   }
+
+  // ---- Duct LoRa units ------------------------------------------------------
+
+  @override
+  Future<List<DuctLora>> getDuctLoras(String siteId) async {
+    final rows = await _db.query(
+      'duct_loras',
+      where: 'site_id = ?',
+      whereArgs: [siteId],
+      orderBy: 'rowid',
+    );
+    return rows.map(_ductLoraFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<DuctLora> addDuctLora(DuctLora ductLora) async {
+    final stored = ductLora.copyWithId(_idService.newId());
+    await _db.insert('duct_loras', _ductLoraToRow(stored));
+    return stored;
+  }
+
+  @override
+  Future<void> updateDuctLora(DuctLora ductLora) async {
+    await _db.update(
+      'duct_loras',
+      _ductLoraToRow(ductLora),
+      where: 'id = ?',
+      whereArgs: [ductLora.id],
+    );
+  }
+
+  @override
+  Future<void> deleteDuctLora(String id) async {
+    await _db.delete('duct_loras', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---- Gateways -------------------------------------------------------------
+
+  @override
+  Future<List<Gateway>> getGateways(String siteId) async {
+    final rows = await _db.query(
+      'gateways',
+      where: 'site_id = ?',
+      whereArgs: [siteId],
+      orderBy: 'rowid',
+    );
+    return rows.map(_gatewayFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<Gateway> addGateway(Gateway gateway) async {
+    final stored = gateway.copyWithId(_idService.newId());
+    await _db.insert('gateways', _gatewayToRow(stored));
+    return stored;
+  }
+
+  @override
+  Future<void> updateGateway(Gateway gateway) async {
+    await _db.update(
+      'gateways',
+      _gatewayToRow(gateway),
+      where: 'id = ?',
+      whereArgs: [gateway.id],
+    );
+  }
+
+  @override
+  Future<void> deleteGateway(String id) async {
+    await _db.delete('gateways', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---- Footer (one per site) ------------------------------------------------
+
+  @override
+  Future<Footer?> getFooter(String siteId) async {
+    final rows = await _db.query(
+      'footers',
+      where: 'site_id = ?',
+      whereArgs: [siteId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return _footerFromRow(rows.first);
+  }
+
+  @override
+  Future<void> saveFooter(String siteId, Footer footer) async {
+    // Relies on the FK constraint to reject a footer for a non-existent site.
+    await _db.insert(
+      'footers',
+      _footerToRow(siteId, footer),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
 }
 
 // ---- Row <-> model mapping (hand-written, no codegen) -----------------------
@@ -285,6 +384,15 @@ Set<WaterSource> _parseWaterSources(String? raw) {
 int? _boolToInt(bool? v) => v == null ? null : (v ? 1 : 0);
 
 bool? _intToBool(int? v) => v == null ? null : v != 0;
+
+/// Free-text string sets are stored comma-separated (mirrors water_sources).
+/// Assumes the member labels (block names, series tokens) contain no commas.
+String _joinStrings(Set<String> values) => values.join(',');
+
+Set<String> _splitStrings(String? raw) {
+  if (raw == null || raw.isEmpty) return const {};
+  return raw.split(',').where((s) => s.isNotEmpty).toSet();
+}
 
 T? _enumByName<T extends Enum>(List<T> values, String? name) {
   if (name == null) return null;
@@ -444,5 +552,98 @@ InletPoint _inletPointFromRow(Map<String, Object?> r) {
     conduitClamping: _intToBool(r['conduit_clamping'] as int?),
     civilWorkNeeded: _intToBool(r['civil_work_needed'] as int?),
     civilWorkDetails: (r['civil_work_details'] as String?) ?? '',
+  );
+}
+
+Map<String, Object?> _ductLoraToRow(DuctLora d) {
+  return {
+    'id': d.id,
+    'site_id': d.siteId,
+    'block': d.block,
+    'series_served': _joinStrings(d.seriesServed),
+    'accessible_for_service': _boolToInt(d.accessibleForService),
+    'rssi_if_tcl': d.rssiIfTcl,
+    'power_point_available_shielded': _boolToInt(d.powerPointAvailableShielded),
+    'separate_mcb_for_series': _boolToInt(d.separateMcbForSeries),
+    'ups_power_supply': _boolToInt(d.upsPowerSupply),
+    'cable_length': d.cableLength,
+  };
+}
+
+DuctLora _ductLoraFromRow(Map<String, Object?> r) {
+  return DuctLora(
+    id: r['id']! as String,
+    siteId: r['site_id']! as String,
+    block: r['block'] as String?,
+    seriesServed: _splitStrings(r['series_served'] as String?),
+    accessibleForService: _intToBool(r['accessible_for_service'] as int?),
+    rssiIfTcl: (r['rssi_if_tcl'] as num?)?.toDouble(),
+    powerPointAvailableShielded: _intToBool(
+      r['power_point_available_shielded'] as int?,
+    ),
+    separateMcbForSeries: _intToBool(r['separate_mcb_for_series'] as int?),
+    upsPowerSupply: _intToBool(r['ups_power_supply'] as int?),
+    cableLength: (r['cable_length'] as num?)?.toDouble(),
+  );
+}
+
+Map<String, Object?> _gatewayToRow(Gateway g) {
+  return {
+    'id': g.id,
+    'site_id': g.siteId,
+    'placement': g.placement?.name,
+    'location_description': g.locationDescription,
+    'blocks_covered': _joinStrings(g.blocksCovered),
+    'quantity': g.quantity,
+    'uplink_type': g.uplinkType?.name,
+    'wifi_interference_check': _boolToInt(g.wifiInterferenceCheck),
+    'wifi_interference_details': g.wifiInterferenceDetails,
+    'sim_coverage': g.simCoverage?.name,
+    'uninterrupted_power_source': _boolToInt(g.uninterruptedPowerSource),
+    'mounting_hardware_needed': g.mountingHardwareNeeded,
+  };
+}
+
+Gateway _gatewayFromRow(Map<String, Object?> r) {
+  return Gateway(
+    id: r['id']! as String,
+    siteId: r['site_id']! as String,
+    placement: _enumByName(GatewayPlacement.values, r['placement'] as String?),
+    locationDescription: (r['location_description'] as String?) ?? '',
+    blocksCovered: _splitStrings(r['blocks_covered'] as String?),
+    quantity: r['quantity'] as int?,
+    uplinkType: _enumByName(UplinkType.values, r['uplink_type'] as String?),
+    wifiInterferenceCheck: _intToBool(r['wifi_interference_check'] as int?),
+    wifiInterferenceDetails: (r['wifi_interference_details'] as String?) ?? '',
+    simCoverage: _enumByName(SimCoverage.values, r['sim_coverage'] as String?),
+    uninterruptedPowerSource: _intToBool(
+      r['uninterrupted_power_source'] as int?,
+    ),
+    mountingHardwareNeeded: (r['mounting_hardware_needed'] as String?) ?? '',
+  );
+}
+
+Map<String, Object?> _footerToRow(String siteId, Footer f) {
+  return {
+    'site_id': siteId,
+    'tds_ppm': f.tdsPpm,
+    'tss_ppm': f.tssPpm,
+    'tcl_service': _boolToInt(f.tclService),
+    'tcl_service_details': f.tclServiceDetails,
+    'general_remarks': f.generalRemarks,
+    'survey_date': f.surveyDate?.toIso8601String(),
+    'surveyor_name': f.surveyorName,
+  };
+}
+
+Footer _footerFromRow(Map<String, Object?> r) {
+  return Footer(
+    tdsPpm: (r['tds_ppm'] as num?)?.toDouble(),
+    tssPpm: (r['tss_ppm'] as num?)?.toDouble(),
+    tclService: _intToBool(r['tcl_service'] as int?),
+    tclServiceDetails: (r['tcl_service_details'] as String?) ?? '',
+    generalRemarks: (r['general_remarks'] as String?) ?? '',
+    surveyDate: DateTime.tryParse((r['survey_date'] as String?) ?? ''),
+    surveyorName: (r['surveyor_name'] as String?) ?? '',
   );
 }

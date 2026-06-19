@@ -95,6 +95,79 @@ class AppDropdownField<T> extends StatelessWidget {
   }
 }
 
+/// A wrap of [FilterChip]s for picking a set of values (mirrors the water
+/// sources picker on Client inputs). When [items] is empty, shows [emptyHint].
+class MultiSelectChips<T> extends StatelessWidget {
+  const MultiSelectChips({
+    super.key,
+    required this.label,
+    required this.items,
+    required this.itemLabel,
+    required this.selected,
+    required this.onChanged,
+    this.emptyHint,
+    this.helperText,
+  });
+
+  final String label;
+  final List<T> items;
+  final String Function(T) itemLabel;
+  final Set<T> selected;
+  final ValueChanged<Set<T>> onChanged;
+
+  /// Shown when [items] is empty, e.g. "Add inlet points first".
+  final String? emptyHint;
+
+  /// Optional advisory text under the chips, e.g. "Max 20 sensors per unit".
+  final String? helperText;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
+          const SizedBox(height: 8),
+          if (items.isEmpty)
+            Text(
+              emptyHint ?? 'No options available.',
+              style: TextStyle(color: Theme.of(context).hintColor),
+            )
+          else
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final item in items)
+                  FilterChip(
+                    label: Text(itemLabel(item)),
+                    selected: selected.contains(item),
+                    onSelected: (sel) {
+                      final next = {...selected};
+                      if (sel) {
+                        next.add(item);
+                      } else {
+                        next.remove(item);
+                      }
+                      onChanged(next);
+                    },
+                  ),
+              ],
+            ),
+          if (helperText != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              helperText!,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class YesNoField extends StatelessWidget {
   const YesNoField({
     super.key,

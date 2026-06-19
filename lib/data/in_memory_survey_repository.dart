@@ -1,4 +1,7 @@
 import '../models/client_inputs.dart';
+import '../models/duct_lora.dart';
+import '../models/footer.dart';
+import '../models/gateway.dart';
 import '../models/inlet_point.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
@@ -14,6 +17,9 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, Site> _sites = {};
   final Map<String, SourcePoint> _sourcePoints = {};
   final Map<String, InletPoint> _inletPoints = {};
+  final Map<String, DuctLora> _ductLoras = {};
+  final Map<String, Gateway> _gateways = {};
+  final Map<String, Footer> _footers = {};
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -102,5 +108,60 @@ class InMemorySurveyRepository implements SurveyRepository {
   @override
   Future<void> deleteInletPoint(String id) async {
     _inletPoints.remove(id);
+  }
+
+  @override
+  Future<List<DuctLora>> getDuctLoras(String siteId) async => _ductLoras.values
+      .where((d) => d.siteId == siteId)
+      .toList(growable: false);
+
+  @override
+  Future<DuctLora> addDuctLora(DuctLora ductLora) async {
+    final stored = ductLora.copyWithId(_idService.newId());
+    _ductLoras[stored.id] = stored;
+    return stored;
+  }
+
+  @override
+  Future<void> updateDuctLora(DuctLora ductLora) async {
+    _ductLoras[ductLora.id] = ductLora;
+  }
+
+  @override
+  Future<void> deleteDuctLora(String id) async {
+    _ductLoras.remove(id);
+  }
+
+  @override
+  Future<List<Gateway>> getGateways(String siteId) async => _gateways.values
+      .where((g) => g.siteId == siteId)
+      .toList(growable: false);
+
+  @override
+  Future<Gateway> addGateway(Gateway gateway) async {
+    final stored = gateway.copyWithId(_idService.newId());
+    _gateways[stored.id] = stored;
+    return stored;
+  }
+
+  @override
+  Future<void> updateGateway(Gateway gateway) async {
+    _gateways[gateway.id] = gateway;
+  }
+
+  @override
+  Future<void> deleteGateway(String id) async {
+    _gateways.remove(id);
+  }
+
+  @override
+  Future<Footer?> getFooter(String siteId) async => _footers[siteId];
+
+  @override
+  Future<void> saveFooter(String siteId, Footer footer) async {
+    if (!_sites.containsKey(siteId)) {
+      throw StateError('Cannot save footer: site "$siteId" not found.');
+    }
+    _footers[siteId] = footer;
   }
 }

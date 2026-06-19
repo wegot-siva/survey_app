@@ -149,3 +149,75 @@ create policy "dev all - source_points" on public.source_points
 drop policy if exists "dev all - inlet_points" on public.inlet_points;
 create policy "dev all - inlet_points" on public.inlet_points
   for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
+-- Phase 2: Duct LoRa, Gateway, Footer + reserved assignment columns on sites.
+-- Mirrors the local sqflite v4 schema. Booleans native; enums stored as
+-- `.name`; multi-select sets (series_served, blocks_covered) are
+-- comma-separated text (mirrors water_sources). Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+-- Reserved for a future assignment workflow — unused for now.
+alter table public.sites add column if not exists status      text;
+alter table public.sites add column if not exists assigned_to text;
+
+create table if not exists public.duct_loras (
+  id                             text primary key,
+  site_id                        text not null references public.sites (id) on delete cascade,
+  block                          text,
+  series_served                  text,    -- comma-separated series tokens
+  accessible_for_service         boolean,
+  rssi_if_tcl                    double precision,
+  power_point_available_shielded boolean,
+  separate_mcb_for_series        boolean,
+  ups_power_supply               boolean,
+  cable_length                   double precision
+);
+
+create index if not exists duct_loras_site_id_idx
+  on public.duct_loras (site_id);
+
+create table if not exists public.gateways (
+  id                         text primary key,
+  site_id                    text not null references public.sites (id) on delete cascade,
+  placement                  text,    -- enum name: indoor | outdoor
+  location_description       text,
+  blocks_covered             text,    -- comma-separated block labels
+  quantity                   integer,
+  uplink_type                text,    -- enum name: sim | router | both
+  wifi_interference_check    boolean,
+  wifi_interference_details  text,
+  sim_coverage               text,    -- enum name: airtel | jio | both | none
+  uninterrupted_power_source boolean,
+  mounting_hardware_needed   text
+);
+
+create index if not exists gateways_site_id_idx
+  on public.gateways (site_id);
+
+create table if not exists public.footers (
+  site_id             text primary key references public.sites (id) on delete cascade,
+  tds_ppm             double precision,
+  tss_ppm             double precision,
+  tcl_service         boolean,
+  tcl_service_details text,
+  general_remarks     text,
+  survey_date         text,    -- ISO-8601 string (mirrors SQLite TEXT storage)
+  surveyor_name       text
+);
+
+alter table public.duct_loras enable row level security;
+alter table public.gateways   enable row level security;
+alter table public.footers    enable row level security;
+
+drop policy if exists "dev all - duct_loras" on public.duct_loras;
+create policy "dev all - duct_loras" on public.duct_loras
+  for all to anon, authenticated using (true) with check (true);
+
+drop policy if exists "dev all - gateways" on public.gateways;
+create policy "dev all - gateways" on public.gateways
+  for all to anon, authenticated using (true) with check (true);
+
+drop policy if exists "dev all - footers" on public.footers;
+create policy "dev all - footers" on public.footers
+  for all to anon, authenticated using (true) with check (true);

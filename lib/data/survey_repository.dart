@@ -1,4 +1,7 @@
 import '../models/client_inputs.dart';
+import '../models/duct_lora.dart';
+import '../models/footer.dart';
+import '../models/gateway.dart';
 import '../models/inlet_point.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
@@ -46,4 +49,34 @@ abstract class SurveyRepository {
   Future<void> updateInletPoint(InletPoint inletPoint);
 
   Future<void> deleteInletPoint(String id);
+
+  // ---- Duct LoRa units (a site has many) ----------------------------------
+
+  Future<List<DuctLora>> getDuctLoras(String siteId);
+
+  /// Persists a new Duct LoRa unit, assigning it an id, and returns it.
+  Future<DuctLora> addDuctLora(DuctLora ductLora);
+
+  Future<void> updateDuctLora(DuctLora ductLora);
+
+  Future<void> deleteDuctLora(String id);
+
+  // ---- Gateways (a site has many) -----------------------------------------
+
+  Future<List<Gateway>> getGateways(String siteId);
+
+  /// Persists a new gateway, assigning it an id, and returns it.
+  Future<Gateway> addGateway(Gateway gateway);
+
+  Future<void> updateGateway(Gateway gateway);
+
+  Future<void> deleteGateway(String id);
+
+  // ---- Footer (one per site, like Client inputs) --------------------------
+
+  /// Returns the site's Footer form, or null if not filled yet.
+  Future<Footer?> getFooter(String siteId);
+
+  /// Saves (or replaces) the Footer form for an existing site.
+  Future<void> saveFooter(String siteId, Footer footer);
 }

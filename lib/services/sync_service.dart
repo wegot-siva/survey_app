@@ -13,6 +13,9 @@ class SyncResult {
     this.clientInputs = 0,
     this.sourcePoints = 0,
     this.inletPoints = 0,
+    this.ductLoras = 0,
+    this.gateways = 0,
+    this.footers = 0,
     this.message,
   });
 
@@ -22,6 +25,9 @@ class SyncResult {
   final int clientInputs;
   final int sourcePoints;
   final int inletPoints;
+  final int ductLoras;
+  final int gateways;
+  final int footers;
   final String? message;
 }
 
@@ -60,8 +66,11 @@ class SyncService {
       var clientInputs = 0;
       var sourcePoints = 0;
       var inletPoints = 0;
+      var ductLoras = 0;
+      var gateways = 0;
+      var footers = 0;
       for (final site in sites) {
-        // Site (and its blocks/client inputs) first — points FK to it.
+        // Site (and its blocks/client inputs) first — children FK to it.
         await _remote.pushSite(site);
         blocks += site.blocks.length;
         if (site.clientInputs != null) clientInputs++;
@@ -77,6 +86,24 @@ class SyncService {
           await _remote.pushInletPoint(ip);
         }
         inletPoints += ips.length;
+
+        final dls = await _repository.getDuctLoras(site.id);
+        for (final dl in dls) {
+          await _remote.pushDuctLora(dl);
+        }
+        ductLoras += dls.length;
+
+        final gws = await _repository.getGateways(site.id);
+        for (final gw in gws) {
+          await _remote.pushGateway(gw);
+        }
+        gateways += gws.length;
+
+        final footer = await _repository.getFooter(site.id);
+        if (footer != null) {
+          await _remote.pushFooter(site.id, footer);
+          footers++;
+        }
       }
       return SyncResult(
         success: true,
@@ -85,6 +112,9 @@ class SyncService {
         clientInputs: clientInputs,
         sourcePoints: sourcePoints,
         inletPoints: inletPoints,
+        ductLoras: ductLoras,
+        gateways: gateways,
+        footers: footers,
       );
     } on PostgrestException catch (e) {
       return SyncResult(
