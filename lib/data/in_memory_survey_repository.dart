@@ -41,6 +41,15 @@ class InMemorySurveyRepository implements SurveyRepository {
   }
 
   @override
+  Future<void> updateSiteBlocks(String siteId, List<String> blocks) async {
+    final site = _sites[siteId];
+    if (site == null) {
+      throw StateError('Cannot update blocks: site "$siteId" not found.');
+    }
+    _sites[siteId] = site.copyWith(blocks: List.unmodifiable(blocks));
+  }
+
+  @override
   Future<void> saveClientInputs(String siteId, ClientInputs inputs) async {
     final site = _sites[siteId];
     if (site == null) {

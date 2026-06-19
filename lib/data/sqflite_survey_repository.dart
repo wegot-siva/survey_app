@@ -83,6 +83,14 @@ class SqfliteSurveyRepository implements SurveyRepository {
   }
 
   @override
+  Future<void> updateSiteBlocks(String siteId, List<String> blocks) async {
+    await _db.transaction((txn) async {
+      await txn.delete('blocks', where: 'site_id = ?', whereArgs: [siteId]);
+      await _writeBlocks(txn, siteId, blocks);
+    });
+  }
+
+  @override
   Future<void> saveClientInputs(String siteId, ClientInputs inputs) async {
     // Relies on the FK constraint to reject inputs for a non-existent site.
     await _db.insert(

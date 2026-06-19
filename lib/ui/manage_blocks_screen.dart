@@ -1,26 +1,43 @@
 import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
+import '../models/site.dart';
 
-/// Create a new site: a name plus zero or more repeatable "block" text entries.
-class CreateSiteScreen extends StatefulWidget {
-  const CreateSiteScreen({super.key, required this.repository});
+/// View / add / edit / delete a site's blocks after it exists.
+///
+/// Edits a working copy of the block list and persists via
+/// [SurveyRepository.updateSiteBlocks] (which leaves name + client inputs
+/// untouched). Source/Inlet block dropdowns read the site's blocks, so changes
+/// here show up there the next time those forms are opened.
+class ManageBlocksScreen extends StatefulWidget {
+  const ManageBlocksScreen({
+    super.key,
+    required this.repository,
+    required this.site,
+  });
 
   final SurveyRepository repository;
+  final Site site;
 
   @override
-  State<CreateSiteScreen> createState() => _CreateSiteScreenState();
+  State<ManageBlocksScreen> createState() => _ManageBlocksScreenState();
 }
 
-class _CreateSiteScreenState extends State<CreateSiteScreen> {
-  final _nameController = TextEditingController();
+class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
   final _scrollController = ScrollController();
   final List<TextEditingController> _blockControllers = [];
   bool _saving = false;
 
   @override
+  void initState() {
+    super.initState();
+    for (final block in widget.site.blocks) {
+      _blockControllers.add(TextEditingController(text: block));
+    }
+  }
+
+  @override
   void dispose() {
-    _nameController.dispose();
     _scrollController.dispose();
     for (final c in _blockControllers) {
       c.dispose();
@@ -30,8 +47,6 @@ class _CreateSiteScreenState extends State<CreateSiteScreen> {
 
   void _addBlock() {
     setState(() => _blockControllers.add(TextEditingController()));
-    // Reveal the new field: with the keyboard up it would otherwise be
-    // appended off-screen, making "Add block" look like it did nothing.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -51,45 +66,35 @@ class _CreateSiteScreenState extends State<CreateSiteScreen> {
   }
 
   Future<void> _save() async {
-    final name = _nameController.text.trim();
-    if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a site name.')),
-      );
-      return;
-    }
-
     setState(() => _saving = true);
     final blocks = _blockControllers
         .map((c) => c.text.trim())
         .where((t) => t.isNotEmpty)
         .toList();
-    await widget.repository.createSite(name: name, blocks: blocks);
+    await widget.repository.updateSiteBlocks(widget.site.id, blocks);
     if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Blocks saved.')),
+    );
     Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('New site')),
+      appBar: AppBar(title: const Text('Blocks')),
       body: ListView(
         controller: _scrollController,
         padding: const EdgeInsets.all(16),
         children: [
-          TextField(
-            controller: _nameController,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(
-              labelText: 'Site name',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 24),
           Row(
             children: [
-              Text('Blocks', style: Theme.of(context).textTheme.titleMedium),
-              const Spacer(),
+              Expanded(
+                child: Text(
+                  'Blocks for "${widget.site.name}"',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
               TextButton.icon(
                 onPressed: _addBlock,
                 icon: const Icon(Icons.add),
@@ -97,10 +102,11 @@ class _CreateSiteScreenState extends State<CreateSiteScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 8),
           if (_blockControllers.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('No blocks added.'),
+              child: Text('No blocks yet. Tap "Add block" to create one.'),
             ),
           for (var i = 0; i < _blockControllers.length; i++)
             Padding(
@@ -117,9 +123,9 @@ class _CreateSiteScreenState extends State<CreateSiteScreen> {
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Remove block',
+                    tooltip: 'Delete block',
                     onPressed: () => _removeBlock(i),
-                    icon: const Icon(Icons.close),
+                    icon: const Icon(Icons.delete_outline),
                   ),
                 ],
               ),
@@ -134,7 +140,7 @@ class _CreateSiteScreenState extends State<CreateSiteScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.save_outlined),
-            label: const Text('Save site'),
+            label: const Text('Save blocks'),
           ),
         ],
       ),

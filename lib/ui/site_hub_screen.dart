@@ -4,6 +4,7 @@ import '../data/survey_repository.dart';
 import '../models/site.dart';
 import 'client_inputs_screen.dart';
 import 'inlet_points_list_screen.dart';
+import 'manage_blocks_screen.dart';
 import 'source_points_list_screen.dart';
 
 /// The hub for one site: jump to any section (Client inputs, Source points,
@@ -79,6 +80,16 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     await _load();
   }
 
+  Future<void> _openManageBlocks(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            ManageBlocksScreen(repository: widget.repository, site: site),
+      ),
+    );
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final site = _site;
@@ -91,9 +102,15 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                _BlocksHeader(blocks: site.blocks),
-                const Divider(height: 24),
-
+                _SectionTile(
+                  icon: Icons.grid_view_outlined,
+                  title: 'Blocks',
+                  subtitle: site.blocks.isEmpty
+                      ? 'No blocks — tap to add'
+                      : site.blocks.join(', '),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openManageBlocks(site),
+                ),
                 _SectionTile(
                   icon: Icons.assignment_outlined,
                   title: 'Client inputs',
@@ -121,31 +138,6 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
                 ),
               ],
             ),
-    );
-  }
-}
-
-class _BlocksHeader extends StatelessWidget {
-  const _BlocksHeader({required this.blocks});
-
-  final List<String> blocks;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Blocks', style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 8),
-        if (blocks.isEmpty)
-          const Text('No blocks recorded.')
-        else
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [for (final b in blocks) Chip(label: Text(b))],
-          ),
-      ],
     );
   }
 }

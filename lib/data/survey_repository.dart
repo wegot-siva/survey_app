@@ -18,6 +18,10 @@ abstract class SurveyRepository {
 
   Future<void> updateSite(Site site);
 
+  /// Replaces a site's block list. Leaves the site name and client inputs
+  /// untouched (unlike [updateSite], which writes the whole site).
+  Future<void> updateSiteBlocks(String siteId, List<String> blocks);
+
   /// Saves (or replaces) the Client inputs form for an existing site.
   Future<void> saveClientInputs(String siteId, ClientInputs inputs);
 
