@@ -11,6 +11,8 @@ class SyncResult {
     this.sites = 0,
     this.blocks = 0,
     this.clientInputs = 0,
+    this.sourcePoints = 0,
+    this.inletPoints = 0,
     this.message,
   });
 
@@ -18,6 +20,8 @@ class SyncResult {
   final int sites;
   final int blocks;
   final int clientInputs;
+  final int sourcePoints;
+  final int inletPoints;
   final String? message;
 }
 
@@ -54,16 +58,33 @@ class SyncService {
       final sites = await _repository.getSites();
       var blocks = 0;
       var clientInputs = 0;
+      var sourcePoints = 0;
+      var inletPoints = 0;
       for (final site in sites) {
+        // Site (and its blocks/client inputs) first — points FK to it.
         await _remote.pushSite(site);
         blocks += site.blocks.length;
         if (site.clientInputs != null) clientInputs++;
+
+        final sps = await _repository.getSourcePoints(site.id);
+        for (final sp in sps) {
+          await _remote.pushSourcePoint(sp);
+        }
+        sourcePoints += sps.length;
+
+        final ips = await _repository.getInletPoints(site.id);
+        for (final ip in ips) {
+          await _remote.pushInletPoint(ip);
+        }
+        inletPoints += ips.length;
       }
       return SyncResult(
         success: true,
         sites: sites.length,
         blocks: blocks,
         clientInputs: clientInputs,
+        sourcePoints: sourcePoints,
+        inletPoints: inletPoints,
       );
     } on PostgrestException catch (e) {
       return SyncResult(

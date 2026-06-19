@@ -114,7 +114,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   'Pushed to Supabase:\n\n'
                   '• ${result.sites} site(s)\n'
                   '• ${result.blocks} block(s)\n'
-                  '• ${result.clientInputs} client input form(s)',
+                  '• ${result.clientInputs} client input form(s)\n'
+                  '• ${result.sourcePoints} source point(s)\n'
+                  '• ${result.inletPoints} inlet point(s)',
                 )
               : SelectableText(result.message ?? 'Unknown error.'),
         ),

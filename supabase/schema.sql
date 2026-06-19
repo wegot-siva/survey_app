@@ -66,3 +66,86 @@ create policy "dev all - blocks" on public.blocks
 drop policy if exists "dev all - client_inputs" on public.client_inputs;
 create policy "dev all - client_inputs" on public.client_inputs
   for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
+-- Source points + inlet points (slice 1c). Mirror the local sqflite models.
+-- Booleans are native (null = unanswered); enums stored as their `.name`.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.source_points (
+  id                                text primary key,
+  site_id                           text not null references public.sites (id) on delete cascade,
+  block                             text,
+  apartment                         text,
+  inlet_description                 text,
+  sensor_size                       text,
+  sensor_od                         text,
+  pipe_size                         text,
+  pipe_type                         text,
+  qty                               integer,
+  sensor_type                       text,
+  rework                            boolean,
+  rework_details                    text,
+  flow_direction                    text,
+  clearance_10x                     boolean,
+  pipe_full                         boolean,
+  valve_downstream                  boolean,
+  reducer_spec                      boolean,
+  reducer_spec_details              text,
+  downstream_outlet_above_pipe_fig1 boolean,
+  air_vent_needed_fig2              boolean,
+  reverse_flow                      boolean,
+  distance_from_motor_pump_fig3     boolean,
+  no_flexible_pipe_within_20x       boolean,
+  max_and_continuous_pressure_bar   double precision,
+  strainer_screen_filter            boolean,
+  chamber_installation              boolean,
+  antenna_required                  boolean,
+  transmitting_part_open_to_air     boolean,
+  nrv_feasibility                   boolean
+);
+
+create index if not exists source_points_site_id_idx
+  on public.source_points (site_id);
+
+create table if not exists public.inlet_points (
+  id                              text primary key,
+  site_id                         text not null references public.sites (id) on delete cascade,
+  block                           text,
+  apartment_bhk                   text,
+  sensor_size                     text,
+  series                          text,
+  sensor_od                       text,
+  pipe_size                       text,
+  pipe_type                       text,
+  qty                             integer,
+  sensor_type                     text,
+  rework                          boolean,
+  rework_details                  text,
+  linear_distance_clearance_10x   boolean,
+  reverse_flow                    boolean,
+  oht_hns                         text,
+  distance_from_motor_pump        boolean,
+  max_and_continuous_pressure_bar double precision,
+  strainer_screen_filter          boolean,
+  flow_direction                  text,
+  access_mode                     text,
+  cable_run_length                text,
+  conduit_clamping                boolean,
+  civil_work_needed               boolean,
+  civil_work_details              text
+);
+
+create index if not exists inlet_points_site_id_idx
+  on public.inlet_points (site_id);
+
+alter table public.source_points enable row level security;
+alter table public.inlet_points  enable row level security;
+
+drop policy if exists "dev all - source_points" on public.source_points;
+create policy "dev all - source_points" on public.source_points
+  for all to anon, authenticated using (true) with check (true);
+
+drop policy if exists "dev all - inlet_points" on public.inlet_points;
+create policy "dev all - inlet_points" on public.inlet_points
+  for all to anon, authenticated using (true) with check (true);
