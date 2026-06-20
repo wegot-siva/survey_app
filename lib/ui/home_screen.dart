@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
 import '../models/site.dart';
+import '../models/survey_status.dart';
 import '../models/user_role.dart';
 import '../services/session_controller.dart';
 import '../services/supabase_service.dart';
@@ -44,9 +45,18 @@ class _HomeScreenState extends State<HomeScreen> {
     final sites = await widget.repository.getSites();
     if (!mounted) return;
     setState(() {
-      _sites = sites;
+      _sites = _visibleSites(sites);
       _loading = false;
     });
+  }
+
+  /// Engineer sees only their own assigned surveys (Slice C); Sales and
+  /// Approver see everything, unchanged from before.
+  List<Site> _visibleSites(List<Site> sites) {
+    if (widget.session.currentRole != UserRole.engineer) return sites;
+    final engineer = widget.session.currentEngineerName;
+    if (engineer == null) return const [];
+    return sites.where((s) => s.assignedTo == engineer).toList(growable: false);
   }
 
   Future<void> _openCreateSite() async {
@@ -68,10 +78,24 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openSite(Site site) async {
+    // Engineer opening a freshly-assigned survey starts work on it. Guarded
+    // to "assigned" only, so reopening an already in-progress/submitted
+    // survey never regresses its status.
+    if (widget.session.currentRole == UserRole.engineer &&
+        site.status == SurveyStatus.assigned) {
+      await widget.repository.updateSite(
+        site.copyWith(status: SurveyStatus.inProgress),
+      );
+      if (!mounted) return;
+    }
+
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            SiteHubScreen(repository: widget.repository, siteId: site.id),
+        builder: (_) => SiteHubScreen(
+          repository: widget.repository,
+          siteId: site.id,
+          session: widget.session,
+        ),
       ),
     );
     await _load();
@@ -212,9 +236,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _sites.isEmpty
-                ? _EmptyState(
-                    isSales: widget.session.currentRole == UserRole.sales,
-                  )
+                ? _EmptyState(role: widget.session.currentRole)
                 : RefreshIndicator(
                     onRefresh: _load,
                     child: ListView.separated(
@@ -223,7 +245,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       itemBuilder: (context, i) {
                         final site = _sites[i];
                         final hasInputs = site.clientInputs != null;
-                        final isSales = widget.session.currentRole == UserRole.sales;
+                        final role = widget.session.currentRole;
+                        final isSales = role == UserRole.sales;
+                        final isEngineer = role == UserRole.engineer;
                         return ListTile(
                           leading: const Icon(Icons.location_city_outlined),
                           title: Text(site.name),
@@ -231,6 +255,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             isSales
                                 ? 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
                                       '· Status: ${site.status ?? 'Not assigned'}'
+                                : isEngineer
+                                ? 'Status: ${site.status ?? 'Not assigned'}'
                                 : '${site.blocks.length} block(s)  •  '
                                       '${hasInputs ? 'Client inputs saved' : 'No client inputs yet'}',
                           ),
@@ -278,12 +304,26 @@ class _RoleBanner extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.isSales});
+  const _EmptyState({required this.role});
 
-  final bool isSales;
+  final UserRole? role;
 
   @override
   Widget build(BuildContext context) {
+    final String title;
+    final String subtitle;
+    switch (role) {
+      case UserRole.sales:
+        title = 'No sites yet';
+        subtitle = 'Tap "New survey" to create and assign your first one.';
+      case UserRole.engineer:
+        title = 'No surveys assigned to you';
+        subtitle = 'Sales hasn\'t assigned you a survey yet.';
+      case UserRole.approver:
+      case null:
+        title = 'No sites yet';
+        subtitle = 'Tap "New site" to add your first one.';
+    }
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -292,17 +332,9 @@ class _EmptyState extends StatelessWidget {
           children: [
             const Icon(Icons.map_outlined, size: 64),
             const SizedBox(height: 16),
-            Text(
-              'No sites yet',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
+            Text(title, style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
-            Text(
-              isSales
-                  ? 'Tap "New survey" to create and assign your first one.'
-                  : 'Tap "New site" to add your first one.',
-              textAlign: TextAlign.center,
-            ),
+            Text(subtitle, textAlign: TextAlign.center),
           ],
         ),
       ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/engineer_directory.dart';
 import '../models/user_role.dart';
 import '../services/session_controller.dart';
 
@@ -19,6 +20,11 @@ class _LoginScreenState extends State<LoginScreen> {
   UserRole _role = UserRole.engineer;
   final TextEditingController _password = TextEditingController();
 
+  // Which engineer the shared Engineer login is simulating (Slice C) — there
+  // are no real per-user accounts yet, so this is how testing the per-engineer
+  // filter works. Only used when _role == UserRole.engineer.
+  String? _engineerName;
+
   bool _submitting = false;
   String? _error;
 
@@ -29,12 +35,23 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
+    if (_role == UserRole.engineer && _engineerName == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please choose which engineer you are.')),
+      );
+      return;
+    }
+
     setState(() {
       _submitting = true;
       _error = null;
     });
 
-    final error = await widget.session.login(_role, _password.text);
+    final error = await widget.session.login(
+      _role,
+      _password.text,
+      engineerName: _engineerName,
+    );
 
     if (!mounted) return;
     if (error != null) {
@@ -75,8 +92,29 @@ class _LoginScreenState extends State<LoginScreen> {
                   selected: {_role},
                   onSelectionChanged: _submitting
                       ? null
-                      : (sel) => setState(() => _role = sel.first),
+                      : (sel) => setState(() {
+                          _role = sel.first;
+                          if (_role != UserRole.engineer) _engineerName = null;
+                        }),
                 ),
+                if (_role == UserRole.engineer) ...[
+                  const SizedBox(height: 24),
+                  DropdownButtonFormField<String>(
+                    initialValue: _engineerName,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Which engineer are you?',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      for (final name in kEngineerDirectory)
+                        DropdownMenuItem(value: name, child: Text(name)),
+                    ],
+                    onChanged: _submitting
+                        ? null
+                        : (v) => setState(() => _engineerName = v),
+                  ),
+                ],
                 const SizedBox(height: 24),
                 TextField(
                   controller: _password,

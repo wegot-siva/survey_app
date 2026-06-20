@@ -18,8 +18,8 @@ void main() {
     final repository = InMemorySurveyRepository(IdService());
     final supabaseService = SupabaseService();
     final session = SessionController(const SharedPasswordAuthRepository());
-    // Pre-authenticate so the auth gate shows the home screen.
-    await session.login(UserRole.engineer, 'engineer123');
+    // Approver: unfiltered view, unchanged since Slice A.
+    await session.login(UserRole.approver, 'approver123');
 
     await tester.pumpWidget(
       SurveyApp(
@@ -38,7 +38,48 @@ void main() {
     expect(find.text('Sites'), findsOneWidget);
     expect(find.text('New site'), findsOneWidget);
     expect(find.text('No sites yet'), findsOneWidget);
-    expect(find.text('Signed in as Engineer'), findsOneWidget);
+    expect(find.text('Signed in as Approver'), findsOneWidget);
+  });
+
+  testWidgets('Engineer sees only their assigned surveys', (tester) async {
+    final repository = InMemorySurveyRepository(IdService());
+    final supabaseService = SupabaseService();
+    final session = SessionController(const SharedPasswordAuthRepository());
+    await session.login(
+      UserRole.engineer,
+      'engineer123',
+      engineerName: 'Ravi Kumar',
+    );
+
+    final mine = await repository.createSite(name: 'Mine', blocks: const []);
+    await repository.updateSite(
+      mine.copyWith(assignedTo: 'Ravi Kumar', status: 'assigned'),
+    );
+    final theirs = await repository.createSite(
+      name: 'Not mine',
+      blocks: const [],
+    );
+    await repository.updateSite(
+      theirs.copyWith(assignedTo: 'Priya Sharma', status: 'assigned'),
+    );
+
+    await tester.pumpWidget(
+      SurveyApp(
+        repository: repository,
+        supabaseService: supabaseService,
+        syncService: SyncService(
+          repository,
+          supabaseService,
+          SupabaseSurveyDataSource(),
+        ),
+        session: session,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Mine'), findsOneWidget);
+    expect(find.text('Not mine'), findsNothing);
+    expect(find.text('Status: assigned'), findsOneWidget);
   });
 
   testWidgets('boots to the login screen when logged out', (tester) async {
