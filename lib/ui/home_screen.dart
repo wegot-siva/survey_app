@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
 import '../models/site.dart';
+import '../models/user_role.dart';
+import '../services/session_controller.dart';
 import '../services/supabase_service.dart';
 import '../services/sync_service.dart';
 import 'create_site_screen.dart';
@@ -14,11 +16,13 @@ class HomeScreen extends StatefulWidget {
     required this.repository,
     required this.supabaseService,
     required this.syncService,
+    required this.session,
   });
 
   final SurveyRepository repository;
   final SupabaseService supabaseService;
   final SyncService syncService;
+  final SessionController session;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -91,6 +95,30 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Log out?'),
+        content: Text(
+          'You are signed in as ${widget.session.currentRole?.label ?? 'a role'}. '
+          'Log out to switch roles?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) widget.session.logout();
+  }
+
   Future<void> _syncNow() async {
     final messenger = ScaffoldMessenger.of(context)
       ..showSnackBar(
@@ -149,6 +177,11 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: _syncNow,
             icon: const Icon(Icons.cloud_upload_outlined),
           ),
+          IconButton(
+            tooltip: 'Log out',
+            onPressed: _logout,
+            icon: const Icon(Icons.logout),
+          ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -156,31 +189,68 @@ class _HomeScreenState extends State<HomeScreen> {
         icon: const Icon(Icons.add_location_alt_outlined),
         label: const Text('New site'),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _sites.isEmpty
-          ? const _EmptyState()
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView.separated(
-                itemCount: _sites.length,
-                separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (context, i) {
-                  final site = _sites[i];
-                  final hasInputs = site.clientInputs != null;
-                  return ListTile(
-                    leading: const Icon(Icons.location_city_outlined),
-                    title: Text(site.name),
-                    subtitle: Text(
-                      '${site.blocks.length} block(s)  •  '
-                      '${hasInputs ? 'Client inputs saved' : 'No client inputs yet'}',
+      body: Column(
+        children: [
+          _RoleBanner(role: widget.session.currentRole),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _sites.isEmpty
+                ? const _EmptyState()
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView.separated(
+                      itemCount: _sites.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, i) {
+                        final site = _sites[i];
+                        final hasInputs = site.clientInputs != null;
+                        return ListTile(
+                          leading: const Icon(Icons.location_city_outlined),
+                          title: Text(site.name),
+                          subtitle: Text(
+                            '${site.blocks.length} block(s)  •  '
+                            '${hasInputs ? 'Client inputs saved' : 'No client inputs yet'}',
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => _openSite(site),
+                        );
+                      },
                     ),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => _openSite(site),
-                  );
-                },
-              ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A slim header showing which role is signed in.
+class _RoleBanner extends StatelessWidget {
+  const _RoleBanner({required this.role});
+
+  final UserRole? role;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      color: scheme.secondaryContainer,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          Icon(Icons.badge_outlined, size: 18, color: scheme.onSecondaryContainer),
+          const SizedBox(width: 8),
+          Text(
+            'Signed in as ${role?.label ?? 'Unknown'}',
+            style: TextStyle(
+              color: scheme.onSecondaryContainer,
+              fontWeight: FontWeight.w500,
             ),
+          ),
+        ],
+      ),
     );
   }
 }
