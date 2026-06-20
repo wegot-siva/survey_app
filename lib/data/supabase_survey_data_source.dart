@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/client_inputs.dart';
@@ -79,6 +81,23 @@ class SupabaseSurveyDataSource {
     await _client
         .from('material_master_items')
         .upsert(_materialMasterItemToRemoteRow(item));
+  }
+
+  /// Name of the Storage bucket holding survey photos. Must exist (see
+  /// supabase/schema.sql) before uploads succeed.
+  static const String photoBucket = 'survey-photos';
+
+  /// Uploads a local photo file to Storage under [objectKey] (idempotent —
+  /// re-uploading the same key overwrites). Returns the object key on success.
+  Future<String> uploadPhoto(String localPath, String objectKey) async {
+    await _client.storage
+        .from(photoBucket)
+        .upload(
+          objectKey,
+          File(localPath),
+          fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'),
+        );
+    return objectKey;
   }
 }
 
@@ -185,6 +204,9 @@ Map<String, Object?> _ductLoraToRemoteRow(DuctLora d) {
     'separate_mcb_for_series': d.separateMcbForSeries,
     'ups_power_supply': d.upsPowerSupply,
     'cable_length': d.cableLength,
+    // Only the remote object key is stored in the DB row; the local file path
+    // is device-specific and never pushed.
+    'placement_photo_remote_path': d.placementPhotoRemotePath,
   };
 }
 

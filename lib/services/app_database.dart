@@ -7,7 +7,7 @@ import 'package:sqflite/sqflite.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 5;
+const int _dbVersion = 6;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -39,6 +39,16 @@ Future<Database> openAppDatabase() async {
       // BoM engine reads its quantities from here at generation time).
       if (oldVersion < 5) {
         await _createMaterialMasterItemsTable(db);
+      }
+      // v5 -> v6: photo capture slice 1 — placement photo on Duct LoRa.
+      // Local path is set on capture (offline-first); remote path on upload.
+      if (oldVersion < 6) {
+        await db.execute(
+          'ALTER TABLE duct_loras ADD COLUMN placement_photo_local_path TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE duct_loras ADD COLUMN placement_photo_remote_path TEXT',
+        );
       }
     },
     onCreate: (db, version) async {
@@ -186,6 +196,8 @@ Future<void> _createDuctLorasTable(Database db) async {
       separate_mcb_for_series        INTEGER,
       ups_power_supply               INTEGER,
       cable_length                   REAL,
+      placement_photo_local_path     TEXT,
+      placement_photo_remote_path    TEXT,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');

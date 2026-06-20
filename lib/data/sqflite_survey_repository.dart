@@ -600,6 +600,8 @@ Map<String, Object?> _ductLoraToRow(DuctLora d) {
     'separate_mcb_for_series': _boolToInt(d.separateMcbForSeries),
     'ups_power_supply': _boolToInt(d.upsPowerSupply),
     'cable_length': d.cableLength,
+    'placement_photo_local_path': d.placementPhotoLocalPath,
+    'placement_photo_remote_path': d.placementPhotoRemotePath,
   };
 }
 
@@ -617,6 +619,8 @@ DuctLora _ductLoraFromRow(Map<String, Object?> r) {
     separateMcbForSeries: _intToBool(r['separate_mcb_for_series'] as int?),
     upsPowerSupply: _intToBool(r['ups_power_supply'] as int?),
     cableLength: (r['cable_length'] as num?)?.toDouble(),
+    placementPhotoLocalPath: r['placement_photo_local_path'] as String?,
+    placementPhotoRemotePath: r['placement_photo_remote_path'] as String?,
   );
 }
 

@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data/supabase_survey_data_source.dart';
 import '../data/survey_repository.dart';
+import '../models/duct_lora.dart';
 import 'supabase_service.dart';
 
 /// Outcome of a sync run, surfaced to the UI.
@@ -91,7 +94,7 @@ class SyncService {
 
         final dls = await _repository.getDuctLoras(site.id);
         for (final dl in dls) {
-          await _remote.pushDuctLora(dl);
+          await _remote.pushDuctLora(await _withUploadedPhoto(dl));
         }
         ductLoras += dls.length;
 
@@ -139,5 +142,21 @@ class SyncService {
     } catch (e) {
       return SyncResult(success: false, message: 'Sync failed:\n\n$e');
     }
+  }
+
+  /// If [dl] has a locally-captured placement photo not yet uploaded, uploads
+  /// it to Storage, records the remote object key locally (write-back, so we
+  /// don't re-upload on the next sync), and returns the updated unit. A missing
+  /// local file (already uploaded, or moved) is skipped, not an error.
+  Future<DuctLora> _withUploadedPhoto(DuctLora dl) async {
+    final localPath = dl.placementPhotoLocalPath;
+    if (localPath == null || dl.placementPhotoRemotePath != null) return dl;
+    if (!await File(localPath).exists()) return dl;
+
+    final objectKey = 'duct_loras/${dl.id}.jpg';
+    await _remote.uploadPhoto(localPath, objectKey);
+    final updated = dl.withPlacementPhotoRemotePath(objectKey);
+    await _repository.updateDuctLora(updated);
+    return updated;
   }
 }

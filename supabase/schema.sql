@@ -249,3 +249,37 @@ alter table public.material_master_items enable row level security;
 drop policy if exists "dev all - material_master_items" on public.material_master_items;
 create policy "dev all - material_master_items" on public.material_master_items
   for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
+-- Photo capture slice 1 — Duct LoRa placement photo.
+--
+-- Adds the remote object-key column on duct_loras (the device-local file path
+-- is never pushed), plus a Storage bucket + dev-only policies so the app can
+-- upload captured photos. Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.duct_loras
+  add column if not exists placement_photo_remote_path text;
+
+-- Storage bucket for survey photos. `on conflict do nothing` makes re-runs safe.
+insert into storage.buckets (id, name, public)
+values ('survey-photos', 'survey-photos', true)
+on conflict (id) do nothing;
+
+-- DEV-ONLY storage policies: allow anon + authenticated to read/write objects
+-- in the survey-photos bucket. !! TIGHTEN before production (scope by auth). !!
+drop policy if exists "dev all - survey-photos read" on storage.objects;
+create policy "dev all - survey-photos read" on storage.objects
+  for select to anon, authenticated
+  using (bucket_id = 'survey-photos');
+
+drop policy if exists "dev all - survey-photos write" on storage.objects;
+create policy "dev all - survey-photos write" on storage.objects
+  for insert to anon, authenticated
+  with check (bucket_id = 'survey-photos');
+
+drop policy if exists "dev all - survey-photos update" on storage.objects;
+create policy "dev all - survey-photos update" on storage.objects
+  for update to anon, authenticated
+  using (bucket_id = 'survey-photos')
+  with check (bucket_id = 'survey-photos');
