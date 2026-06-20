@@ -6,6 +6,7 @@ import '../models/user_role.dart';
 import '../services/session_controller.dart';
 import '../services/supabase_service.dart';
 import '../services/sync_service.dart';
+import 'assign_survey_screen.dart';
 import 'create_site_screen.dart';
 import 'site_hub_screen.dart';
 
@@ -52,6 +53,15 @@ class _HomeScreenState extends State<HomeScreen> {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => CreateSiteScreen(repository: widget.repository),
+      ),
+    );
+    await _load();
+  }
+
+  Future<void> _openAssignSurvey() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AssignSurveyScreen(repository: widget.repository),
       ),
     );
     await _load();
@@ -184,11 +194,17 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openCreateSite,
-        icon: const Icon(Icons.add_location_alt_outlined),
-        label: const Text('New site'),
-      ),
+      floatingActionButton: widget.session.currentRole == UserRole.sales
+          ? FloatingActionButton.extended(
+              onPressed: _openAssignSurvey,
+              icon: const Icon(Icons.add_task),
+              label: const Text('New survey'),
+            )
+          : FloatingActionButton.extended(
+              onPressed: _openCreateSite,
+              icon: const Icon(Icons.add_location_alt_outlined),
+              label: const Text('New site'),
+            ),
       body: Column(
         children: [
           _RoleBanner(role: widget.session.currentRole),
@@ -196,7 +212,9 @@ class _HomeScreenState extends State<HomeScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _sites.isEmpty
-                ? const _EmptyState()
+                ? _EmptyState(
+                    isSales: widget.session.currentRole == UserRole.sales,
+                  )
                 : RefreshIndicator(
                     onRefresh: _load,
                     child: ListView.separated(
@@ -205,12 +223,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       itemBuilder: (context, i) {
                         final site = _sites[i];
                         final hasInputs = site.clientInputs != null;
+                        final isSales = widget.session.currentRole == UserRole.sales;
                         return ListTile(
                           leading: const Icon(Icons.location_city_outlined),
                           title: Text(site.name),
                           subtitle: Text(
-                            '${site.blocks.length} block(s)  •  '
-                            '${hasInputs ? 'Client inputs saved' : 'No client inputs yet'}',
+                            isSales
+                                ? 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
+                                      '· Status: ${site.status ?? 'Not assigned'}'
+                                : '${site.blocks.length} block(s)  •  '
+                                      '${hasInputs ? 'Client inputs saved' : 'No client inputs yet'}',
                           ),
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () => _openSite(site),
@@ -256,7 +278,9 @@ class _RoleBanner extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+  const _EmptyState({required this.isSales});
+
+  final bool isSales;
 
   @override
   Widget build(BuildContext context) {
@@ -273,8 +297,10 @@ class _EmptyState extends StatelessWidget {
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Tap "New site" to add your first one.',
+            Text(
+              isSales
+                  ? 'Tap "New survey" to create and assign your first one.'
+                  : 'Tap "New site" to add your first one.',
               textAlign: TextAlign.center,
             ),
           ],

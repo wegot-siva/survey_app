@@ -17,10 +17,12 @@ class Site {
   final List<String> blocks;
   final ClientInputs? clientInputs;
 
-  /// Reserved for a future assignment workflow — unused for now (always null).
+  /// Lifecycle stage set by the assignment workflow (see [SurveyStatus]).
+  /// Null until Sales assigns the survey.
   final String? status;
 
-  /// Reserved for a future assignment workflow — unused for now (always null).
+  /// The engineer this survey is assigned to (a name from the hardcoded
+  /// engineer directory — see Roles & Assignment Slice B). Null until assigned.
   final String? assignedTo;
 
   Site copyWith({
