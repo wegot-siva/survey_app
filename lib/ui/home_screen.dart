@@ -7,6 +7,7 @@ import '../models/user_role.dart';
 import '../services/session_controller.dart';
 import '../services/supabase_service.dart';
 import '../services/sync_service.dart';
+import 'approver_review_screen.dart';
 import 'assign_survey_screen.dart';
 import 'create_site_screen.dart';
 import 'site_hub_screen.dart';
@@ -50,13 +51,25 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// Engineer sees only their own assigned surveys (Slice C); Sales and
-  /// Approver see everything, unchanged from before.
+  /// Engineer sees only their own assigned surveys (Slice C); Approver sees
+  /// only those submitted and awaiting review (Slice D); Sales sees
+  /// everything, unchanged from before.
   List<Site> _visibleSites(List<Site> sites) {
-    if (widget.session.currentRole != UserRole.engineer) return sites;
-    final engineer = widget.session.currentEngineerName;
-    if (engineer == null) return const [];
-    return sites.where((s) => s.assignedTo == engineer).toList(growable: false);
+    switch (widget.session.currentRole) {
+      case UserRole.engineer:
+        final engineer = widget.session.currentEngineerName;
+        if (engineer == null) return const [];
+        return sites
+            .where((s) => s.assignedTo == engineer)
+            .toList(growable: false);
+      case UserRole.approver:
+        return sites
+            .where((s) => s.status == SurveyStatus.submitted)
+            .toList(growable: false);
+      case UserRole.sales:
+      case null:
+        return sites;
+    }
   }
 
   Future<void> _openCreateSite() async {
@@ -95,6 +108,21 @@ class _HomeScreenState extends State<HomeScreen> {
           repository: widget.repository,
           siteId: site.id,
           session: widget.session,
+        ),
+      ),
+    );
+    await _load();
+  }
+
+  /// Approver's read-only review (Slice D) — separate from [_openSite] so
+  /// reviewing never triggers the engineer's "open == start work" transition
+  /// and never offers edit access to the survey forms.
+  Future<void> _openReview(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ApproverReviewScreen(
+          repository: widget.repository,
+          siteId: site.id,
         ),
       ),
     );
@@ -248,20 +276,33 @@ class _HomeScreenState extends State<HomeScreen> {
                         final role = widget.session.currentRole;
                         final isSales = role == UserRole.sales;
                         final isEngineer = role == UserRole.engineer;
+                        final isApprover = role == UserRole.approver;
+                        final isReadyForSales =
+                            site.status == SurveyStatus.approved ||
+                            site.status == SurveyStatus.released;
                         return ListTile(
                           leading: const Icon(Icons.location_city_outlined),
                           title: Text(site.name),
                           subtitle: Text(
                             isSales
-                                ? 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
-                                      '· Status: ${site.status ?? 'Not assigned'}'
+                                ? (isReadyForSales
+                                      ? 'Approved · ready  ·  Assigned to: '
+                                            '${site.assignedTo ?? 'Unassigned'}'
+                                      : 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
+                                            '· Status: ${site.status ?? 'Not assigned'}')
                                 : isEngineer
                                 ? 'Status: ${site.status ?? 'Not assigned'}'
+                                : isApprover
+                                ? 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
+                                      '· Status: ${site.status ?? 'Not assigned'}'
                                 : '${site.blocks.length} block(s)  •  '
                                       '${hasInputs ? 'Client inputs saved' : 'No client inputs yet'}',
                           ),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => _openSite(site),
+                          trailing: isSales && isReadyForSales
+                              ? const Icon(Icons.check_circle, color: Colors.green)
+                              : const Icon(Icons.chevron_right),
+                          onTap: () =>
+                              isApprover ? _openReview(site) : _openSite(site),
                         );
                       },
                     ),
@@ -320,6 +361,8 @@ class _EmptyState extends StatelessWidget {
         title = 'No surveys assigned to you';
         subtitle = 'Sales hasn\'t assigned you a survey yet.';
       case UserRole.approver:
+        title = 'Nothing to review';
+        subtitle = 'No surveys have been submitted yet.';
       case null:
         title = 'No sites yet';
         subtitle = 'Tap "New site" to add your first one.';
