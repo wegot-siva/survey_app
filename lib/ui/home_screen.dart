@@ -10,6 +10,7 @@ import '../services/sync_service.dart';
 import 'approver_review_screen.dart';
 import 'assign_survey_screen.dart';
 import 'create_site_screen.dart';
+import 'material_master_screen.dart';
 import 'site_hub_screen.dart';
 
 /// Lists all sites and offers a button to create a new one.
@@ -129,6 +130,14 @@ class _HomeScreenState extends State<HomeScreen> {
     await _load();
   }
 
+  Future<void> _openMaterialMaster() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MaterialMasterScreen(repository: widget.repository),
+      ),
+    );
+  }
+
   Future<void> _testSupabase() async {
     final messenger = ScaffoldMessenger.of(context)
       ..showSnackBar(
@@ -209,7 +218,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   '• ${result.inletPoints} inlet point(s)\n'
                   '• ${result.ductLoras} Duct LoRa unit(s)\n'
                   '• ${result.gateways} gateway(s)\n'
-                  '• ${result.footers} footer form(s)',
+                  '• ${result.footers} footer form(s)\n'
+                  '• ${result.materialMasterItems} material master item(s)',
                 )
               : SelectableText(result.message ?? 'Unknown error.'),
         ),
@@ -229,6 +239,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Sites'),
         actions: [
+          IconButton(
+            tooltip: 'Material Master',
+            onPressed: _openMaterialMaster,
+            icon: const Icon(Icons.inventory_2_outlined),
+          ),
           IconButton(
             tooltip: 'Test Supabase connection',
             onPressed: _testSupabase,

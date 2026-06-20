@@ -7,7 +7,7 @@ import 'package:sqflite/sqflite.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 4;
+const int _dbVersion = 5;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -34,6 +34,11 @@ Future<Database> openAppDatabase() async {
         await _createDuctLorasTable(db);
         await _createGatewaysTable(db);
         await _createFootersTable(db);
+      }
+      // v4 -> v5: add Material Master (admin-editable, not site-scoped — the
+      // BoM engine reads its quantities from here at generation time).
+      if (oldVersion < 5) {
+        await _createMaterialMasterItemsTable(db);
       }
     },
     onCreate: (db, version) async {
@@ -85,6 +90,7 @@ Future<Database> openAppDatabase() async {
       await _createDuctLorasTable(db);
       await _createGatewaysTable(db);
       await _createFootersTable(db);
+      await _createMaterialMasterItemsTable(db);
     },
   );
 }
@@ -220,6 +226,28 @@ Future<void> _createFootersTable(Database db) async {
       survey_date         TEXT,
       surveyor_name       TEXT,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+}
+
+/// Material Master table (v5). Admin-editable reference data — NOT site-scoped
+/// (no FK to sites). The BoM engine reads every quantity from this table at
+/// generation time; it starts empty and is populated via the admin screen.
+Future<void> _createMaterialMasterItemsTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE material_master_items (
+      id                   TEXT PRIMARY KEY,
+      group_code           TEXT NOT NULL,
+      material_name        TEXT NOT NULL,
+      unit                 TEXT NOT NULL,
+      behavior_type        TEXT NOT NULL,
+      sensor_size          TEXT,
+      sensor_type          TEXT,
+      quantity_per_sensor  REAL NOT NULL DEFAULT 0,
+      derived_formula      TEXT,
+      formula_divisor      REAL,
+      variable_source      TEXT,
+      notes                TEXT
     )
   ''');
 }

@@ -5,6 +5,7 @@ import '../models/duct_lora.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
+import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../models/survey_options.dart';
@@ -315,6 +316,38 @@ class SqfliteSurveyRepository implements SurveyRepository {
       _footerToRow(siteId, footer),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  // ---- Material Master --------------------------------------------------
+
+  @override
+  Future<List<MaterialMasterItem>> getMaterialMasterItems() async {
+    final rows = await _db.query('material_master_items', orderBy: 'rowid');
+    return rows.map(_materialMasterItemFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<MaterialMasterItem> addMaterialMasterItem(
+    MaterialMasterItem item,
+  ) async {
+    final stored = item.copyWithId(_idService.newId());
+    await _db.insert('material_master_items', _materialMasterItemToRow(stored));
+    return stored;
+  }
+
+  @override
+  Future<void> updateMaterialMasterItem(MaterialMasterItem item) async {
+    await _db.update(
+      'material_master_items',
+      _materialMasterItemToRow(item),
+      where: 'id = ?',
+      whereArgs: [item.id],
+    );
+  }
+
+  @override
+  Future<void> deleteMaterialMasterItem(String id) async {
+    await _db.delete('material_master_items', where: 'id = ?', whereArgs: [id]);
   }
 }
 
@@ -645,5 +678,49 @@ Footer _footerFromRow(Map<String, Object?> r) {
     generalRemarks: (r['general_remarks'] as String?) ?? '',
     surveyDate: DateTime.tryParse((r['survey_date'] as String?) ?? ''),
     surveyorName: (r['surveyor_name'] as String?) ?? '',
+  );
+}
+
+Map<String, Object?> _materialMasterItemToRow(MaterialMasterItem m) {
+  return {
+    'id': m.id,
+    'group_code': m.group.name,
+    'material_name': m.materialName,
+    'unit': m.unit,
+    'behavior_type': m.behaviorType.name,
+    'sensor_size': m.sensorSize?.name,
+    'sensor_type': m.sensorType?.name,
+    'quantity_per_sensor': m.quantityPerSensor,
+    'derived_formula': m.derivedFormula?.name,
+    'formula_divisor': m.formulaDivisor,
+    'variable_source': m.variableSource?.name,
+    'notes': m.notes,
+  };
+}
+
+MaterialMasterItem _materialMasterItemFromRow(Map<String, Object?> r) {
+  return MaterialMasterItem(
+    id: r['id']! as String,
+    group:
+        _enumByName(MaterialGroup.values, r['group_code'] as String?) ??
+        MaterialGroup.a,
+    materialName: (r['material_name'] as String?) ?? '',
+    unit: (r['unit'] as String?) ?? '',
+    behaviorType:
+        _enumByName(MaterialBehaviorType.values, r['behavior_type'] as String?) ??
+        MaterialBehaviorType.fixed,
+    sensorSize: _enumByName(SensorSize.values, r['sensor_size'] as String?),
+    sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
+    quantityPerSensor: (r['quantity_per_sensor'] as num?)?.toDouble() ?? 0,
+    derivedFormula: _enumByName(
+      DerivedFormula.values,
+      r['derived_formula'] as String?,
+    ),
+    formulaDivisor: (r['formula_divisor'] as num?)?.toDouble(),
+    variableSource: _enumByName(
+      VariableSource.values,
+      r['variable_source'] as String?,
+    ),
+    notes: (r['notes'] as String?) ?? '',
   );
 }

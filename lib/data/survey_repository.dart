@@ -3,6 +3,7 @@ import '../models/duct_lora.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
+import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 
@@ -79,4 +80,15 @@ abstract class SurveyRepository {
 
   /// Saves (or replaces) the Footer form for an existing site.
   Future<void> saveFooter(String siteId, Footer footer);
+
+  // ---- Material Master (admin-editable reference data, not site-scoped) ---
+
+  Future<List<MaterialMasterItem>> getMaterialMasterItems();
+
+  /// Persists a new Material Master row, assigning it an id, and returns it.
+  Future<MaterialMasterItem> addMaterialMasterItem(MaterialMasterItem item);
+
+  Future<void> updateMaterialMasterItem(MaterialMasterItem item);
+
+  Future<void> deleteMaterialMasterItem(String id);
 }

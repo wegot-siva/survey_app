@@ -3,6 +3,7 @@ import '../models/duct_lora.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
+import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../services/id_service.dart';
@@ -20,6 +21,7 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, DuctLora> _ductLoras = {};
   final Map<String, Gateway> _gateways = {};
   final Map<String, Footer> _footers = {};
+  final Map<String, MaterialMasterItem> _materialMasterItems = {};
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -163,5 +165,28 @@ class InMemorySurveyRepository implements SurveyRepository {
       throw StateError('Cannot save footer: site "$siteId" not found.');
     }
     _footers[siteId] = footer;
+  }
+
+  @override
+  Future<List<MaterialMasterItem>> getMaterialMasterItems() async =>
+      _materialMasterItems.values.toList(growable: false);
+
+  @override
+  Future<MaterialMasterItem> addMaterialMasterItem(
+    MaterialMasterItem item,
+  ) async {
+    final stored = item.copyWithId(_idService.newId());
+    _materialMasterItems[stored.id] = stored;
+    return stored;
+  }
+
+  @override
+  Future<void> updateMaterialMasterItem(MaterialMasterItem item) async {
+    _materialMasterItems[item.id] = item;
+  }
+
+  @override
+  Future<void> deleteMaterialMasterItem(String id) async {
+    _materialMasterItems.remove(id);
   }
 }

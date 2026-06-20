@@ -221,3 +221,31 @@ create policy "dev all - gateways" on public.gateways
 drop policy if exists "dev all - footers" on public.footers;
 create policy "dev all - footers" on public.footers
   for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
+-- Material Master + BoM phase. Admin-editable reference data — NOT site-scoped
+-- (no FK to sites). The on-device BoM engine reads every quantity from this
+-- table at generation time; it starts empty and is populated via the
+-- Material Master admin screen in the app. Mirrors the local sqflite v5 schema.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.material_master_items (
+  id                   text primary key,
+  group_code           text not null,              -- enum name: a..g
+  material_name        text not null,
+  unit                 text not null,
+  behavior_type        text not null,              -- enum name: fixed | derived | variable
+  sensor_size          text,                        -- enum name; null = any size
+  sensor_type          text,                        -- enum name; null = any type
+  quantity_per_sensor  double precision not null default 0,
+  derived_formula      text,                        -- enum name; e.g. ceilWiredSensorsDividedByDivisor
+  formula_divisor      double precision,
+  variable_source      text,                        -- enum name; e.g. ductLoraCableLength
+  notes                text
+);
+
+alter table public.material_master_items enable row level security;
+
+drop policy if exists "dev all - material_master_items" on public.material_master_items;
+create policy "dev all - material_master_items" on public.material_master_items
+  for all to anon, authenticated using (true) with check (true);

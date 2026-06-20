@@ -16,6 +16,7 @@ class SyncResult {
     this.ductLoras = 0,
     this.gateways = 0,
     this.footers = 0,
+    this.materialMasterItems = 0,
     this.message,
   });
 
@@ -28,6 +29,7 @@ class SyncResult {
   final int ductLoras;
   final int gateways;
   final int footers;
+  final int materialMasterItems;
   final String? message;
 }
 
@@ -105,6 +107,14 @@ class SyncService {
           footers++;
         }
       }
+
+      // Material Master is global reference data, not site-scoped — push the
+      // whole table once, outside the per-site loop.
+      final materials = await _repository.getMaterialMasterItems();
+      for (final material in materials) {
+        await _remote.pushMaterialMasterItem(material);
+      }
+
       return SyncResult(
         success: true,
         sites: sites.length,
@@ -115,6 +125,7 @@ class SyncService {
         ductLoras: ductLoras,
         gateways: gateways,
         footers: footers,
+        materialMasterItems: materials.length,
       );
     } on PostgrestException catch (e) {
       return SyncResult(

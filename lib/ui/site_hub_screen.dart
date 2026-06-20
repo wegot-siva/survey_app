@@ -5,6 +5,7 @@ import '../models/site.dart';
 import '../models/survey_status.dart';
 import '../models/user_role.dart';
 import '../services/session_controller.dart';
+import 'bom_preview_screen.dart';
 import 'client_inputs_screen.dart';
 import 'duct_loras_list_screen.dart';
 import 'footer_screen.dart';
@@ -125,6 +126,16 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
       ),
     );
     await _load();
+  }
+
+  Future<void> _openBomPreview(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            BomPreviewScreen(repository: widget.repository, site: site),
+      ),
+    );
+    // Read-only — no need to reload the hub afterwards.
   }
 
   Future<void> _openManageBlocks(Site site) async {
@@ -257,6 +268,13 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
                       ? const Icon(Icons.check_circle, color: Colors.green)
                       : const Icon(Icons.chevron_right),
                   onTap: () => _openFooter(site),
+                ),
+                _SectionTile(
+                  icon: Icons.receipt_long_outlined,
+                  title: 'Generate BoM',
+                  subtitle: 'Preview the computed bill of materials',
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openBomPreview(site),
                 ),
               ],
             ),

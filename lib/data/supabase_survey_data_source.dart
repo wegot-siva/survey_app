@@ -5,6 +5,7 @@ import '../models/duct_lora.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
+import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 
@@ -70,6 +71,14 @@ class SupabaseSurveyDataSource {
   /// must exist.
   Future<void> pushFooter(String siteId, Footer f) async {
     await _client.from('footers').upsert(_footerToRemoteRow(siteId, f));
+  }
+
+  /// Upserts a Material Master row by its id (idempotent). Not site-scoped —
+  /// no parent to push first.
+  Future<void> pushMaterialMasterItem(MaterialMasterItem item) async {
+    await _client
+        .from('material_master_items')
+        .upsert(_materialMasterItemToRemoteRow(item));
   }
 }
 
@@ -206,5 +215,22 @@ Map<String, Object?> _footerToRemoteRow(String siteId, Footer f) {
     'general_remarks': f.generalRemarks,
     'survey_date': f.surveyDate?.toIso8601String(),
     'surveyor_name': f.surveyorName,
+  };
+}
+
+Map<String, Object?> _materialMasterItemToRemoteRow(MaterialMasterItem m) {
+  return {
+    'id': m.id,
+    'group_code': m.group.name,
+    'material_name': m.materialName,
+    'unit': m.unit,
+    'behavior_type': m.behaviorType.name,
+    'sensor_size': m.sensorSize?.name,
+    'sensor_type': m.sensorType?.name,
+    'quantity_per_sensor': m.quantityPerSensor,
+    'derived_formula': m.derivedFormula?.name,
+    'formula_divisor': m.formulaDivisor,
+    'variable_source': m.variableSource?.name,
+    'notes': m.notes,
   };
 }
