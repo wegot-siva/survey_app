@@ -6,6 +6,7 @@ import '../models/inlet_point.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
+import '../models/survey_photo.dart';
 import '../services/id_service.dart';
 import 'survey_repository.dart';
 
@@ -22,6 +23,7 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, Gateway> _gateways = {};
   final Map<String, Footer> _footers = {};
   final Map<String, MaterialMasterItem> _materialMasterItems = {};
+  final Map<String, SurveyPhoto> _photos = {};
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -188,5 +190,50 @@ class InMemorySurveyRepository implements SurveyRepository {
   @override
   Future<void> deleteMaterialMasterItem(String id) async {
     _materialMasterItems.remove(id);
+  }
+
+  @override
+  Future<List<SurveyPhoto>> getPhotos(String ownerType, String ownerId) async {
+    final list =
+        _photos.values
+            .where((p) => p.ownerType == ownerType && p.ownerId == ownerId)
+            .toList()
+          ..sort((a, b) {
+            final bySlot = a.slot.compareTo(b.slot);
+            return bySlot != 0 ? bySlot : a.position.compareTo(b.position);
+          });
+    return List.unmodifiable(list);
+  }
+
+  @override
+  Future<void> setPhotos(
+    String ownerType,
+    String ownerId,
+    List<SurveyPhoto> photos,
+  ) async {
+    final keepIds = photos.where((p) => p.id.isNotEmpty).map((p) => p.id).toSet();
+    _photos.removeWhere(
+      (id, p) =>
+          p.ownerType == ownerType &&
+          p.ownerId == ownerId &&
+          !keepIds.contains(id),
+    );
+    for (final photo in photos) {
+      if (photo.id.isEmpty) {
+        final stored = photo.copyWithId(_idService.newId());
+        _photos[stored.id] = stored;
+      } else {
+        _photos[photo.id] = photo;
+      }
+    }
+  }
+
+  @override
+  Future<List<SurveyPhoto>> getAllPhotos() async =>
+      _photos.values.toList(growable: false);
+
+  @override
+  Future<void> updatePhoto(SurveyPhoto photo) async {
+    _photos[photo.id] = photo;
   }
 }

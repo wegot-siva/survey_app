@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data/supabase_survey_data_source.dart';
 import '../data/survey_repository.dart';
 import '../models/duct_lora.dart';
+import '../models/survey_photo.dart';
 import 'supabase_service.dart';
 
 /// Outcome of a sync run, surfaced to the UI.
@@ -20,6 +21,7 @@ class SyncResult {
     this.gateways = 0,
     this.footers = 0,
     this.materialMasterItems = 0,
+    this.photos = 0,
     this.message,
   });
 
@@ -33,6 +35,7 @@ class SyncResult {
   final int gateways;
   final int footers;
   final int materialMasterItems;
+  final int photos;
   final String? message;
 }
 
@@ -118,6 +121,16 @@ class SyncService {
         await _remote.pushMaterialMasterItem(material);
       }
 
+      // Generic photos (slice 2): upload any pending files, then push metadata.
+      var photos = 0;
+      for (final photo in await _repository.getAllPhotos()) {
+        final pushed = await _withUploadedGenericPhoto(photo);
+        if (pushed.remotePath != null) {
+          await _remote.pushPhoto(pushed);
+          photos++;
+        }
+      }
+
       return SyncResult(
         success: true,
         sites: sites.length,
@@ -129,6 +142,7 @@ class SyncService {
         gateways: gateways,
         footers: footers,
         materialMasterItems: materials.length,
+        photos: photos,
       );
     } on PostgrestException catch (e) {
       return SyncResult(
@@ -157,6 +171,21 @@ class SyncService {
     await _remote.uploadPhoto(localPath, objectKey);
     final updated = dl.withPlacementPhotoRemotePath(objectKey);
     await _repository.updateDuctLora(updated);
+    return updated;
+  }
+
+  /// Same as [_withUploadedPhoto] but for a generic [SurveyPhoto] row: uploads
+  /// the local file if not yet uploaded, records the remote key locally, and
+  /// returns the updated photo. Missing local files are skipped, not errors.
+  Future<SurveyPhoto> _withUploadedGenericPhoto(SurveyPhoto photo) async {
+    final localPath = photo.localPath;
+    if (localPath == null || photo.remotePath != null) return photo;
+    if (!await File(localPath).exists()) return photo;
+
+    final objectKey = 'photos/${photo.id}.jpg';
+    await _remote.uploadPhoto(localPath, objectKey);
+    final updated = photo.withRemotePath(objectKey);
+    await _repository.updatePhoto(updated);
     return updated;
   }
 }

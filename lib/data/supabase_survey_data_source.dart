@@ -10,6 +10,7 @@ import '../models/inlet_point.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
+import '../models/survey_photo.dart';
 
 /// Remote (Supabase) writes for survey data. Push-only for now.
 ///
@@ -98,6 +99,12 @@ class SupabaseSurveyDataSource {
           fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'),
         );
     return objectKey;
+  }
+
+  /// Upserts a photo metadata row by its id (idempotent). The device-local
+  /// file path is never pushed — only the Storage object key.
+  Future<void> pushPhoto(SurveyPhoto photo) async {
+    await _client.from('photos').upsert(_photoToRemoteRow(photo));
   }
 }
 
@@ -237,6 +244,18 @@ Map<String, Object?> _footerToRemoteRow(String siteId, Footer f) {
     'general_remarks': f.generalRemarks,
     'survey_date': f.surveyDate?.toIso8601String(),
     'surveyor_name': f.surveyorName,
+  };
+}
+
+Map<String, Object?> _photoToRemoteRow(SurveyPhoto p) {
+  return {
+    'id': p.id,
+    'owner_type': p.ownerType,
+    'owner_id': p.ownerId,
+    'slot': p.slot,
+    'position': p.position,
+    // Local path is device-specific and never pushed.
+    'remote_path': p.remotePath,
   };
 }
 

@@ -7,7 +7,7 @@ import 'package:sqflite/sqflite.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 6;
+const int _dbVersion = 7;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -49,6 +49,11 @@ Future<Database> openAppDatabase() async {
         await db.execute(
           'ALTER TABLE duct_loras ADD COLUMN placement_photo_remote_path TEXT',
         );
+      }
+      // v6 -> v7: photo capture slice 2 — generic polymorphic photos table
+      // serving source/inlet/gateway/footer photo fields.
+      if (oldVersion < 7) {
+        await _createPhotosTable(db);
       }
     },
     onCreate: (db, version) async {
@@ -101,6 +106,7 @@ Future<Database> openAppDatabase() async {
       await _createGatewaysTable(db);
       await _createFootersTable(db);
       await _createMaterialMasterItemsTable(db);
+      await _createPhotosTable(db);
     },
   );
 }
@@ -240,6 +246,26 @@ Future<void> _createFootersTable(Database db) async {
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
+}
+
+/// Photos table (v7). Polymorphic + slot-based, serving every photo field
+/// across source/inlet/gateway/footer. Not FK-scoped (owner_type + owner_id is
+/// a polymorphic link). Local path set on capture; remote path on upload.
+Future<void> _createPhotosTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE photos (
+      id          TEXT PRIMARY KEY,
+      owner_type  TEXT NOT NULL,
+      owner_id    TEXT NOT NULL,
+      slot        TEXT NOT NULL,
+      position    INTEGER NOT NULL DEFAULT 0,
+      local_path  TEXT,
+      remote_path TEXT
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX photos_owner_idx ON photos (owner_type, owner_id)',
+  );
 }
 
 /// Material Master table (v5). Admin-editable reference data — NOT site-scoped

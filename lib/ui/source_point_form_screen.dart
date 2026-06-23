@@ -5,7 +5,9 @@ import '../data/survey_repository.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../models/survey_options.dart';
+import '../models/survey_photo.dart';
 import 'widgets/form_fields.dart';
+import 'widgets/photo_capture_field.dart';
 
 /// Add or edit a single source point. All fields optional (partial saves).
 class SourcePointFormScreen extends StatefulWidget {
@@ -56,12 +58,17 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
   bool? _transmittingPartOpenToAir;
   bool? _nrvFeasibility;
 
+  /// Captured photos, keyed by slot. Loaded from the repository on edit;
+  /// reconciled back via setPhotos on save.
+  final Map<String, PhotoDraft> _photos = {};
+
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
     final e = widget.existing;
+    if (e != null) _loadPhotos(e.id);
 
     _apartment = TextEditingController(text: e?.apartment ?? '');
     _inletDescription = TextEditingController(text: e?.inletDescription ?? '');
@@ -113,6 +120,54 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
     super.dispose();
   }
 
+  Future<void> _loadPhotos(String ownerId) async {
+    final loaded = await widget.repository.getPhotos(
+      PhotoOwner.sourcePoint,
+      ownerId,
+    );
+    if (!mounted) return;
+    setState(() {
+      for (final p in loaded) {
+        _photos[p.slot] = PhotoDraft(
+          id: p.id,
+          localPath: p.localPath,
+          remotePath: p.remotePath,
+        );
+      }
+    });
+  }
+
+  void _onPhotoCaptured(String slot, String localPath) {
+    setState(() {
+      final existing = _photos[slot];
+      if (existing == null) {
+        _photos[slot] = PhotoDraft(localPath: localPath);
+      } else {
+        existing.localPath = localPath;
+        existing.remotePath = null; // retake — must re-upload
+      }
+    });
+  }
+
+  List<SurveyPhoto> _photoListFor(String ownerId) {
+    final list = <SurveyPhoto>[];
+    for (final entry in _photos.entries) {
+      final draft = entry.value;
+      if (draft.localPath == null) continue;
+      list.add(
+        SurveyPhoto(
+          id: draft.id,
+          ownerType: PhotoOwner.sourcePoint,
+          ownerId: ownerId,
+          slot: entry.key,
+          localPath: draft.localPath,
+          remotePath: draft.remotePath,
+        ),
+      );
+    }
+    return list;
+  }
+
   Future<void> _save() async {
     setState(() => _saving = true);
 
@@ -149,11 +204,19 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
       nrvFeasibility: _nrvFeasibility,
     );
 
+    final String ownerId;
     if (widget.existing == null) {
-      await widget.repository.addSourcePoint(draft);
+      final stored = await widget.repository.addSourcePoint(draft);
+      ownerId = stored.id;
     } else {
       await widget.repository.updateSourcePoint(draft);
+      ownerId = widget.existing!.id;
     }
+    await widget.repository.setPhotos(
+      PhotoOwner.sourcePoint,
+      ownerId,
+      _photoListFor(ownerId),
+    );
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -359,10 +422,32 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
           ],
 
           const FormSectionLabel('Photos'),
-          const DisabledPhotoField(label: 'Inlet marked'),
-          const DisabledPhotoField(label: 'Power source'),
-          if (isWired) const DisabledPhotoField(label: 'Wiring routing'),
-          if (isWireless) const DisabledPhotoField(label: 'Antenna routing'),
+          PhotoCaptureField(
+            label: 'Inlet marked',
+            localPath: _photos[PhotoSlot.inletMarked]?.localPath,
+            uploaded: _photos[PhotoSlot.inletMarked]?.uploaded ?? false,
+            onCaptured: (p) => _onPhotoCaptured(PhotoSlot.inletMarked, p),
+          ),
+          PhotoCaptureField(
+            label: 'Power source',
+            localPath: _photos[PhotoSlot.powerSource]?.localPath,
+            uploaded: _photos[PhotoSlot.powerSource]?.uploaded ?? false,
+            onCaptured: (p) => _onPhotoCaptured(PhotoSlot.powerSource, p),
+          ),
+          if (isWired)
+            PhotoCaptureField(
+              label: 'Wiring routing',
+              localPath: _photos[PhotoSlot.wiringRouting]?.localPath,
+              uploaded: _photos[PhotoSlot.wiringRouting]?.uploaded ?? false,
+              onCaptured: (p) => _onPhotoCaptured(PhotoSlot.wiringRouting, p),
+            ),
+          if (isWireless)
+            PhotoCaptureField(
+              label: 'Antenna routing',
+              localPath: _photos[PhotoSlot.antennaRouting]?.localPath,
+              uploaded: _photos[PhotoSlot.antennaRouting]?.uploaded ?? false,
+              onCaptured: (p) => _onPhotoCaptured(PhotoSlot.antennaRouting, p),
+            ),
 
           const SizedBox(height: 24),
           FilledButton.icon(

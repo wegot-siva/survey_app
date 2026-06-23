@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import '../data/survey_repository.dart';
 import '../models/footer.dart';
 import '../models/site.dart';
+import '../models/survey_photo.dart';
 import 'widgets/form_fields.dart';
+import 'widgets/photo_capture_field.dart';
 
 /// The per-site "Footer" form — closing, site-wide details. One per site (like
 /// Client inputs). All fields optional; partial saves allowed.
@@ -32,6 +34,10 @@ class _FooterScreenState extends State<FooterScreen> {
   bool? _tclService;
   DateTime? _surveyDate;
 
+  /// Site photos/videos — multiple allowed. Loaded with the footer; reconciled
+  /// on save (ordered by list position).
+  final List<PhotoDraft> _sitePhotos = [];
+
   bool _loading = true;
   bool _saving = false;
 
@@ -43,6 +49,10 @@ class _FooterScreenState extends State<FooterScreen> {
 
   Future<void> _load() async {
     final existing = await widget.repository.getFooter(widget.site.id);
+    final photos = await widget.repository.getPhotos(
+      PhotoOwner.footer,
+      widget.site.id,
+    );
     if (!mounted) return;
     setState(() {
       if (existing != null) {
@@ -54,8 +64,47 @@ class _FooterScreenState extends State<FooterScreen> {
         _tclService = existing.tclService;
         _surveyDate = existing.surveyDate;
       }
+      for (final p in photos) {
+        if (p.slot == PhotoSlot.siteMedia) {
+          _sitePhotos.add(
+            PhotoDraft(
+              id: p.id,
+              localPath: p.localPath,
+              remotePath: p.remotePath,
+            ),
+          );
+        }
+      }
       _loading = false;
     });
+  }
+
+  void _onPhotoAdded(String localPath) {
+    setState(() => _sitePhotos.add(PhotoDraft(localPath: localPath)));
+  }
+
+  void _onPhotoRemoved(int index) {
+    setState(() => _sitePhotos.removeAt(index));
+  }
+
+  List<SurveyPhoto> _photoList() {
+    final list = <SurveyPhoto>[];
+    for (var i = 0; i < _sitePhotos.length; i++) {
+      final draft = _sitePhotos[i];
+      if (draft.localPath == null) continue;
+      list.add(
+        SurveyPhoto(
+          id: draft.id,
+          ownerType: PhotoOwner.footer,
+          ownerId: widget.site.id,
+          slot: PhotoSlot.siteMedia,
+          position: i,
+          localPath: draft.localPath,
+          remotePath: draft.remotePath,
+        ),
+      );
+    }
+    return list;
   }
 
   @override
@@ -95,6 +144,11 @@ class _FooterScreenState extends State<FooterScreen> {
     );
 
     await widget.repository.saveFooter(widget.site.id, footer);
+    await widget.repository.setPhotos(
+      PhotoOwner.footer,
+      widget.site.id,
+      _photoList(),
+    );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Footer saved.')),
@@ -165,7 +219,16 @@ class _FooterScreenState extends State<FooterScreen> {
                 AppTextField(controller: _surveyorName, label: 'Surveyor name'),
 
                 const FormSectionLabel('Photos / videos'),
-                const DisabledPhotoField(label: 'Site photos / videos'),
+                MultiPhotoCaptureField(
+                  label: 'Site photos / videos',
+                  photos: [
+                    for (final p in _sitePhotos)
+                      if (p.localPath != null)
+                        PhotoView(p.localPath!, uploaded: p.uploaded),
+                  ],
+                  onAdded: _onPhotoAdded,
+                  onRemoved: _onPhotoRemoved,
+                ),
 
                 const SizedBox(height: 24),
                 FilledButton.icon(

@@ -6,6 +6,7 @@ import '../models/inlet_point.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
+import '../models/survey_photo.dart';
 
 /// The single gateway between the UI and stored survey data.
 ///
@@ -91,4 +92,25 @@ abstract class SurveyRepository {
   Future<void> updateMaterialMasterItem(MaterialMasterItem item);
 
   Future<void> deleteMaterialMasterItem(String id);
+
+  // ---- Photos (polymorphic, slot-based — photo slice 2) -------------------
+
+  /// All photos for one owner record, ordered by slot then position.
+  Future<List<SurveyPhoto>> getPhotos(String ownerType, String ownerId);
+
+  /// Replaces the full photo set for ([ownerType], [ownerId]) with [photos]:
+  /// rows not present are deleted, new ones (empty id) inserted, existing ones
+  /// updated. Lets a form submit its whole desired set in one call while
+  /// preserving each kept photo's remote-path linkage.
+  Future<void> setPhotos(
+    String ownerType,
+    String ownerId,
+    List<SurveyPhoto> photos,
+  );
+
+  /// Every photo across all owners — used by sync to find pending uploads.
+  Future<List<SurveyPhoto>> getAllPhotos();
+
+  /// Updates one photo row by id (e.g. sync writing back a remote path).
+  Future<void> updatePhoto(SurveyPhoto photo);
 }

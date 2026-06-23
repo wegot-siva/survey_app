@@ -283,3 +283,29 @@ create policy "dev all - survey-photos update" on storage.objects
   for update to anon, authenticated
   using (bucket_id = 'survey-photos')
   with check (bucket_id = 'survey-photos');
+
+-- ---------------------------------------------------------------------------
+-- Photo capture slice 2 — generic polymorphic photos table serving the
+-- source/inlet/gateway/footer photo fields. (owner_type, owner_id) is a
+-- polymorphic link (no FK); slot names the field; footer site media uses many
+-- rows in one slot, ordered by position. Files upload to the same survey-photos
+-- bucket under photos/<id>.jpg. The device-local path is never pushed.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.photos (
+  id          text primary key,
+  owner_type  text not null,   -- source_point | inlet_point | gateway | footer
+  owner_id    text not null,
+  slot        text not null,   -- e.g. inlet_marked, shaft_access, site_media
+  position    integer not null default 0,
+  remote_path text             -- Storage object key; local path never pushed
+);
+
+create index if not exists photos_owner_idx on public.photos (owner_type, owner_id);
+
+alter table public.photos enable row level security;
+
+drop policy if exists "dev all - photos" on public.photos;
+create policy "dev all - photos" on public.photos
+  for all to anon, authenticated using (true) with check (true);

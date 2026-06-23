@@ -5,7 +5,9 @@ import '../data/survey_repository.dart';
 import '../models/gateway.dart';
 import '../models/site.dart';
 import '../models/survey_options.dart';
+import '../models/survey_photo.dart';
 import 'widgets/form_fields.dart';
+import 'widgets/photo_capture_field.dart';
 
 /// Add or edit a single gateway. All fields optional (partial saves).
 class GatewayFormScreen extends StatefulWidget {
@@ -37,6 +39,10 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
   SimCoverage? _simCoverage;
   bool? _uninterruptedPowerSource;
 
+  /// Captured gateway-location photo (single slot). Loaded on edit; reconciled
+  /// on save.
+  PhotoDraft? _locationPhoto;
+
   bool _saving = false;
 
   bool get _usesRouter =>
@@ -46,6 +52,7 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
   void initState() {
     super.initState();
     final e = widget.existing;
+    if (e != null) _loadPhotos(e.id);
 
     _locationDescription = TextEditingController(
       text: e?.locationDescription ?? '',
@@ -77,6 +84,53 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
     super.dispose();
   }
 
+  Future<void> _loadPhotos(String ownerId) async {
+    final loaded = await widget.repository.getPhotos(
+      PhotoOwner.gateway,
+      ownerId,
+    );
+    if (!mounted) return;
+    for (final p in loaded) {
+      if (p.slot == PhotoSlot.gatewayLocation) {
+        setState(() {
+          _locationPhoto = PhotoDraft(
+            id: p.id,
+            localPath: p.localPath,
+            remotePath: p.remotePath,
+          );
+        });
+        break;
+      }
+    }
+  }
+
+  void _onLocationCaptured(String localPath) {
+    setState(() {
+      final existing = _locationPhoto;
+      if (existing == null) {
+        _locationPhoto = PhotoDraft(localPath: localPath);
+      } else {
+        existing.localPath = localPath;
+        existing.remotePath = null; // retake — must re-upload
+      }
+    });
+  }
+
+  List<SurveyPhoto> _photoListFor(String ownerId) {
+    final draft = _locationPhoto;
+    if (draft == null || draft.localPath == null) return const [];
+    return [
+      SurveyPhoto(
+        id: draft.id,
+        ownerType: PhotoOwner.gateway,
+        ownerId: ownerId,
+        slot: PhotoSlot.gatewayLocation,
+        localPath: draft.localPath,
+        remotePath: draft.remotePath,
+      ),
+    ];
+  }
+
   Future<void> _save() async {
     setState(() => _saving = true);
 
@@ -101,11 +155,19 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
       mountingHardwareNeeded: _mountingHardware.text.trim(),
     );
 
+    final String ownerId;
     if (widget.existing == null) {
-      await widget.repository.addGateway(draft);
+      final stored = await widget.repository.addGateway(draft);
+      ownerId = stored.id;
     } else {
       await widget.repository.updateGateway(draft);
+      ownerId = widget.existing!.id;
     }
+    await widget.repository.setPhotos(
+      PhotoOwner.gateway,
+      ownerId,
+      _photoListFor(ownerId),
+    );
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -192,7 +254,12 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
           ),
 
           const FormSectionLabel('Photos'),
-          const DisabledPhotoField(label: 'Gateway location'),
+          PhotoCaptureField(
+            label: 'Gateway location',
+            localPath: _locationPhoto?.localPath,
+            uploaded: _locationPhoto?.uploaded ?? false,
+            onCaptured: _onLocationCaptured,
+          ),
 
           const SizedBox(height: 24),
           FilledButton.icon(

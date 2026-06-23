@@ -9,6 +9,7 @@ import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../models/survey_options.dart';
+import '../models/survey_photo.dart';
 import '../services/id_service.dart';
 import 'survey_repository.dart';
 
@@ -348,6 +349,73 @@ class SqfliteSurveyRepository implements SurveyRepository {
   @override
   Future<void> deleteMaterialMasterItem(String id) async {
     await _db.delete('material_master_items', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---- Photos (polymorphic, slot-based) -------------------------------------
+
+  @override
+  Future<List<SurveyPhoto>> getPhotos(String ownerType, String ownerId) async {
+    final rows = await _db.query(
+      'photos',
+      where: 'owner_type = ? AND owner_id = ?',
+      whereArgs: [ownerType, ownerId],
+      orderBy: 'slot, position, rowid',
+    );
+    return rows.map(_photoFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<void> setPhotos(
+    String ownerType,
+    String ownerId,
+    List<SurveyPhoto> photos,
+  ) async {
+    await _db.transaction((txn) async {
+      final keepIds = photos
+          .where((p) => p.id.isNotEmpty)
+          .map((p) => p.id)
+          .toList();
+      // Delete any existing rows for this owner that aren't in the kept set.
+      final placeholders = List.filled(keepIds.length, '?').join(', ');
+      await txn.delete(
+        'photos',
+        where: keepIds.isEmpty
+            ? 'owner_type = ? AND owner_id = ?'
+            : 'owner_type = ? AND owner_id = ? AND id NOT IN ($placeholders)',
+        whereArgs: [ownerType, ownerId, ...keepIds],
+      );
+      for (final photo in photos) {
+        if (photo.id.isEmpty) {
+          await txn.insert(
+            'photos',
+            _photoToRow(photo.copyWithId(_idService.newId())),
+          );
+        } else {
+          await txn.update(
+            'photos',
+            _photoToRow(photo),
+            where: 'id = ?',
+            whereArgs: [photo.id],
+          );
+        }
+      }
+    });
+  }
+
+  @override
+  Future<List<SurveyPhoto>> getAllPhotos() async {
+    final rows = await _db.query('photos', orderBy: 'rowid');
+    return rows.map(_photoFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<void> updatePhoto(SurveyPhoto photo) async {
+    await _db.update(
+      'photos',
+      _photoToRow(photo),
+      where: 'id = ?',
+      whereArgs: [photo.id],
+    );
   }
 }
 
@@ -726,5 +794,29 @@ MaterialMasterItem _materialMasterItemFromRow(Map<String, Object?> r) {
       r['variable_source'] as String?,
     ),
     notes: (r['notes'] as String?) ?? '',
+  );
+}
+
+Map<String, Object?> _photoToRow(SurveyPhoto p) {
+  return {
+    'id': p.id,
+    'owner_type': p.ownerType,
+    'owner_id': p.ownerId,
+    'slot': p.slot,
+    'position': p.position,
+    'local_path': p.localPath,
+    'remote_path': p.remotePath,
+  };
+}
+
+SurveyPhoto _photoFromRow(Map<String, Object?> r) {
+  return SurveyPhoto(
+    id: r['id']! as String,
+    ownerType: r['owner_type']! as String,
+    ownerId: r['owner_id']! as String,
+    slot: r['slot']! as String,
+    position: (r['position'] as int?) ?? 0,
+    localPath: r['local_path'] as String?,
+    remotePath: r['remote_path'] as String?,
   );
 }

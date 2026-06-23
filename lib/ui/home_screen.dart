@@ -219,7 +219,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   '• ${result.ductLoras} Duct LoRa unit(s)\n'
                   '• ${result.gateways} gateway(s)\n'
                   '• ${result.footers} footer form(s)\n'
-                  '• ${result.materialMasterItems} material master item(s)',
+                  '• ${result.materialMasterItems} material master item(s)\n'
+                  '• ${result.photos} photo(s)',
                 )
               : SelectableText(result.message ?? 'Unknown error.'),
         ),
