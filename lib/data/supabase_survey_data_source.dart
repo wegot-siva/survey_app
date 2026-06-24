@@ -211,9 +211,6 @@ Map<String, Object?> _ductLoraToRemoteRow(DuctLora d) {
     'separate_mcb_for_series': d.separateMcbForSeries,
     'ups_power_supply': d.upsPowerSupply,
     'cable_length': d.cableLength,
-    // Only the remote object key is stored in the DB row; the local file path
-    // is device-specific and never pushed.
-    'placement_photo_remote_path': d.placementPhotoRemotePath,
   };
 }
 

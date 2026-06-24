@@ -1,13 +1,11 @@
-/// A captured photo linked to any survey record (photo slice 2).
+/// A captured photo linked to any survey record.
 ///
 /// Polymorphic + slot-based so one table serves every photo field across
-/// source/inlet/gateway/footer: ([ownerType], [ownerId]) identifies the parent
-/// record, [slot] names the field. Fixed-slot fields keep one row per slot;
-/// the Footer's "site media" uses many rows in the same slot, ordered by
-/// [position]. (Duct LoRa's placement photo predates this and stays on its own
-/// columns — see [DuctLora].)
+/// source/inlet/gateway/footer/Duct LoRa: ([ownerType], [ownerId]) identifies
+/// the parent record, [slot] names the field. Every field allows multiple
+/// photos per slot, ordered by [position].
 ///
-/// Offline-first, mirroring the Duct LoRa photo: [localPath] is set on capture;
+/// Offline-first: [localPath] is set the moment a photo is captured;
 /// [remotePath] (the Storage object key) is filled in by sync after upload.
 class SurveyPhoto {
   const SurveyPhoto({
@@ -59,6 +57,7 @@ class PhotoOwner {
   static const inletPoint = 'inlet_point';
   static const gateway = 'gateway';
   static const footer = 'footer';
+  static const ductLora = 'duct_lora';
 }
 
 /// Slot tokens stored in [SurveyPhoto.slot], grouped by owner.
@@ -80,6 +79,9 @@ class PhotoSlot {
   // Gateway
   static const gatewayLocation = 'location';
 
-  // Footer (multiple photos share this slot)
+  // Duct LoRa
+  static const ductLoraPlacement = 'placement';
+
+  // Footer
   static const siteMedia = 'site_media';
 }

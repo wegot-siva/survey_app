@@ -15,7 +15,6 @@ class PhotoDraft {
   String? remotePath;
 
   bool get uploaded => remotePath != null;
-  bool get hasPhoto => localPath != null;
 }
 
 /// A single captured photo's view state for [MultiPhotoCaptureField].
@@ -52,93 +51,8 @@ Future<String?> capturePhotoToStore(
   }
 }
 
-/// Capture + preview for a single photo field. Shows the captured image as a
-/// thumbnail read from the local file (works fully offline) plus an
-/// uploaded/pending indicator and a capture/retake button. The photo uploads
-/// to Storage on the next sync.
-class PhotoCaptureField extends StatefulWidget {
-  const PhotoCaptureField({
-    super.key,
-    required this.label,
-    required this.localPath,
-    required this.uploaded,
-    required this.onCaptured,
-  });
-
-  final String label;
-  final String? localPath;
-  final bool uploaded;
-  final ValueChanged<String> onCaptured;
-
-  @override
-  State<PhotoCaptureField> createState() => _PhotoCaptureFieldState();
-}
-
-class _PhotoCaptureFieldState extends State<PhotoCaptureField> {
-  final ImagePicker _picker = ImagePicker();
-  final PhotoFileStore _store = PhotoFileStore();
-  bool _capturing = false;
-
-  Future<void> _capture() async {
-    setState(() => _capturing = true);
-    final path = await capturePhotoToStore(
-      context,
-      picker: _picker,
-      store: _store,
-    );
-    if (!mounted) return;
-    setState(() => _capturing = false);
-    if (path != null) widget.onCaptured(path);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final hasPhoto = widget.localPath != null;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            widget.label,
-            style: const TextStyle(fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 8),
-          if (hasPhoto)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.file(
-                File(widget.localPath!),
-                height: 160,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => _UnavailableThumb(),
-              ),
-            ),
-          if (hasPhoto) ...[
-            const SizedBox(height: 6),
-            _UploadStatus(uploaded: widget.uploaded),
-          ],
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _capturing ? null : _capture,
-            icon: _capturing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.photo_camera_outlined),
-            label: Text(hasPhoto ? 'Retake photo' : 'Take photo'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Capture + preview for a field that allows many photos (e.g. Footer site
-/// media). Shows a wrap of thumbnails (each removable, each with an
+/// Capture + preview for a photo field. Every photo field allows multiple
+/// photos: shows a wrap of thumbnails (each removable, each with an
 /// uploaded/pending badge) and an "Add photo" button.
 class MultiPhotoCaptureField extends StatefulWidget {
   const MultiPhotoCaptureField({
@@ -264,30 +178,6 @@ class _Thumb extends StatelessWidget {
             size: 16,
             color: Colors.white,
           ),
-        ),
-      ],
-    );
-  }
-}
-
-class _UploadStatus extends StatelessWidget {
-  const _UploadStatus({required this.uploaded});
-
-  final bool uploaded;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(
-          uploaded ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
-          size: 16,
-          color: Theme.of(context).hintColor,
-        ),
-        const SizedBox(width: 6),
-        Text(
-          uploaded ? 'Uploaded' : 'Saved on device — uploads on next sync',
-          style: Theme.of(context).textTheme.bodySmall,
         ),
       ],
     );

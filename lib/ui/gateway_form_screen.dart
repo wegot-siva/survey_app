@@ -39,9 +39,9 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
   SimCoverage? _simCoverage;
   bool? _uninterruptedPowerSource;
 
-  /// Captured gateway-location photo (single slot). Loaded on edit; reconciled
-  /// on save.
-  PhotoDraft? _locationPhoto;
+  /// Captured gateway-location photos (single slot, multiple allowed). Loaded
+  /// on edit; reconciled on save.
+  final List<PhotoDraft> _locationPhotos = [];
 
   bool _saving = false;
 
@@ -90,45 +90,43 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
       ownerId,
     );
     if (!mounted) return;
-    for (final p in loaded) {
-      if (p.slot == PhotoSlot.gatewayLocation) {
-        setState(() {
-          _locationPhoto = PhotoDraft(
-            id: p.id,
-            localPath: p.localPath,
-            remotePath: p.remotePath,
-          );
-        });
-        break;
-      }
-    }
-  }
-
-  void _onLocationCaptured(String localPath) {
     setState(() {
-      final existing = _locationPhoto;
-      if (existing == null) {
-        _locationPhoto = PhotoDraft(localPath: localPath);
-      } else {
-        existing.localPath = localPath;
-        existing.remotePath = null; // retake — must re-upload
+      for (final p in loaded) {
+        if (p.slot == PhotoSlot.gatewayLocation) {
+          _locationPhotos.add(
+            PhotoDraft(id: p.id, localPath: p.localPath, remotePath: p.remotePath),
+          );
+        }
       }
     });
   }
 
+  void _onLocationAdded(String localPath) {
+    setState(() => _locationPhotos.add(PhotoDraft(localPath: localPath)));
+  }
+
+  void _onLocationRemoved(int index) {
+    setState(() => _locationPhotos.removeAt(index));
+  }
+
   List<SurveyPhoto> _photoListFor(String ownerId) {
-    final draft = _locationPhoto;
-    if (draft == null || draft.localPath == null) return const [];
-    return [
-      SurveyPhoto(
-        id: draft.id,
-        ownerType: PhotoOwner.gateway,
-        ownerId: ownerId,
-        slot: PhotoSlot.gatewayLocation,
-        localPath: draft.localPath,
-        remotePath: draft.remotePath,
-      ),
-    ];
+    final list = <SurveyPhoto>[];
+    for (var i = 0; i < _locationPhotos.length; i++) {
+      final draft = _locationPhotos[i];
+      if (draft.localPath == null) continue;
+      list.add(
+        SurveyPhoto(
+          id: draft.id,
+          ownerType: PhotoOwner.gateway,
+          ownerId: ownerId,
+          slot: PhotoSlot.gatewayLocation,
+          position: i,
+          localPath: draft.localPath,
+          remotePath: draft.remotePath,
+        ),
+      );
+    }
+    return list;
   }
 
   Future<void> _save() async {
@@ -254,11 +252,14 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
           ),
 
           const FormSectionLabel('Photos'),
-          PhotoCaptureField(
+          MultiPhotoCaptureField(
             label: 'Gateway location',
-            localPath: _locationPhoto?.localPath,
-            uploaded: _locationPhoto?.uploaded ?? false,
-            onCaptured: _onLocationCaptured,
+            photos: [
+              for (final d in _locationPhotos)
+                if (d.localPath != null) PhotoView(d.localPath!, uploaded: d.uploaded),
+            ],
+            onAdded: _onLocationAdded,
+            onRemoved: _onLocationRemoved,
           ),
 
           const SizedBox(height: 24),

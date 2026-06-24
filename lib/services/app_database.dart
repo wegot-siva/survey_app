@@ -1,13 +1,14 @@
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
 
 /// Opens (and on first run, creates) the local SQLite database.
 ///
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 7;
+const int _dbVersion = 8;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -54,6 +55,13 @@ Future<Database> openAppDatabase() async {
       // serving source/inlet/gateway/footer photo fields.
       if (oldVersion < 7) {
         await _createPhotosTable(db);
+      }
+      // v7 -> v8: multi-photo rollout — Duct LoRa's placement photo moves off
+      // its own two columns onto the shared photos table (so it can hold many,
+      // like every other field). Backfill any already-captured photo first so
+      // nothing is orphaned; the old columns are left in place, unused.
+      if (oldVersion < 8) {
+        await _migrateDuctLoraPlacementPhotoToPhotosTable(db);
       }
     },
     onCreate: (db, version) async {
@@ -189,6 +197,12 @@ Future<void> _createInletPointsTable(Database db) async {
 
 /// Duct LoRa units table (v4). A site has many. `series_served` is a
 /// comma-separated set of series tokens (mirrors water_sources in client_inputs).
+///
+/// Fresh installs (v8+) never get the old `placement_photo_*` columns — that
+/// photo now lives in the shared `photos` table like every other photo field.
+/// Devices upgrading from an older version keep those two columns (added by
+/// the v5->v6 step below); they're just unused going forward — see the v8
+/// migration, which backfills any existing photo out of them.
 Future<void> _createDuctLorasTable(Database db) async {
   await db.execute('''
     CREATE TABLE duct_loras (
@@ -202,8 +216,6 @@ Future<void> _createDuctLorasTable(Database db) async {
       separate_mcb_for_series        INTEGER,
       ups_power_supply               INTEGER,
       cable_length                   REAL,
-      placement_photo_local_path     TEXT,
-      placement_photo_remote_path    TEXT,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -266,6 +278,33 @@ Future<void> _createPhotosTable(Database db) async {
   await db.execute(
     'CREATE INDEX photos_owner_idx ON photos (owner_type, owner_id)',
   );
+}
+
+/// One-time backfill (v8): copies any Duct LoRa unit's existing placement
+/// photo — captured back when it lived on its own two columns — into a row in
+/// the shared `photos` table, preserving both the local file reference and
+/// (if already uploaded) the remote object key, so nothing is orphaned and
+/// nothing gets needlessly re-uploaded. The source columns are left as-is.
+Future<void> _migrateDuctLoraPlacementPhotoToPhotosTable(Database db) async {
+  final rows = await db.query(
+    'duct_loras',
+    columns: ['id', 'placement_photo_local_path', 'placement_photo_remote_path'],
+    where:
+        'placement_photo_local_path IS NOT NULL '
+        'OR placement_photo_remote_path IS NOT NULL',
+  );
+  const uuid = Uuid();
+  for (final row in rows) {
+    await db.insert('photos', {
+      'id': uuid.v4(),
+      'owner_type': 'duct_lora',
+      'owner_id': row['id'],
+      'slot': 'placement',
+      'position': 0,
+      'local_path': row['placement_photo_local_path'],
+      'remote_path': row['placement_photo_remote_path'],
+    });
+  }
 }
 
 /// Material Master table (v5). Admin-editable reference data — NOT site-scoped

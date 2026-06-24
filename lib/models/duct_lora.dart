@@ -14,8 +14,6 @@ class DuctLora {
     this.separateMcbForSeries,
     this.upsPowerSupply,
     this.cableLength,
-    this.placementPhotoLocalPath,
-    this.placementPhotoRemotePath,
   });
 
   final String id;
@@ -42,14 +40,6 @@ class DuctLora {
   /// Duct LoRa cable length (pending confirmation of unit/spec).
   final double? cableLength;
 
-  /// Absolute path to the placement photo saved on this device (offline-first;
-  /// set the moment a photo is captured). Null until a photo is taken.
-  final String? placementPhotoLocalPath;
-
-  /// Storage object key of the placement photo once uploaded to Supabase
-  /// (e.g. `duct_loras/<id>.jpg`). Null until a sync has uploaded it.
-  final String? placementPhotoRemotePath;
-
   /// Returns a copy with a different [id]. Used when the repository assigns an
   /// id to a freshly added unit.
   DuctLora copyWithId(String newId) => DuctLora(
@@ -63,24 +53,5 @@ class DuctLora {
     separateMcbForSeries: separateMcbForSeries,
     upsPowerSupply: upsPowerSupply,
     cableLength: cableLength,
-    placementPhotoLocalPath: placementPhotoLocalPath,
-    placementPhotoRemotePath: placementPhotoRemotePath,
-  );
-
-  /// Returns a copy carrying the storage object key of a just-uploaded photo.
-  /// Used by the sync flow to record where the photo landed remotely.
-  DuctLora withPlacementPhotoRemotePath(String remotePath) => DuctLora(
-    id: id,
-    siteId: siteId,
-    block: block,
-    seriesServed: seriesServed,
-    accessibleForService: accessibleForService,
-    rssiIfTcl: rssiIfTcl,
-    powerPointAvailableShielded: powerPointAvailableShielded,
-    separateMcbForSeries: separateMcbForSeries,
-    upsPowerSupply: upsPowerSupply,
-    cableLength: cableLength,
-    placementPhotoLocalPath: placementPhotoLocalPath,
-    placementPhotoRemotePath: remotePath,
   );
 }

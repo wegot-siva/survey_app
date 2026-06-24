@@ -4,7 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data/supabase_survey_data_source.dart';
 import '../data/survey_repository.dart';
-import '../models/duct_lora.dart';
 import '../models/survey_photo.dart';
 import 'supabase_service.dart';
 
@@ -97,7 +96,7 @@ class SyncService {
 
         final dls = await _repository.getDuctLoras(site.id);
         for (final dl in dls) {
-          await _remote.pushDuctLora(await _withUploadedPhoto(dl));
+          await _remote.pushDuctLora(dl);
         }
         ductLoras += dls.length;
 
@@ -158,25 +157,10 @@ class SyncService {
     }
   }
 
-  /// If [dl] has a locally-captured placement photo not yet uploaded, uploads
-  /// it to Storage, records the remote object key locally (write-back, so we
-  /// don't re-upload on the next sync), and returns the updated unit. A missing
+  /// If [photo] has a locally-captured file not yet uploaded, uploads it to
+  /// Storage, records the remote key locally (write-back, so we don't
+  /// re-upload on the next sync), and returns the updated photo. A missing
   /// local file (already uploaded, or moved) is skipped, not an error.
-  Future<DuctLora> _withUploadedPhoto(DuctLora dl) async {
-    final localPath = dl.placementPhotoLocalPath;
-    if (localPath == null || dl.placementPhotoRemotePath != null) return dl;
-    if (!await File(localPath).exists()) return dl;
-
-    final objectKey = 'duct_loras/${dl.id}.jpg';
-    await _remote.uploadPhoto(localPath, objectKey);
-    final updated = dl.withPlacementPhotoRemotePath(objectKey);
-    await _repository.updateDuctLora(updated);
-    return updated;
-  }
-
-  /// Same as [_withUploadedPhoto] but for a generic [SurveyPhoto] row: uploads
-  /// the local file if not yet uploaded, records the remote key locally, and
-  /// returns the updated photo. Missing local files are skipped, not errors.
   Future<SurveyPhoto> _withUploadedGenericPhoto(SurveyPhoto photo) async {
     final localPath = photo.localPath;
     if (localPath == null || photo.remotePath != null) return photo;

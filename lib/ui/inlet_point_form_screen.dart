@@ -53,8 +53,9 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
   bool? _conduitClamping;
   bool? _civilWorkNeeded;
 
-  /// Captured photos, keyed by slot. Loaded on edit; reconciled on save.
-  final Map<String, PhotoDraft> _photos = {};
+  /// Captured photos, keyed by slot (each slot allows multiple). Loaded on
+  /// edit; reconciled on save.
+  final Map<String, List<PhotoDraft>> _photos = {};
 
   bool _saving = false;
 
@@ -117,44 +118,56 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
     if (!mounted) return;
     setState(() {
       for (final p in loaded) {
-        _photos[p.slot] = PhotoDraft(
-          id: p.id,
-          localPath: p.localPath,
-          remotePath: p.remotePath,
+        (_photos[p.slot] ??= []).add(
+          PhotoDraft(id: p.id, localPath: p.localPath, remotePath: p.remotePath),
         );
       }
     });
   }
 
-  void _onPhotoCaptured(String slot, String localPath) {
-    setState(() {
-      final existing = _photos[slot];
-      if (existing == null) {
-        _photos[slot] = PhotoDraft(localPath: localPath);
-      } else {
-        existing.localPath = localPath;
-        existing.remotePath = null; // retake — must re-upload
-      }
-    });
+  void _onPhotoAdded(String slot, String localPath) {
+    setState(() => (_photos[slot] ??= []).add(PhotoDraft(localPath: localPath)));
+  }
+
+  void _onPhotoRemoved(String slot, int index) {
+    setState(() => _photos[slot]?.removeAt(index));
   }
 
   List<SurveyPhoto> _photoListFor(String ownerId) {
     final list = <SurveyPhoto>[];
     for (final entry in _photos.entries) {
-      final draft = entry.value;
-      if (draft.localPath == null) continue;
-      list.add(
-        SurveyPhoto(
-          id: draft.id,
-          ownerType: PhotoOwner.inletPoint,
-          ownerId: ownerId,
-          slot: entry.key,
-          localPath: draft.localPath,
-          remotePath: draft.remotePath,
-        ),
-      );
+      final drafts = entry.value;
+      for (var i = 0; i < drafts.length; i++) {
+        final draft = drafts[i];
+        if (draft.localPath == null) continue;
+        list.add(
+          SurveyPhoto(
+            id: draft.id,
+            ownerType: PhotoOwner.inletPoint,
+            ownerId: ownerId,
+            slot: entry.key,
+            position: i,
+            localPath: draft.localPath,
+            remotePath: draft.remotePath,
+          ),
+        );
+      }
     }
     return list;
+  }
+
+  /// Builds the multi-photo capture widget for one slot.
+  Widget _photoField(String slot, String label) {
+    final drafts = _photos[slot] ?? const <PhotoDraft>[];
+    return MultiPhotoCaptureField(
+      label: label,
+      photos: [
+        for (final d in drafts)
+          if (d.localPath != null) PhotoView(d.localPath!, uploaded: d.uploaded),
+      ],
+      onAdded: (p) => _onPhotoAdded(slot, p),
+      onRemoved: (i) => _onPhotoRemoved(slot, i),
+    );
   }
 
   Future<void> _save() async {
@@ -361,31 +374,10 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
             ),
 
           const FormSectionLabel('Photos'),
-          PhotoCaptureField(
-            label: 'Shaft / location marked',
-            localPath: _photos[PhotoSlot.shaftLocationMarked]?.localPath,
-            uploaded: _photos[PhotoSlot.shaftLocationMarked]?.uploaded ?? false,
-            onCaptured: (p) =>
-                _onPhotoCaptured(PhotoSlot.shaftLocationMarked, p),
-          ),
-          PhotoCaptureField(
-            label: 'Cable routing',
-            localPath: _photos[PhotoSlot.cableRouting]?.localPath,
-            uploaded: _photos[PhotoSlot.cableRouting]?.uploaded ?? false,
-            onCaptured: (p) => _onPhotoCaptured(PhotoSlot.cableRouting, p),
-          ),
-          PhotoCaptureField(
-            label: 'Shaft access',
-            localPath: _photos[PhotoSlot.shaftAccess]?.localPath,
-            uploaded: _photos[PhotoSlot.shaftAccess]?.uploaded ?? false,
-            onCaptured: (p) => _onPhotoCaptured(PhotoSlot.shaftAccess, p),
-          ),
-          PhotoCaptureField(
-            label: 'Shaft internal',
-            localPath: _photos[PhotoSlot.shaftInternal]?.localPath,
-            uploaded: _photos[PhotoSlot.shaftInternal]?.uploaded ?? false,
-            onCaptured: (p) => _onPhotoCaptured(PhotoSlot.shaftInternal, p),
-          ),
+          _photoField(PhotoSlot.shaftLocationMarked, 'Shaft / location marked'),
+          _photoField(PhotoSlot.cableRouting, 'Cable routing'),
+          _photoField(PhotoSlot.shaftAccess, 'Shaft access'),
+          _photoField(PhotoSlot.shaftInternal, 'Shaft internal'),
 
           const SizedBox(height: 24),
           FilledButton.icon(

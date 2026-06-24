@@ -1,14 +1,12 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../data/survey_repository.dart';
 import '../models/duct_lora.dart';
 import '../models/site.dart';
-import '../services/photo_file_store.dart';
+import '../models/survey_photo.dart';
 import 'widgets/form_fields.dart';
+import 'widgets/photo_capture_field.dart';
 
 /// Add or edit a single Duct LoRa unit. All fields optional (partial saves).
 ///
@@ -44,11 +42,9 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
   bool? _separateMcbForSeries;
   bool? _upsPowerSupply;
 
-  final ImagePicker _picker = ImagePicker();
-  final PhotoFileStore _photoStore = PhotoFileStore();
-  String? _placementPhotoLocalPath;
-  String? _placementPhotoRemotePath;
-  bool _capturing = false;
+  /// Captured placement photos (single slot, multiple allowed). Loaded on
+  /// edit; reconciled on save.
+  final List<PhotoDraft> _placementPhotos = [];
 
   bool _saving = false;
 
@@ -56,6 +52,7 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
   void initState() {
     super.initState();
     final e = widget.existing;
+    if (e != null) _loadPhotos(e.id);
 
     _rssi = TextEditingController(text: e?.rssiIfTcl?.toString() ?? '');
     _cableLength = TextEditingController(
@@ -71,39 +68,6 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
     _powerPointAvailableShielded = e?.powerPointAvailableShielded;
     _separateMcbForSeries = e?.separateMcbForSeries;
     _upsPowerSupply = e?.upsPowerSupply;
-
-    _placementPhotoLocalPath = e?.placementPhotoLocalPath;
-    _placementPhotoRemotePath = e?.placementPhotoRemotePath;
-  }
-
-  Future<void> _capturePlacementPhoto() async {
-    setState(() => _capturing = true);
-    try {
-      final shot = await _picker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 80,
-        maxWidth: 2000,
-      );
-      if (shot == null) {
-        if (mounted) setState(() => _capturing = false);
-        return;
-      }
-      // Copy out of the cache into stable storage immediately (offline-first).
-      final savedPath = await _photoStore.saveCapture(shot.path);
-      if (!mounted) return;
-      setState(() {
-        _placementPhotoLocalPath = savedPath;
-        // A new capture must be re-uploaded — drop any previous remote key.
-        _placementPhotoRemotePath = null;
-        _capturing = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _capturing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not capture photo: $e')),
-      );
-    }
   }
 
   @override
@@ -111,6 +75,51 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
     _rssi.dispose();
     _cableLength.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPhotos(String ownerId) async {
+    final loaded = await widget.repository.getPhotos(
+      PhotoOwner.ductLora,
+      ownerId,
+    );
+    if (!mounted) return;
+    setState(() {
+      for (final p in loaded) {
+        if (p.slot == PhotoSlot.ductLoraPlacement) {
+          _placementPhotos.add(
+            PhotoDraft(id: p.id, localPath: p.localPath, remotePath: p.remotePath),
+          );
+        }
+      }
+    });
+  }
+
+  void _onPlacementAdded(String localPath) {
+    setState(() => _placementPhotos.add(PhotoDraft(localPath: localPath)));
+  }
+
+  void _onPlacementRemoved(int index) {
+    setState(() => _placementPhotos.removeAt(index));
+  }
+
+  List<SurveyPhoto> _photoListFor(String ownerId) {
+    final list = <SurveyPhoto>[];
+    for (var i = 0; i < _placementPhotos.length; i++) {
+      final draft = _placementPhotos[i];
+      if (draft.localPath == null) continue;
+      list.add(
+        SurveyPhoto(
+          id: draft.id,
+          ownerType: PhotoOwner.ductLora,
+          ownerId: ownerId,
+          slot: PhotoSlot.ductLoraPlacement,
+          position: i,
+          localPath: draft.localPath,
+          remotePath: draft.remotePath,
+        ),
+      );
+    }
+    return list;
   }
 
   Future<void> _save() async {
@@ -127,15 +136,21 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
       separateMcbForSeries: _separateMcbForSeries,
       upsPowerSupply: _upsPowerSupply,
       cableLength: double.tryParse(_cableLength.text.trim()),
-      placementPhotoLocalPath: _placementPhotoLocalPath,
-      placementPhotoRemotePath: _placementPhotoRemotePath,
     );
 
+    final String ownerId;
     if (widget.existing == null) {
-      await widget.repository.addDuctLora(draft);
+      final stored = await widget.repository.addDuctLora(draft);
+      ownerId = stored.id;
     } else {
       await widget.repository.updateDuctLora(draft);
+      ownerId = widget.existing!.id;
     }
+    await widget.repository.setPhotos(
+      PhotoOwner.ductLora,
+      ownerId,
+      _photoListFor(ownerId),
+    );
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -219,11 +234,14 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
           ),
 
           const FormSectionLabel('Photos'),
-          _PlacementPhotoField(
-            localPath: _placementPhotoLocalPath,
-            uploaded: _placementPhotoRemotePath != null,
-            capturing: _capturing,
-            onCapture: _capturing ? null : _capturePlacementPhoto,
+          MultiPhotoCaptureField(
+            label: 'Duct LoRa location / placement',
+            photos: [
+              for (final d in _placementPhotos)
+                if (d.localPath != null) PhotoView(d.localPath!, uploaded: d.uploaded),
+            ],
+            onAdded: _onPlacementAdded,
+            onRemoved: _onPlacementRemoved,
           ),
 
           const SizedBox(height: 24),
@@ -237,88 +255,6 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
                   )
                 : const Icon(Icons.save_outlined),
             label: const Text('Save Duct LoRa unit'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Capture + preview for the Duct LoRa placement photo (photo slice 1).
-///
-/// Shows the captured image as a thumbnail (read from the local file, so it
-/// works fully offline), an uploaded/pending indicator, and a capture/retake
-/// button. The photo uploads to Storage on the next sync.
-class _PlacementPhotoField extends StatelessWidget {
-  const _PlacementPhotoField({
-    required this.localPath,
-    required this.uploaded,
-    required this.capturing,
-    required this.onCapture,
-  });
-
-  final String? localPath;
-  final bool uploaded;
-  final bool capturing;
-  final VoidCallback? onCapture;
-
-  @override
-  Widget build(BuildContext context) {
-    final hasPhoto = localPath != null;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Duct LoRa location / placement',
-            style: TextStyle(fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 8),
-          if (hasPhoto)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.file(
-                File(localPath!),
-                height: 160,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => Container(
-                  height: 160,
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  alignment: Alignment.center,
-                  child: const Text('Saved photo unavailable.'),
-                ),
-              ),
-            ),
-          if (hasPhoto) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Icon(
-                  uploaded ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
-                  size: 16,
-                  color: Theme.of(context).hintColor,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  uploaded ? 'Uploaded' : 'Saved on device — uploads on next sync',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: onCapture,
-            icon: capturing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.photo_camera_outlined),
-            label: Text(hasPhoto ? 'Retake photo' : 'Take photo'),
           ),
         ],
       ),
