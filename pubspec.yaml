@@ -42,6 +42,8 @@ dependencies:
   intl: ^0.20.2
   supabase_flutter: ^2.15.0
   image_picker: ^1.1.2
+  excel: ^4.0.6
+  share_plus: ^10.1.4
 
 dev_dependencies:
   flutter_test:

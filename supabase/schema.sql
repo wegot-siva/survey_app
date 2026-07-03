@@ -233,6 +233,7 @@ create table if not exists public.material_master_items (
   id                   text primary key,
   group_code           text not null,              -- enum name: a..g
   material_name        text not null,
+  sku                  text,                        -- optional SKU / part code
   unit                 text not null,
   behavior_type        text not null,              -- enum name: fixed | derived | variable
   sensor_size          text,                        -- enum name; null = any size
@@ -308,4 +309,36 @@ alter table public.photos enable row level security;
 
 drop policy if exists "dev all - photos" on public.photos;
 create policy "dev all - photos" on public.photos
+  for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
+-- Admin role slice — SKU on Material Master + its change log.
+--
+-- `alter table add column if not exists` covers projects that already ran the
+-- material_master_items block above before this column existed; the
+-- `create table` above already includes it for fresh setups. The audit table
+-- is NOT FK'd to material_master_items — a delete's own audit entry (and any
+-- earlier edits) must survive the row's removal. Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.material_master_items
+  add column if not exists sku text;
+
+create table if not exists public.material_master_audit (
+  id              text primary key,
+  material_row_id text not null,
+  field_changed   text not null,   -- field name, or '(created)' / '(deleted)'
+  old_value       text,
+  new_value       text,
+  changed_by_role text not null,   -- role label, e.g. "Admin" (shared login)
+  changed_at      text not null    -- ISO-8601 string (mirrors SQLite TEXT storage)
+);
+
+create index if not exists material_master_audit_row_idx
+  on public.material_master_audit (material_row_id);
+
+alter table public.material_master_audit enable row level security;
+
+drop policy if exists "dev all - material_master_audit" on public.material_master_audit;
+create policy "dev all - material_master_audit" on public.material_master_audit
   for all to anon, authenticated using (true) with check (true);

@@ -3,11 +3,13 @@ import '../models/duct_lora.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
+import '../models/material_master_audit_entry.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../models/survey_photo.dart';
 import '../services/id_service.dart';
+import '../services/material_master_audit_builder.dart';
 import 'survey_repository.dart';
 
 /// Phase 0 storage: everything lives in a map and is lost on restart.
@@ -24,6 +26,8 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, Footer> _footers = {};
   final Map<String, MaterialMasterItem> _materialMasterItems = {};
   final Map<String, SurveyPhoto> _photos = {};
+  final Map<String, MaterialMasterAuditEntry> _materialMasterAudit = {};
+  static const _auditBuilder = MaterialMasterAuditBuilder();
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -175,21 +179,69 @@ class InMemorySurveyRepository implements SurveyRepository {
 
   @override
   Future<MaterialMasterItem> addMaterialMasterItem(
-    MaterialMasterItem item,
-  ) async {
+    MaterialMasterItem item, {
+    required String changedByRole,
+  }) async {
     final stored = item.copyWithId(_idService.newId());
     _materialMasterItems[stored.id] = stored;
+    _writeAudit(
+      _auditBuilder.forCreate(
+        item: stored,
+        changedByRole: changedByRole,
+        changedAt: DateTime.now(),
+      ),
+    );
     return stored;
   }
 
   @override
-  Future<void> updateMaterialMasterItem(MaterialMasterItem item) async {
+  Future<void> updateMaterialMasterItem(
+    MaterialMasterItem item, {
+    required String changedByRole,
+  }) async {
+    final existing = _materialMasterItems[item.id];
     _materialMasterItems[item.id] = item;
+    if (existing != null) {
+      _writeAudit(
+        _auditBuilder.forUpdate(
+          oldItem: existing,
+          newItem: item,
+          changedByRole: changedByRole,
+          changedAt: DateTime.now(),
+        ),
+      );
+    }
   }
 
   @override
-  Future<void> deleteMaterialMasterItem(String id) async {
-    _materialMasterItems.remove(id);
+  Future<void> deleteMaterialMasterItem(
+    String id, {
+    required String changedByRole,
+  }) async {
+    final existing = _materialMasterItems.remove(id);
+    if (existing != null) {
+      _writeAudit(
+        _auditBuilder.forDelete(
+          item: existing,
+          changedByRole: changedByRole,
+          changedAt: DateTime.now(),
+        ),
+      );
+    }
+  }
+
+  @override
+  Future<List<MaterialMasterAuditEntry>> getMaterialMasterAuditLog() async {
+    final list = _materialMasterAudit.values.toList()
+      ..sort((a, b) => b.changedAt.compareTo(a.changedAt));
+    return List.unmodifiable(list);
+  }
+
+  void _writeAudit(List<MaterialMasterAuditEntry> entries) {
+    for (final entry in entries) {
+      final stored = entry.copyWithId(_idService.newId());
+      _materialMasterAudit[stored.id] = stored;
+    }
   }
 
   @override

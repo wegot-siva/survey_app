@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../data/survey_repository.dart';
 import '../models/bom_line.dart';
+import '../models/duct_lora.dart';
+import '../models/inlet_point.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
+import '../models/source_point.dart';
 import '../services/bom_engine.dart';
+import '../services/bom_excel_exporter.dart';
 
 /// On-screen BoM preview for one site (Material Master phase). Reads
 /// Material Master rows + the site's survey data, runs [BomEngine], and shows
@@ -26,6 +31,13 @@ class BomPreviewScreen extends StatefulWidget {
 class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Map<MaterialGroup, List<BomLine>>? _bom;
   bool _loading = true;
+  bool _exporting = false;
+
+  // Loaded inputs, kept so export can recompute per-block without re-fetching.
+  List<MaterialMasterItem> _materials = const [];
+  List<SourcePoint> _sourcePoints = const [];
+  List<InletPoint> _inletPoints = const [];
+  List<DuctLora> _ductLoras = const [];
 
   @override
   void initState() {
@@ -53,18 +65,117 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
 
     if (!mounted) return;
     setState(() {
+      _materials = materials;
+      _sourcePoints = sourcePoints;
+      _inletPoints = inletPoints;
+      _ductLoras = ductLoras;
       _bom = bom;
       _loading = false;
     });
+  }
+
+  /// Runs the SAME [BomEngine] once per block over that block's filtered
+  /// points — the engine math is unchanged, only its inputs are scoped. A
+  /// site with no blocks yields a single sheet; points whose block isn't in
+  /// the site's block list land in an "Unassigned" sheet so nothing is dropped.
+  ///
+  /// Note: DERIVED items (e.g. Duct LoRa = ceil(wired ÷ N)) round per block, so
+  /// per-block totals can sum higher than the whole-site on-screen figure.
+  List<BlockBom> _buildPerBlockBoms() {
+    const engine = BomEngine();
+    final siteBlocks = widget.site.blocks;
+
+    if (siteBlocks.isEmpty) {
+      return [
+        (
+          label: widget.site.name,
+          bom: engine.generate(
+            materials: _materials,
+            sourcePoints: _sourcePoints,
+            inletPoints: _inletPoints,
+            ductLoras: _ductLoras,
+          ),
+        ),
+      ];
+    }
+
+    final result = <BlockBom>[
+      for (final block in siteBlocks)
+        (
+          label: block,
+          bom: engine.generate(
+            materials: _materials,
+            sourcePoints: _sourcePoints.where((s) => s.block == block).toList(),
+            inletPoints: _inletPoints.where((i) => i.block == block).toList(),
+            ductLoras: _ductLoras.where((d) => d.block == block).toList(),
+          ),
+        ),
+    ];
+
+    bool unassigned(String? block) =>
+        block == null || block.isEmpty || !siteBlocks.contains(block);
+    final uSps = _sourcePoints.where((s) => unassigned(s.block)).toList();
+    final uIps = _inletPoints.where((i) => unassigned(i.block)).toList();
+    final uDls = _ductLoras.where((d) => unassigned(d.block)).toList();
+    if (uSps.isNotEmpty || uIps.isNotEmpty || uDls.isNotEmpty) {
+      result.add((
+        label: 'Unassigned',
+        bom: engine.generate(
+          materials: _materials,
+          sourcePoints: uSps,
+          inletPoints: uIps,
+          ductLoras: uDls,
+        ),
+      ));
+    }
+    return result;
+  }
+
+  Future<void> _export() async {
+    setState(() => _exporting = true);
+    try {
+      final path = await const BomExcelExporter().export(
+        siteName: widget.site.name,
+        blocks: _buildPerBlockBoms(),
+      );
+      if (!mounted) return;
+      setState(() => _exporting = false);
+      await Share.shareXFiles(
+        [XFile(path)],
+        subject: 'BoM — ${widget.site.name}',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _exporting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not export BoM: $e')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final bom = _bom;
     final hasNoMaterials = bom != null && bom.values.every((l) => l.isEmpty);
+    final canExport = !_loading && !hasNoMaterials;
 
     return Scaffold(
-      appBar: AppBar(title: Text('BoM — ${widget.site.name}')),
+      appBar: AppBar(
+        title: Text('BoM — ${widget.site.name}'),
+        actions: [
+          IconButton(
+            tooltip: 'Export BoM to Excel',
+            onPressed: canExport && !_exporting ? _export : null,
+            icon: _exporting
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.file_download_outlined),
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : hasNoMaterials

@@ -6,6 +6,7 @@ import '../models/inlet_point.dart';
 import '../models/site.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
+import 'photo_markup_screen.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
@@ -133,6 +134,27 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
     setState(() => _photos[slot]?.removeAt(index));
   }
 
+  /// Opens the markup screen for an existing photo. The photo keeps its id
+  /// (so saving updates the same record/Storage object instead of creating an
+  /// orphan); only its local path changes, and remotePath resets to null so
+  /// the marked-up version is re-uploaded on the next sync.
+  Future<void> _onPhotoEdit(String slot, int index) async {
+    final drafts = _photos[slot];
+    if (drafts == null || index >= drafts.length) return;
+    final draft = drafts[index];
+    final path = draft.localPath;
+    if (path == null) return;
+
+    final newPath = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => PhotoMarkupScreen(imagePath: path)),
+    );
+    if (newPath == null || !mounted) return;
+    setState(() {
+      draft.localPath = newPath;
+      draft.remotePath = null;
+    });
+  }
+
   List<SurveyPhoto> _photoListFor(String ownerId) {
     final list = <SurveyPhoto>[];
     for (final entry in _photos.entries) {
@@ -167,6 +189,7 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
       ],
       onAdded: (p) => _onPhotoAdded(slot, p),
       onRemoved: (i) => _onPhotoRemoved(slot, i),
+      onEdit: (i) => _onPhotoEdit(slot, i),
     );
   }
 

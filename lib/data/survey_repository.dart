@@ -3,6 +3,7 @@ import '../models/duct_lora.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
+import '../models/material_master_audit_entry.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
@@ -83,15 +84,33 @@ abstract class SurveyRepository {
   Future<void> saveFooter(String siteId, Footer footer);
 
   // ---- Material Master (admin-editable reference data, not site-scoped) ---
+  //
+  // Every create/edit/delete writes to the change log (material_master_audit)
+  // as part of the same call — [changedByRole] is the signed-in role's label
+  // (e.g. "Admin"), recorded against each audit entry.
 
   Future<List<MaterialMasterItem>> getMaterialMasterItems();
 
   /// Persists a new Material Master row, assigning it an id, and returns it.
-  Future<MaterialMasterItem> addMaterialMasterItem(MaterialMasterItem item);
+  Future<MaterialMasterItem> addMaterialMasterItem(
+    MaterialMasterItem item, {
+    required String changedByRole,
+  });
 
-  Future<void> updateMaterialMasterItem(MaterialMasterItem item);
+  /// Updates an existing row and logs one change-log entry per field that
+  /// actually changed (diffed against the row currently stored under
+  /// [item.id]).
+  Future<void> updateMaterialMasterItem(
+    MaterialMasterItem item, {
+    required String changedByRole,
+  });
 
-  Future<void> deleteMaterialMasterItem(String id);
+  /// Deletes a row and logs a single change-log entry summarizing what was
+  /// removed.
+  Future<void> deleteMaterialMasterItem(String id, {required String changedByRole});
+
+  /// The full Material Master change log, newest first.
+  Future<List<MaterialMasterAuditEntry>> getMaterialMasterAuditLog();
 
   // ---- Photos (polymorphic, slot-based — photo slice 2) -------------------
 

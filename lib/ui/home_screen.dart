@@ -53,8 +53,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// Engineer sees only their own assigned surveys (Slice C); Approver sees
-  /// only those submitted and awaiting review (Slice D); Sales sees
-  /// everything, unchanged from before.
+  /// only those submitted and awaiting review (Slice D); Sales and Admin see
+  /// everything, unchanged from before (Admin has no survey-list filtering —
+  /// only the Material Master entry point is role-gated to them).
   List<Site> _visibleSites(List<Site> sites) {
     switch (widget.session.currentRole) {
       case UserRole.engineer:
@@ -68,6 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
             .where((s) => s.status == SurveyStatus.submitted)
             .toList(growable: false);
       case UserRole.sales:
+      case UserRole.admin:
       case null:
         return sites;
     }
@@ -133,7 +135,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openMaterialMaster() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => MaterialMasterScreen(repository: widget.repository),
+        builder: (_) => MaterialMasterScreen(
+          repository: widget.repository,
+          changedByRole: widget.session.currentRole?.label ?? 'Unknown',
+        ),
       ),
     );
   }
@@ -220,6 +225,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   '• ${result.gateways} gateway(s)\n'
                   '• ${result.footers} footer form(s)\n'
                   '• ${result.materialMasterItems} material master item(s)\n'
+                  '• ${result.materialMasterAuditEntries} change log entr'
+                  '${result.materialMasterAuditEntries == 1 ? 'y' : 'ies'}\n'
                   '• ${result.photos} photo(s)',
                 )
               : SelectableText(result.message ?? 'Unknown error.'),
@@ -240,11 +247,12 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Sites'),
         actions: [
-          IconButton(
-            tooltip: 'Material Master',
-            onPressed: _openMaterialMaster,
-            icon: const Icon(Icons.inventory_2_outlined),
-          ),
+          if (widget.session.currentRole == UserRole.admin)
+            IconButton(
+              tooltip: 'Material Master',
+              onPressed: _openMaterialMaster,
+              icon: const Icon(Icons.inventory_2_outlined),
+            ),
           IconButton(
             tooltip: 'Test Supabase connection',
             onPressed: _testSupabase,
@@ -379,6 +387,7 @@ class _EmptyState extends StatelessWidget {
       case UserRole.approver:
         title = 'Nothing to review';
         subtitle = 'No surveys have been submitted yet.';
+      case UserRole.admin:
       case null:
         title = 'No sites yet';
         subtitle = 'Tap "New site" to add your first one.';

@@ -2,17 +2,28 @@ import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
 import '../models/material_master_item.dart';
+import 'material_master_audit_log_screen.dart';
 import 'material_master_form_screen.dart';
 
 /// Admin screen for the Material Master: add / edit / delete the per-sensor
 /// material kits the BoM engine reads at generation time.
 ///
-/// Not role-gated for now — any signed-in user can reach it from the home
-/// screen's app bar. Tighten this once the admin workflow is settled.
+/// Gated behind the Admin role — the home screen only shows the entry point
+/// to Admin, so this screen never opens for another role in practice, but
+/// [changedByRole] is still an explicit parameter (not read from a session
+/// singleton) so the screen stays testable without one.
 class MaterialMasterScreen extends StatefulWidget {
-  const MaterialMasterScreen({super.key, required this.repository});
+  const MaterialMasterScreen({
+    super.key,
+    required this.repository,
+    required this.changedByRole,
+  });
 
   final SurveyRepository repository;
+
+  /// Label of the signed-in role (e.g. "Admin"), recorded against every
+  /// change-log entry this screen's mutations write.
+  final String changedByRole;
 
   @override
   State<MaterialMasterScreen> createState() => _MaterialMasterScreenState();
@@ -43,11 +54,20 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
       MaterialPageRoute<void>(
         builder: (_) => MaterialMasterFormScreen(
           repository: widget.repository,
+          changedByRole: widget.changedByRole,
           existing: existing,
         ),
       ),
     );
     await _load();
+  }
+
+  Future<void> _openChangeLog() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MaterialMasterAuditLogScreen(repository: widget.repository),
+      ),
+    );
   }
 
   Future<void> _delete(MaterialMasterItem item) async {
@@ -70,7 +90,10 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
     );
     if (confirmed != true) return;
 
-    await widget.repository.deleteMaterialMasterItem(item.id);
+    await widget.repository.deleteMaterialMasterItem(
+      item.id,
+      changedByRole: widget.changedByRole,
+    );
     await _load();
   }
 
@@ -99,7 +122,16 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Material Master')),
+      appBar: AppBar(
+        title: const Text('Material Master'),
+        actions: [
+          IconButton(
+            tooltip: 'Change log',
+            onPressed: _openChangeLog,
+            icon: const Icon(Icons.history),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _addOrEdit(),
         icon: const Icon(Icons.add),
@@ -134,7 +166,11 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                     for (final item in _items.where((i) => i.group == group))
                       ListTile(
                         leading: const Icon(Icons.inventory_2_outlined),
-                        title: Text(item.materialName),
+                        title: Text(
+                          item.sku.isEmpty
+                              ? item.materialName
+                              : '${item.materialName}  (${item.sku})',
+                        ),
                         subtitle: Text(
                           '${_variantLabel(item)}  •  ${_behaviorSummary(item)}',
                         ),

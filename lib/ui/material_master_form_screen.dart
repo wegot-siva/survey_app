@@ -14,10 +14,16 @@ class MaterialMasterFormScreen extends StatefulWidget {
   const MaterialMasterFormScreen({
     super.key,
     required this.repository,
+    required this.changedByRole,
     this.existing,
   });
 
   final SurveyRepository repository;
+
+  /// Label of the signed-in role (e.g. "Admin"), recorded on the change-log
+  /// entry this save writes.
+  final String changedByRole;
+
   final MaterialMasterItem? existing;
 
   @override
@@ -27,6 +33,7 @@ class MaterialMasterFormScreen extends StatefulWidget {
 
 class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
   late final TextEditingController _materialName;
+  late final TextEditingController _sku;
   late final TextEditingController _unit;
   late final TextEditingController _quantityPerSensor;
   late final TextEditingController _formulaDivisor;
@@ -47,6 +54,7 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
     final e = widget.existing;
 
     _materialName = TextEditingController(text: e?.materialName ?? '');
+    _sku = TextEditingController(text: e?.sku ?? '');
     _unit = TextEditingController(text: e?.unit ?? '');
     _quantityPerSensor = TextEditingController(
       text: e?.quantityPerSensor.toString() ?? '0',
@@ -68,6 +76,7 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
   @override
   void dispose() {
     _materialName.dispose();
+    _sku.dispose();
     _unit.dispose();
     _quantityPerSensor.dispose();
     _formulaDivisor.dispose();
@@ -91,6 +100,7 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
       id: widget.existing?.id ?? '',
       group: _group,
       materialName: name,
+      sku: _sku.text.trim(),
       unit: unit,
       behaviorType: _behaviorType,
       sensorSize: _sensorSize,
@@ -109,9 +119,15 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
     );
 
     if (widget.existing == null) {
-      await widget.repository.addMaterialMasterItem(draft);
+      await widget.repository.addMaterialMasterItem(
+        draft,
+        changedByRole: widget.changedByRole,
+      );
     } else {
-      await widget.repository.updateMaterialMasterItem(draft);
+      await widget.repository.updateMaterialMasterItem(
+        draft,
+        changedByRole: widget.changedByRole,
+      );
     }
 
     if (!mounted) return;
@@ -133,6 +149,7 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           AppTextField(controller: _materialName, label: 'Material name'),
+          AppTextField(controller: _sku, label: 'SKU (optional)'),
           AppTextField(controller: _unit, label: 'Unit (e.g. pcs, m, set)'),
           AppDropdownField<MaterialGroup>(
             label: 'Group',

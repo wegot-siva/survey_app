@@ -5,6 +5,7 @@ import '../data/survey_repository.dart';
 import '../models/footer.dart';
 import '../models/site.dart';
 import '../models/survey_photo.dart';
+import 'photo_markup_screen.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
@@ -85,6 +86,25 @@ class _FooterScreenState extends State<FooterScreen> {
 
   void _onPhotoRemoved(int index) {
     setState(() => _sitePhotos.removeAt(index));
+  }
+
+  /// Opens the markup screen for an existing photo. The photo keeps its id
+  /// (so saving updates the same record/Storage object instead of creating an
+  /// orphan); only its local path changes, and remotePath resets to null so
+  /// the marked-up version is re-uploaded on the next sync.
+  Future<void> _onPhotoEdit(int index) async {
+    final draft = _sitePhotos[index];
+    final path = draft.localPath;
+    if (path == null) return;
+
+    final newPath = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => PhotoMarkupScreen(imagePath: path)),
+    );
+    if (newPath == null || !mounted) return;
+    setState(() {
+      draft.localPath = newPath;
+      draft.remotePath = null;
+    });
   }
 
   List<SurveyPhoto> _photoList() {
@@ -228,6 +248,7 @@ class _FooterScreenState extends State<FooterScreen> {
                   ],
                   onAdded: _onPhotoAdded,
                   onRemoved: _onPhotoRemoved,
+                  onEdit: _onPhotoEdit,
                 ),
 
                 const SizedBox(height: 24),

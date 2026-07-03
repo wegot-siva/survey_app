@@ -5,7 +5,8 @@
 enum UserRole {
   sales('Sales'),
   engineer('Engineer'),
-  approver('Approver');
+  approver('Approver'),
+  admin('Admin');
 
   const UserRole(this.label);
 

@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 8;
+const int _dbVersion = 9;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -63,6 +63,13 @@ Future<Database> openAppDatabase() async {
       if (oldVersion < 8) {
         await _migrateDuctLoraPlacementPhotoToPhotosTable(db);
       }
+      // v8 -> v9: Admin role slice — SKU on Material Master + its change log.
+      if (oldVersion < 9) {
+        await db.execute(
+          'ALTER TABLE material_master_items ADD COLUMN sku TEXT',
+        );
+        await _createMaterialMasterAuditTable(db);
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -115,6 +122,7 @@ Future<Database> openAppDatabase() async {
       await _createFootersTable(db);
       await _createMaterialMasterItemsTable(db);
       await _createPhotosTable(db);
+      await _createMaterialMasterAuditTable(db);
     },
   );
 }
@@ -307,15 +315,17 @@ Future<void> _migrateDuctLoraPlacementPhotoToPhotosTable(Database db) async {
   }
 }
 
-/// Material Master table (v5). Admin-editable reference data — NOT site-scoped
-/// (no FK to sites). The BoM engine reads every quantity from this table at
-/// generation time; it starts empty and is populated via the admin screen.
+/// Material Master table (v5, +sku in v9). Admin-editable reference data —
+/// NOT site-scoped (no FK to sites). The BoM engine reads every quantity from
+/// this table at generation time; it starts empty and is populated via the
+/// admin screen.
 Future<void> _createMaterialMasterItemsTable(Database db) async {
   await db.execute('''
     CREATE TABLE material_master_items (
       id                   TEXT PRIMARY KEY,
       group_code           TEXT NOT NULL,
       material_name        TEXT NOT NULL,
+      sku                  TEXT,
       unit                 TEXT NOT NULL,
       behavior_type        TEXT NOT NULL,
       sensor_size          TEXT,
@@ -327,4 +337,26 @@ Future<void> _createMaterialMasterItemsTable(Database db) async {
       notes                TEXT
     )
   ''');
+}
+
+/// Material Master change log (v9). Not FK-scoped to material_master_items —
+/// a deleted row's audit trail (including its own delete entry) must survive
+/// the row's removal. One row per create/delete event, one row per changed
+/// field on an edit — see MaterialMasterAuditBuilder.
+Future<void> _createMaterialMasterAuditTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE material_master_audit (
+      id                TEXT PRIMARY KEY,
+      material_row_id   TEXT NOT NULL,
+      field_changed     TEXT NOT NULL,
+      old_value         TEXT,
+      new_value         TEXT,
+      changed_by_role   TEXT NOT NULL,
+      changed_at        TEXT NOT NULL
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX material_master_audit_row_idx '
+    'ON material_master_audit (material_row_id)',
+  );
 }

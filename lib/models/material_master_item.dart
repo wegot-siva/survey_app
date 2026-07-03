@@ -71,6 +71,7 @@ class MaterialMasterItem {
     required this.materialName,
     required this.unit,
     required this.behaviorType,
+    this.sku = '',
     this.sensorSize,
     this.sensorType,
     this.quantityPerSensor = 0,
@@ -83,6 +84,10 @@ class MaterialMasterItem {
   final String id;
   final MaterialGroup group;
   final String materialName;
+
+  /// Optional SKU / part code. Free text — not every material has one yet.
+  final String sku;
+
   final String unit;
   final MaterialBehaviorType behaviorType;
 
@@ -112,6 +117,7 @@ class MaterialMasterItem {
     materialName: materialName,
     unit: unit,
     behaviorType: behaviorType,
+    sku: sku,
     sensorSize: sensorSize,
     sensorType: sensorType,
     quantityPerSensor: quantityPerSensor,

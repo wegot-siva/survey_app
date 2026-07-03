@@ -5,13 +5,17 @@ import '../models/duct_lora.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
+import '../models/material_master_audit_entry.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 import '../services/id_service.dart';
+import '../services/material_master_audit_builder.dart';
 import 'survey_repository.dart';
+
+const _materialMasterAuditBuilder = MaterialMasterAuditBuilder();
 
 /// SQLite-backed [SurveyRepository]. Data survives app restarts.
 ///
@@ -329,26 +333,101 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
   @override
   Future<MaterialMasterItem> addMaterialMasterItem(
-    MaterialMasterItem item,
-  ) async {
+    MaterialMasterItem item, {
+    required String changedByRole,
+  }) async {
     final stored = item.copyWithId(_idService.newId());
-    await _db.insert('material_master_items', _materialMasterItemToRow(stored));
+    await _db.transaction((txn) async {
+      await txn.insert('material_master_items', _materialMasterItemToRow(stored));
+      await _writeMaterialMasterAudit(
+        txn,
+        _materialMasterAuditBuilder.forCreate(
+          item: stored,
+          changedByRole: changedByRole,
+          changedAt: DateTime.now(),
+        ),
+      );
+    });
     return stored;
   }
 
   @override
-  Future<void> updateMaterialMasterItem(MaterialMasterItem item) async {
-    await _db.update(
-      'material_master_items',
-      _materialMasterItemToRow(item),
-      where: 'id = ?',
-      whereArgs: [item.id],
-    );
+  Future<void> updateMaterialMasterItem(
+    MaterialMasterItem item, {
+    required String changedByRole,
+  }) async {
+    await _db.transaction((txn) async {
+      final existingRows = await txn.query(
+        'material_master_items',
+        where: 'id = ?',
+        whereArgs: [item.id],
+        limit: 1,
+      );
+      await txn.update(
+        'material_master_items',
+        _materialMasterItemToRow(item),
+        where: 'id = ?',
+        whereArgs: [item.id],
+      );
+      if (existingRows.isNotEmpty) {
+        final existing = _materialMasterItemFromRow(existingRows.first);
+        await _writeMaterialMasterAudit(
+          txn,
+          _materialMasterAuditBuilder.forUpdate(
+            oldItem: existing,
+            newItem: item,
+            changedByRole: changedByRole,
+            changedAt: DateTime.now(),
+          ),
+        );
+      }
+    });
   }
 
   @override
-  Future<void> deleteMaterialMasterItem(String id) async {
-    await _db.delete('material_master_items', where: 'id = ?', whereArgs: [id]);
+  Future<void> deleteMaterialMasterItem(
+    String id, {
+    required String changedByRole,
+  }) async {
+    await _db.transaction((txn) async {
+      final existingRows = await txn.query(
+        'material_master_items',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      await txn.delete('material_master_items', where: 'id = ?', whereArgs: [id]);
+      if (existingRows.isNotEmpty) {
+        final existing = _materialMasterItemFromRow(existingRows.first);
+        await _writeMaterialMasterAudit(
+          txn,
+          _materialMasterAuditBuilder.forDelete(
+            item: existing,
+            changedByRole: changedByRole,
+            changedAt: DateTime.now(),
+          ),
+        );
+      }
+    });
+  }
+
+  @override
+  Future<List<MaterialMasterAuditEntry>> getMaterialMasterAuditLog() async {
+    final rows = await _db.query(
+      'material_master_audit',
+      orderBy: 'changed_at DESC, rowid DESC',
+    );
+    return rows.map(_materialMasterAuditEntryFromRow).toList(growable: false);
+  }
+
+  Future<void> _writeMaterialMasterAudit(
+    DatabaseExecutor txn,
+    List<MaterialMasterAuditEntry> entries,
+  ) async {
+    for (final entry in entries) {
+      final stored = entry.copyWithId(_idService.newId());
+      await txn.insert('material_master_audit', _materialMasterAuditEntryToRow(stored));
+    }
   }
 
   // ---- Photos (polymorphic, slot-based) -------------------------------------
@@ -754,6 +833,7 @@ Map<String, Object?> _materialMasterItemToRow(MaterialMasterItem m) {
     'id': m.id,
     'group_code': m.group.name,
     'material_name': m.materialName,
+    'sku': m.sku,
     'unit': m.unit,
     'behavior_type': m.behaviorType.name,
     'sensor_size': m.sensorSize?.name,
@@ -773,6 +853,7 @@ MaterialMasterItem _materialMasterItemFromRow(Map<String, Object?> r) {
         _enumByName(MaterialGroup.values, r['group_code'] as String?) ??
         MaterialGroup.a,
     materialName: (r['material_name'] as String?) ?? '',
+    sku: (r['sku'] as String?) ?? '',
     unit: (r['unit'] as String?) ?? '',
     behaviorType:
         _enumByName(MaterialBehaviorType.values, r['behavior_type'] as String?) ??
@@ -790,6 +871,35 @@ MaterialMasterItem _materialMasterItemFromRow(Map<String, Object?> r) {
       r['variable_source'] as String?,
     ),
     notes: (r['notes'] as String?) ?? '',
+  );
+}
+
+Map<String, Object?> _materialMasterAuditEntryToRow(
+  MaterialMasterAuditEntry e,
+) {
+  return {
+    'id': e.id,
+    'material_row_id': e.materialRowId,
+    'field_changed': e.fieldChanged,
+    'old_value': e.oldValue,
+    'new_value': e.newValue,
+    'changed_by_role': e.changedByRole,
+    'changed_at': e.changedAt.toIso8601String(),
+  };
+}
+
+MaterialMasterAuditEntry _materialMasterAuditEntryFromRow(
+  Map<String, Object?> r,
+) {
+  return MaterialMasterAuditEntry(
+    id: r['id']! as String,
+    materialRowId: r['material_row_id']! as String,
+    fieldChanged: (r['field_changed'] as String?) ?? '',
+    oldValue: r['old_value'] as String?,
+    newValue: r['new_value'] as String?,
+    changedByRole: (r['changed_by_role'] as String?) ?? '',
+    changedAt:
+        DateTime.tryParse((r['changed_at'] as String?) ?? '') ?? DateTime(1970),
   );
 }
 

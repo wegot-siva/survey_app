@@ -61,12 +61,18 @@ class MultiPhotoCaptureField extends StatefulWidget {
     required this.photos,
     required this.onAdded,
     required this.onRemoved,
+    this.onEdit,
   });
 
   final String label;
   final List<PhotoView> photos;
   final ValueChanged<String> onAdded;
   final ValueChanged<int> onRemoved;
+
+  /// Optional — when provided, tapping a thumbnail invokes this with the
+  /// photo's index, e.g. to open a markup screen. Fields that don't pass this
+  /// render exactly as before: no edit affordance, unchanged behavior.
+  final ValueChanged<int>? onEdit;
 
   @override
   State<MultiPhotoCaptureField> createState() => _MultiPhotoCaptureFieldState();
@@ -110,6 +116,9 @@ class _MultiPhotoCaptureFieldState extends State<MultiPhotoCaptureField> {
                   _Thumb(
                     photo: widget.photos[i],
                     onRemove: () => widget.onRemoved(i),
+                    onEdit: widget.onEdit == null
+                        ? null
+                        : () => widget.onEdit!(i),
                   ),
               ],
             ),
@@ -132,10 +141,11 @@ class _MultiPhotoCaptureFieldState extends State<MultiPhotoCaptureField> {
 }
 
 class _Thumb extends StatelessWidget {
-  const _Thumb({required this.photo, required this.onRemove});
+  const _Thumb({required this.photo, required this.onRemove, this.onEdit});
 
   final PhotoView photo;
   final VoidCallback onRemove;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -143,15 +153,18 @@ class _Thumb extends StatelessWidget {
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.file(
-            File(photo.localPath),
-            height: 96,
-            width: 96,
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => SizedBox(
+          child: GestureDetector(
+            onTap: onEdit,
+            child: Image.file(
+              File(photo.localPath),
               height: 96,
               width: 96,
-              child: _UnavailableThumb(),
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => SizedBox(
+                height: 96,
+                width: 96,
+                child: _UnavailableThumb(),
+              ),
             ),
           ),
         ),
@@ -179,6 +192,19 @@ class _Thumb extends StatelessWidget {
             color: Colors.white,
           ),
         ),
+        if (onEdit != null)
+          Positioned(
+            right: 2,
+            bottom: 2,
+            child: Container(
+              decoration: const BoxDecoration(
+                color: Colors.black54,
+                shape: BoxShape.circle,
+              ),
+              padding: const EdgeInsets.all(3),
+              child: const Icon(Icons.edit, size: 12, color: Colors.white),
+            ),
+          ),
       ],
     );
   }

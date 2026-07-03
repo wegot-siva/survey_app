@@ -20,6 +20,7 @@ class SyncResult {
     this.gateways = 0,
     this.footers = 0,
     this.materialMasterItems = 0,
+    this.materialMasterAuditEntries = 0,
     this.photos = 0,
     this.message,
   });
@@ -34,6 +35,7 @@ class SyncResult {
   final int gateways;
   final int footers;
   final int materialMasterItems;
+  final int materialMasterAuditEntries;
   final int photos;
   final String? message;
 }
@@ -120,6 +122,11 @@ class SyncService {
         await _remote.pushMaterialMasterItem(material);
       }
 
+      final auditEntries = await _repository.getMaterialMasterAuditLog();
+      for (final entry in auditEntries) {
+        await _remote.pushMaterialMasterAuditEntry(entry);
+      }
+
       // Generic photos (slice 2): upload any pending files, then push metadata.
       var photos = 0;
       for (final photo in await _repository.getAllPhotos()) {
@@ -141,6 +148,7 @@ class SyncService {
         gateways: gateways,
         footers: footers,
         materialMasterItems: materials.length,
+        materialMasterAuditEntries: auditEntries.length,
         photos: photos,
       );
     } on PostgrestException catch (e) {

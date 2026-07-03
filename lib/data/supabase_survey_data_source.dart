@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/client_inputs.dart';
@@ -7,6 +8,7 @@ import '../models/duct_lora.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
+import '../models/material_master_audit_entry.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
@@ -84,19 +86,37 @@ class SupabaseSurveyDataSource {
         .upsert(_materialMasterItemToRemoteRow(item));
   }
 
+  /// Upserts a Material Master change-log entry by its id (idempotent). Not
+  /// site-scoped, and not FK'd to the material row either (a delete's own
+  /// audit entry must survive the row's removal).
+  Future<void> pushMaterialMasterAuditEntry(
+    MaterialMasterAuditEntry entry,
+  ) async {
+    await _client
+        .from('material_master_audit')
+        .upsert(_materialMasterAuditEntryToRemoteRow(entry));
+  }
+
   /// Name of the Storage bucket holding survey photos. Must exist (see
   /// supabase/schema.sql) before uploads succeed.
   static const String photoBucket = 'survey-photos';
 
   /// Uploads a local photo file to Storage under [objectKey] (idempotent —
-  /// re-uploading the same key overwrites). Returns the object key on success.
+  /// re-uploading the same key overwrites). The key's naming convention is
+  /// always `.jpg` (set by the caller) regardless of the file's real format —
+  /// only the Content-Type header (derived here from the local file's actual
+  /// extension) needs to match the bytes, e.g. for markup output (PNG).
+  /// Returns the object key on success.
   Future<String> uploadPhoto(String localPath, String objectKey) async {
     await _client.storage
         .from(photoBucket)
         .upload(
           objectKey,
           File(localPath),
-          fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'),
+          fileOptions: FileOptions(
+            upsert: true,
+            contentType: _contentTypeFor(localPath),
+          ),
         );
     return objectKey;
   }
@@ -256,11 +276,24 @@ Map<String, Object?> _photoToRemoteRow(SurveyPhoto p) {
   };
 }
 
+/// Content-Type for an upload, derived from the local file's real extension.
+/// Camera captures are `.jpg`; markup output is `.png` — defaults to JPEG for
+/// anything else.
+String _contentTypeFor(String localPath) {
+  switch (p.extension(localPath).toLowerCase()) {
+    case '.png':
+      return 'image/png';
+    default:
+      return 'image/jpeg';
+  }
+}
+
 Map<String, Object?> _materialMasterItemToRemoteRow(MaterialMasterItem m) {
   return {
     'id': m.id,
     'group_code': m.group.name,
     'material_name': m.materialName,
+    'sku': m.sku,
     'unit': m.unit,
     'behavior_type': m.behaviorType.name,
     'sensor_size': m.sensorSize?.name,
@@ -270,5 +303,19 @@ Map<String, Object?> _materialMasterItemToRemoteRow(MaterialMasterItem m) {
     'formula_divisor': m.formulaDivisor,
     'variable_source': m.variableSource?.name,
     'notes': m.notes,
+  };
+}
+
+Map<String, Object?> _materialMasterAuditEntryToRemoteRow(
+  MaterialMasterAuditEntry e,
+) {
+  return {
+    'id': e.id,
+    'material_row_id': e.materialRowId,
+    'field_changed': e.fieldChanged,
+    'old_value': e.oldValue,
+    'new_value': e.newValue,
+    'changed_by_role': e.changedByRole,
+    'changed_at': e.changedAt.toIso8601String(),
   };
 }

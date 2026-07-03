@@ -14,6 +14,7 @@ class SharedPasswordAuthRepository implements AuthRepository {
     UserRole.sales: 'sales123',
     UserRole.engineer: 'engineer123',
     UserRole.approver: 'approver123',
+    UserRole.admin: 'admin123',
   };
 
   @override

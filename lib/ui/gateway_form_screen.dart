@@ -6,6 +6,7 @@ import '../models/gateway.dart';
 import '../models/site.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
+import 'photo_markup_screen.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
@@ -107,6 +108,25 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
 
   void _onLocationRemoved(int index) {
     setState(() => _locationPhotos.removeAt(index));
+  }
+
+  /// Opens the markup screen for an existing photo. The photo keeps its id
+  /// (so saving updates the same record/Storage object instead of creating an
+  /// orphan); only its local path changes, and remotePath resets to null so
+  /// the marked-up version is re-uploaded on the next sync.
+  Future<void> _onLocationEdit(int index) async {
+    final draft = _locationPhotos[index];
+    final path = draft.localPath;
+    if (path == null) return;
+
+    final newPath = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => PhotoMarkupScreen(imagePath: path)),
+    );
+    if (newPath == null || !mounted) return;
+    setState(() {
+      draft.localPath = newPath;
+      draft.remotePath = null;
+    });
   }
 
   List<SurveyPhoto> _photoListFor(String ownerId) {
@@ -260,6 +280,7 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
             ],
             onAdded: _onLocationAdded,
             onRemoved: _onLocationRemoved,
+            onEdit: _onLocationEdit,
           ),
 
           const SizedBox(height: 24),
