@@ -227,7 +227,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   '• ${result.materialMasterItems} material master item(s)\n'
                   '• ${result.materialMasterAuditEntries} change log entr'
                   '${result.materialMasterAuditEntries == 1 ? 'y' : 'ies'}\n'
-                  '• ${result.photos} photo(s)',
+                  '• ${result.photos} photo(s)\n'
+                  '• ${result.bomManualEntries} manual BoM entr'
+                  '${result.bomManualEntries == 1 ? 'y' : 'ies'}',
                 )
               : SelectableText(result.message ?? 'Unknown error.'),
         ),

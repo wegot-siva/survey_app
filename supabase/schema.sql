@@ -342,3 +342,38 @@ alter table public.material_master_audit enable row level security;
 drop policy if exists "dev all - material_master_audit" on public.material_master_audit;
 create policy "dev all - material_master_audit" on public.material_master_audit
   for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
+-- D/E/G "Add materials" picker — manual BoM entries (mechanics only; not
+-- wired into snapshot/finalize logic yet, never read by the BoM engine).
+--
+-- FK'd to sites (cascade delete) — genuinely survey-scoped, unlike Material
+-- Master. Not linked to any material_master_items row by id: name/sku/unit
+-- are copied at the moment the picker's dropdown selection is made, so an
+-- entry survives that catalog row later changing or being deleted.
+-- `group_code` avoids "group" (a reserved word in Postgres) but, unlike
+-- material_master_items.group_code (lowercase enum name), stores the literal
+-- 'D' / 'E' / 'G' — the app restricts it to just those three.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.bom_manual_entries (
+  id            text primary key,
+  survey_id     text not null references public.sites (id) on delete cascade,
+  material_name text not null,
+  sku           text,
+  unit          text not null,
+  qty           double precision not null,
+  group_code    text not null,   -- literal: 'D' | 'E' | 'G'
+  added_by      text not null,   -- role label, e.g. "Engineer" (shared login)
+  added_at      text not null    -- ISO-8601 string (mirrors SQLite TEXT storage)
+);
+
+create index if not exists bom_manual_entries_survey_idx
+  on public.bom_manual_entries (survey_id);
+
+alter table public.bom_manual_entries enable row level security;
+
+drop policy if exists "dev all - bom_manual_entries" on public.bom_manual_entries;
+create policy "dev all - bom_manual_entries" on public.bom_manual_entries
+  for all to anon, authenticated using (true) with check (true);

@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 9;
+const int _dbVersion = 10;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -70,6 +70,10 @@ Future<Database> openAppDatabase() async {
         );
         await _createMaterialMasterAuditTable(db);
       }
+      // v9 -> v10: D/E/G "Add materials" picker — manual BoM entries per survey.
+      if (oldVersion < 10) {
+        await _createBomManualEntriesTable(db);
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -123,6 +127,7 @@ Future<Database> openAppDatabase() async {
       await _createMaterialMasterItemsTable(db);
       await _createPhotosTable(db);
       await _createMaterialMasterAuditTable(db);
+      await _createBomManualEntriesTable(db);
     },
   );
 }
@@ -358,5 +363,35 @@ Future<void> _createMaterialMasterAuditTable(Database db) async {
   await db.execute(
     'CREATE INDEX material_master_audit_row_idx '
     'ON material_master_audit (material_row_id)',
+  );
+}
+
+/// BoM manual entries table (v10) — the D/E/G "Add materials" picker. A
+/// survey has many; FK'd to sites (cascade delete, like source/inlet points)
+/// since these are genuinely survey-scoped, unlike Material Master. Not
+/// linked to any material_master_items row by id — name/sku/unit are copied
+/// at the moment the picker's dropdown selection is made, so an entry
+/// survives that catalog row later changing or being deleted. `group_code`
+/// avoids "group" (a reserved word in the remote Postgres schema) but,
+/// unlike material_master_items.group_code (lowercase enum name), stores the
+/// literal 'D' / 'E' / 'G' — the picker UI restricts it to just those three.
+Future<void> _createBomManualEntriesTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE bom_manual_entries (
+      id            TEXT PRIMARY KEY,
+      survey_id     TEXT NOT NULL,
+      material_name TEXT NOT NULL,
+      sku           TEXT,
+      unit          TEXT NOT NULL,
+      qty           REAL NOT NULL,
+      group_code    TEXT NOT NULL,
+      added_by      TEXT NOT NULL,
+      added_at      TEXT NOT NULL,
+      FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX bom_manual_entries_survey_idx '
+    'ON bom_manual_entries (survey_id)',
   );
 }

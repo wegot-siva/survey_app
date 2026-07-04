@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/bom_manual_entry.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
 import '../models/footer.dart';
@@ -125,6 +126,14 @@ class SupabaseSurveyDataSource {
   /// file path is never pushed — only the Storage object key.
   Future<void> pushPhoto(SurveyPhoto photo) async {
     await _client.from('photos').upsert(_photoToRemoteRow(photo));
+  }
+
+  /// Upserts a BoM manual entry by its id (idempotent). The parent site must
+  /// already have been pushed (FK).
+  Future<void> pushBomManualEntry(BomManualEntry entry) async {
+    await _client
+        .from('bom_manual_entries')
+        .upsert(_bomManualEntryToRemoteRow(entry));
   }
 }
 
@@ -317,5 +326,21 @@ Map<String, Object?> _materialMasterAuditEntryToRemoteRow(
     'new_value': e.newValue,
     'changed_by_role': e.changedByRole,
     'changed_at': e.changedAt.toIso8601String(),
+  };
+}
+
+Map<String, Object?> _bomManualEntryToRemoteRow(BomManualEntry e) {
+  return {
+    'id': e.id,
+    'survey_id': e.surveyId,
+    'material_name': e.materialName,
+    'sku': e.sku,
+    'unit': e.unit,
+    'qty': e.qty,
+    // Literal 'D' / 'E' / 'G' — see the matching comment in
+    // sqflite_survey_repository.dart's _bomManualEntryToRow.
+    'group_code': e.group.code,
+    'added_by': e.addedBy,
+    'added_at': e.addedAt.toIso8601String(),
   };
 }

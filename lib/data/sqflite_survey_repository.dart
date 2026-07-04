@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 
+import '../models/bom_manual_entry.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
 import '../models/footer.dart';
@@ -496,6 +497,41 @@ class SqfliteSurveyRepository implements SurveyRepository {
       whereArgs: [photo.id],
     );
   }
+
+  // ---- BoM manual entries ----------------------------------------------
+
+  @override
+  Future<List<BomManualEntry>> getBomManualEntries(String surveyId) async {
+    final rows = await _db.query(
+      'bom_manual_entries',
+      where: 'survey_id = ?',
+      whereArgs: [surveyId],
+      orderBy: 'added_at, rowid',
+    );
+    return rows.map(_bomManualEntryFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<BomManualEntry> addBomManualEntry(BomManualEntry entry) async {
+    final stored = entry.copyWithId(_idService.newId());
+    await _db.insert('bom_manual_entries', _bomManualEntryToRow(stored));
+    return stored;
+  }
+
+  @override
+  Future<void> updateBomManualEntry(BomManualEntry entry) async {
+    await _db.update(
+      'bom_manual_entries',
+      _bomManualEntryToRow(entry),
+      where: 'id = ?',
+      whereArgs: [entry.id],
+    );
+  }
+
+  @override
+  Future<void> deleteBomManualEntry(String id) async {
+    await _db.delete('bom_manual_entries', where: 'id = ?', whereArgs: [id]);
+  }
 }
 
 // ---- Row <-> model mapping (hand-written, no codegen) -----------------------
@@ -580,6 +616,15 @@ T? _enumByName<T extends Enum>(List<T> values, String? name) {
     if (value.name == name) return value;
   }
   return null;
+}
+
+/// Maps a stored literal 'D' / 'E' / 'G' back to its [MaterialGroup]. Falls
+/// back to D on anything unrecognized, same defensive style as [_enumByName].
+MaterialGroup _materialGroupFromCode(String? code) {
+  for (final group in kBomManualEntryGroups) {
+    if (group.code == code) return group;
+  }
+  return MaterialGroup.d;
 }
 
 Map<String, Object?> _sourcePointToRow(SourcePoint s) {
@@ -924,5 +969,37 @@ SurveyPhoto _photoFromRow(Map<String, Object?> r) {
     position: (r['position'] as int?) ?? 0,
     localPath: r['local_path'] as String?,
     remotePath: r['remote_path'] as String?,
+  );
+}
+
+Map<String, Object?> _bomManualEntryToRow(BomManualEntry e) {
+  return {
+    'id': e.id,
+    'survey_id': e.surveyId,
+    'material_name': e.materialName,
+    'sku': e.sku,
+    'unit': e.unit,
+    'qty': e.qty,
+    // Literal 'D' / 'E' / 'G' — not the lowercase enum identifier used by
+    // material_master_items.group_code. Restricted to kBomManualEntryGroups
+    // by the picker UI, not by this mapper.
+    'group_code': e.group.code,
+    'added_by': e.addedBy,
+    'added_at': e.addedAt.toIso8601String(),
+  };
+}
+
+BomManualEntry _bomManualEntryFromRow(Map<String, Object?> r) {
+  return BomManualEntry(
+    id: r['id']! as String,
+    surveyId: r['survey_id']! as String,
+    materialName: (r['material_name'] as String?) ?? '',
+    sku: (r['sku'] as String?) ?? '',
+    unit: (r['unit'] as String?) ?? '',
+    qty: (r['qty'] as num?)?.toDouble() ?? 0,
+    group: _materialGroupFromCode(r['group_code'] as String?),
+    addedBy: (r['added_by'] as String?) ?? '',
+    addedAt:
+        DateTime.tryParse((r['added_at'] as String?) ?? '') ?? DateTime(1970),
   );
 }

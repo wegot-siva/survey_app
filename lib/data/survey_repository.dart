@@ -1,3 +1,4 @@
+import '../models/bom_manual_entry.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
 import '../models/footer.dart';
@@ -132,4 +133,23 @@ abstract class SurveyRepository {
 
   /// Updates one photo row by id (e.g. sync writing back a remote path).
   Future<void> updatePhoto(SurveyPhoto photo);
+
+  // ---- BoM manual entries (D/E/G "Add materials" picker) -------------------
+  //
+  // Mechanics only — not wired into any snapshot/finalize flow yet, and never
+  // read by BomEngine. Reachable from the BoM preview screen for any survey
+  // regardless of status.
+
+  /// All manual entries for one survey, oldest first.
+  Future<List<BomManualEntry>> getBomManualEntries(String surveyId);
+
+  /// Persists a new manual entry, assigning it an id, and returns it.
+  Future<BomManualEntry> addBomManualEntry(BomManualEntry entry);
+
+  /// Updates an existing entry. [entry.addedBy] / [entry.addedAt] are carried
+  /// over from the original entry, not re-stamped — this is an edit, not a
+  /// new addition.
+  Future<void> updateBomManualEntry(BomManualEntry entry);
+
+  Future<void> deleteBomManualEntry(String id);
 }

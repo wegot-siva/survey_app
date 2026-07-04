@@ -131,8 +131,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   Future<void> _openBomPreview(Site site) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            BomPreviewScreen(repository: widget.repository, site: site),
+        builder: (_) => BomPreviewScreen(
+          repository: widget.repository,
+          site: site,
+          addedByRole: widget.session.currentRole?.label ?? 'Unknown',
+        ),
       ),
     );
     // Read-only — no need to reload the hub afterwards.

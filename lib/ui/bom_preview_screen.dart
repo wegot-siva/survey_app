@@ -10,6 +10,7 @@ import '../models/site.dart';
 import '../models/source_point.dart';
 import '../services/bom_engine.dart';
 import '../services/bom_excel_exporter.dart';
+import 'bom_manual_entries_screen.dart';
 
 /// On-screen BoM preview for one site (Material Master phase). Reads
 /// Material Master rows + the site's survey data, runs [BomEngine], and shows
@@ -19,10 +20,15 @@ class BomPreviewScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.site,
+    required this.addedByRole,
   });
 
   final SurveyRepository repository;
   final Site site;
+
+  /// Label of the signed-in role (e.g. "Engineer"), recorded on manual BoM
+  /// entries added from this screen.
+  final String addedByRole;
 
   @override
   State<BomPreviewScreen> createState() => _BomPreviewScreenState();
@@ -131,6 +137,24 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     return result;
   }
 
+  /// Opens the D/E/G "Add materials" picker for this survey. Available any
+  /// time regardless of survey status — not gated to the computed BoM having
+  /// any rows.
+  Future<void> _openManualEntries() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BomManualEntriesScreen(
+          repository: widget.repository,
+          surveyId: widget.site.id,
+          surveyName: widget.site.name,
+          addedByRole: widget.addedByRole,
+        ),
+      ),
+    );
+    // Manual entries aren't part of the computed BoM shown here yet
+    // (mechanics only this slice) — no need to regenerate on return.
+  }
+
   Future<void> _export() async {
     setState(() => _exporting = true);
     try {
@@ -163,6 +187,11 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       appBar: AppBar(
         title: Text('BoM — ${widget.site.name}'),
         actions: [
+          IconButton(
+            tooltip: 'Add materials (D/E/G)',
+            onPressed: _openManualEntries,
+            icon: const Icon(Icons.add_shopping_cart_outlined),
+          ),
           IconButton(
             tooltip: 'Export BoM to Excel',
             onPressed: canExport && !_exporting ? _export : null,

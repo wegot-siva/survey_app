@@ -1,3 +1,4 @@
+import '../models/bom_manual_entry.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
 import '../models/footer.dart';
@@ -28,6 +29,7 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, SurveyPhoto> _photos = {};
   final Map<String, MaterialMasterAuditEntry> _materialMasterAudit = {};
   static const _auditBuilder = MaterialMasterAuditBuilder();
+  final Map<String, BomManualEntry> _bomManualEntries = {};
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -287,5 +289,30 @@ class InMemorySurveyRepository implements SurveyRepository {
   @override
   Future<void> updatePhoto(SurveyPhoto photo) async {
     _photos[photo.id] = photo;
+  }
+
+  @override
+  Future<List<BomManualEntry>> getBomManualEntries(String surveyId) async {
+    final list =
+        _bomManualEntries.values.where((e) => e.surveyId == surveyId).toList()
+          ..sort((a, b) => a.addedAt.compareTo(b.addedAt));
+    return List.unmodifiable(list);
+  }
+
+  @override
+  Future<BomManualEntry> addBomManualEntry(BomManualEntry entry) async {
+    final stored = entry.copyWithId(_idService.newId());
+    _bomManualEntries[stored.id] = stored;
+    return stored;
+  }
+
+  @override
+  Future<void> updateBomManualEntry(BomManualEntry entry) async {
+    _bomManualEntries[entry.id] = entry;
+  }
+
+  @override
+  Future<void> deleteBomManualEntry(String id) async {
+    _bomManualEntries.remove(id);
   }
 }
