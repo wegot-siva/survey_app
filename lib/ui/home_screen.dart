@@ -229,7 +229,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   '${result.materialMasterAuditEntries == 1 ? 'y' : 'ies'}\n'
                   '• ${result.photos} photo(s)\n'
                   '• ${result.bomManualEntries} manual BoM entr'
-                  '${result.bomManualEntries == 1 ? 'y' : 'ies'}',
+                  '${result.bomManualEntries == 1 ? 'y' : 'ies'}\n'
+                  '• ${result.bomSnapshots} finalized BoM snapshot'
+                  '${result.bomSnapshots == 1 ? '' : 's'}',
                 )
               : SelectableText(result.message ?? 'Unknown error.'),
         ),

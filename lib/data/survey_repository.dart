@@ -1,4 +1,6 @@
 import '../models/bom_manual_entry.dart';
+import '../models/bom_snapshot.dart';
+import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
 import '../models/footer.dart';
@@ -136,9 +138,11 @@ abstract class SurveyRepository {
 
   // ---- BoM manual entries (D/E/G "Add materials" picker) -------------------
   //
-  // Mechanics only — not wired into any snapshot/finalize flow yet, and never
-  // read by BomEngine. Reachable from the BoM preview screen for any survey
-  // regardless of status.
+  // Never read by BomEngine — these feed into a snapshot only at the moment
+  // [finalizeBom] runs. Reachable from the BoM preview screen for any survey
+  // regardless of status, and still editable after that survey's BoM has been
+  // finalized — doing so has no effect on the frozen snapshot (see
+  // [finalizeBom]).
 
   /// All manual entries for one survey, oldest first.
   Future<List<BomManualEntry>> getBomManualEntries(String surveyId);
@@ -152,4 +156,26 @@ abstract class SurveyRepository {
   Future<void> updateBomManualEntry(BomManualEntry entry);
 
   Future<void> deleteBomManualEntry(String id);
+
+  // ---- BoM snapshots (Finalize — immutable, frozen BoM) --------------------
+  //
+  // Version 1 only in this slice — no revisions/re-finalize flow. Once a
+  // survey has a snapshot, editing Material Master or bom_manual_entries can
+  // never alter it: [finalizeBom] copies every value in at write time.
+
+  /// The survey's snapshot, if its BoM has been finalized. Null otherwise.
+  Future<BomSnapshot?> getBomSnapshot(String surveyId);
+
+  /// A snapshot's frozen lines, in the order they were written.
+  Future<List<BomSnapshotLine>> getBomSnapshotLines(String snapshotId);
+
+  /// Freezes [lines] as a new, permanent [BomSnapshot] for [surveyId] and
+  /// flips that survey's `bomLocked` flag. [lines]' `id` / `snapshotId` are
+  /// ignored (assigned fresh). Idempotent: if [surveyId] already has a
+  /// snapshot, returns it unchanged rather than creating a duplicate.
+  Future<BomSnapshot> finalizeBom({
+    required String surveyId,
+    required List<BomSnapshotLine> lines,
+    required String finalizedBy,
+  });
 }

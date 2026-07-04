@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 10;
+const int _dbVersion = 11;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -74,6 +74,17 @@ Future<Database> openAppDatabase() async {
       if (oldVersion < 10) {
         await _createBomManualEntriesTable(db);
       }
+      // v10 -> v11: Finalize — freezes the current BoM as an immutable
+      // version-1 snapshot. bom_locked defaults to 0, so every existing
+      // survey stays unlocked (still shows a live-recomputed BoM) until
+      // someone explicitly finalizes it.
+      if (oldVersion < 11) {
+        await db.execute(
+          'ALTER TABLE sites ADD COLUMN bom_locked INTEGER NOT NULL DEFAULT 0',
+        );
+        await _createBomSnapshotsTable(db);
+        await _createBomSnapshotLinesTable(db);
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -81,7 +92,8 @@ Future<Database> openAppDatabase() async {
           id          TEXT PRIMARY KEY,
           name        TEXT NOT NULL,
           status      TEXT,
-          assigned_to TEXT
+          assigned_to TEXT,
+          bom_locked  INTEGER NOT NULL DEFAULT 0
         )
       ''');
 
@@ -128,6 +140,8 @@ Future<Database> openAppDatabase() async {
       await _createPhotosTable(db);
       await _createMaterialMasterAuditTable(db);
       await _createBomManualEntriesTable(db);
+      await _createBomSnapshotsTable(db);
+      await _createBomSnapshotLinesTable(db);
     },
   );
 }
@@ -393,5 +407,52 @@ Future<void> _createBomManualEntriesTable(Database db) async {
   await db.execute(
     'CREATE INDEX bom_manual_entries_survey_idx '
     'ON bom_manual_entries (survey_id)',
+  );
+}
+
+/// BoM snapshots table (v11) — the Finalize action. One row per survey in
+/// this slice (version always 1; no re-finalize flow), FK'd to sites
+/// (cascade delete) since a snapshot is meaningless without its survey.
+Future<void> _createBomSnapshotsTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE bom_snapshots (
+      id            TEXT PRIMARY KEY,
+      survey_id     TEXT NOT NULL,
+      version       INTEGER NOT NULL DEFAULT 1,
+      status        TEXT NOT NULL,
+      finalized_by  TEXT NOT NULL,
+      finalized_at  TEXT NOT NULL,
+      FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX bom_snapshots_survey_idx ON bom_snapshots (survey_id)',
+  );
+}
+
+/// BoM snapshot lines table (v11) — the frozen values of one [BomSnapshot].
+/// FK'd to bom_snapshots (cascade delete); NOT linked to material_master_items
+/// or bom_manual_entries by id — sku/item/unit/qty/group are copied at
+/// finalize time, so editing either later cannot alter an existing snapshot.
+/// `group_code` stores the literal 'A'..'G' (see the matching comment on
+/// bom_manual_entries above for why this differs from
+/// material_master_items.group_code); `source` stores literal 'auto'|'manual'.
+Future<void> _createBomSnapshotLinesTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE bom_snapshot_lines (
+      id          TEXT PRIMARY KEY,
+      snapshot_id TEXT NOT NULL,
+      sku         TEXT,
+      item        TEXT NOT NULL,
+      unit        TEXT NOT NULL,
+      qty         REAL NOT NULL,
+      group_code  TEXT NOT NULL,
+      source      TEXT NOT NULL,
+      FOREIGN KEY (snapshot_id) REFERENCES bom_snapshots (id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX bom_snapshot_lines_snapshot_idx '
+    'ON bom_snapshot_lines (snapshot_id)',
   );
 }

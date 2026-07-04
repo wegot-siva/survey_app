@@ -10,6 +10,7 @@ class Site {
     this.clientInputs,
     this.status,
     this.assignedTo,
+    this.bomLocked = false,
   });
 
   final String id;
@@ -25,6 +26,12 @@ class Site {
   /// engineer directory — see Roles & Assignment Slice B). Null until assigned.
   final String? assignedTo;
 
+  /// Whether this survey's BoM has been finalized (Finalize phase). Set by
+  /// [SurveyRepository.finalizeBom] alongside writing the [BomSnapshot] —
+  /// never toggled by [copyWith]/[SurveyRepository.updateSite] directly, since
+  /// there is no unlock/re-finalize flow yet.
+  final bool bomLocked;
+
   Site copyWith({
     String? name,
     List<String>? blocks,
@@ -39,6 +46,7 @@ class Site {
       clientInputs: clientInputs ?? this.clientInputs,
       status: status ?? this.status,
       assignedTo: assignedTo ?? this.assignedTo,
+      bomLocked: bomLocked,
     );
   }
 }

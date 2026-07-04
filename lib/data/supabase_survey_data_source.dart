@@ -4,6 +4,8 @@ import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/bom_manual_entry.dart';
+import '../models/bom_snapshot.dart';
+import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
 import '../models/footer.dart';
@@ -31,6 +33,7 @@ class SupabaseSurveyDataSource {
       // Reserved assignment columns — currently always null.
       'status': site.status,
       'assigned_to': site.assignedTo,
+      'bom_locked': site.bomLocked,
     });
 
     // Blocks carry no stable id in the domain model, so replace the whole set
@@ -134,6 +137,20 @@ class SupabaseSurveyDataSource {
     await _client
         .from('bom_manual_entries')
         .upsert(_bomManualEntryToRemoteRow(entry));
+  }
+
+  /// Upserts a BoM snapshot by its id (idempotent). The parent site must
+  /// already have been pushed (FK).
+  Future<void> pushBomSnapshot(BomSnapshot snapshot) async {
+    await _client.from('bom_snapshots').upsert(_bomSnapshotToRemoteRow(snapshot));
+  }
+
+  /// Upserts a BoM snapshot line by its id (idempotent). The parent snapshot
+  /// must already have been pushed (FK).
+  Future<void> pushBomSnapshotLine(BomSnapshotLine line) async {
+    await _client
+        .from('bom_snapshot_lines')
+        .upsert(_bomSnapshotLineToRemoteRow(line));
   }
 }
 
@@ -342,5 +359,31 @@ Map<String, Object?> _bomManualEntryToRemoteRow(BomManualEntry e) {
     'group_code': e.group.code,
     'added_by': e.addedBy,
     'added_at': e.addedAt.toIso8601String(),
+  };
+}
+
+Map<String, Object?> _bomSnapshotToRemoteRow(BomSnapshot s) {
+  return {
+    'id': s.id,
+    'survey_id': s.surveyId,
+    'version': s.version,
+    'status': s.status,
+    'finalized_by': s.finalizedBy,
+    'finalized_at': s.finalizedAt.toIso8601String(),
+  };
+}
+
+Map<String, Object?> _bomSnapshotLineToRemoteRow(BomSnapshotLine l) {
+  return {
+    'id': l.id,
+    'snapshot_id': l.snapshotId,
+    'sku': l.sku,
+    'item': l.item,
+    'unit': l.unit,
+    'qty': l.qty,
+    // Literal 'A'..'G' — see the matching comment in
+    // sqflite_survey_repository.dart's _bomSnapshotLineToRow.
+    'group_code': l.group.code,
+    'source': l.source.name, // literal 'auto' | 'manual'
   };
 }

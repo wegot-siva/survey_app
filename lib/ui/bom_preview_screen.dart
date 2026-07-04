@@ -3,6 +3,8 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/survey_repository.dart';
 import '../models/bom_line.dart';
+import '../models/bom_snapshot.dart';
+import '../models/bom_snapshot_line.dart';
 import '../models/duct_lora.dart';
 import '../models/inlet_point.dart';
 import '../models/material_master_item.dart';
@@ -38,12 +40,19 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Map<MaterialGroup, List<BomLine>>? _bom;
   bool _loading = true;
   bool _exporting = false;
+  bool _finalizing = false;
 
   // Loaded inputs, kept so export can recompute per-block without re-fetching.
   List<MaterialMasterItem> _materials = const [];
   List<SourcePoint> _sourcePoints = const [];
   List<InletPoint> _inletPoints = const [];
   List<DuctLora> _ductLoras = const [];
+
+  // Set once a survey has been finalized. Non-null means the review screen
+  // shows this frozen data instead of a live recompute — Export keeps using
+  // the live `_bom` above regardless, per the Finalize slice's exclusions.
+  BomSnapshot? _snapshot;
+  List<BomSnapshotLine> _snapshotLines = const [];
 
   @override
   void initState() {
@@ -69,6 +78,13 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       ductLoras: ductLoras,
     );
 
+    // Loaded unconditionally alongside the live compute above — a locked
+    // survey has no snapshot removed later, so this is just "does one exist".
+    final snapshot = await widget.repository.getBomSnapshot(widget.site.id);
+    final snapshotLines = snapshot == null
+        ? const <BomSnapshotLine>[]
+        : await widget.repository.getBomSnapshotLines(snapshot.id);
+
     if (!mounted) return;
     setState(() {
       _materials = materials;
@@ -76,6 +92,8 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       _inletPoints = inletPoints;
       _ductLoras = ductLoras;
       _bom = bom;
+      _snapshot = snapshot;
+      _snapshotLines = snapshotLines;
       _loading = false;
     });
   }
@@ -155,6 +173,81 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     // (mechanics only this slice) — no need to regenerate on return.
   }
 
+  /// Freezes the current BoM (live A/B/C/F + D/E/G manual entries) as an
+  /// immutable version-1 snapshot. One-way: no unlock/re-finalize flow exists.
+  Future<void> _finalize() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Finalize BoM?'),
+        content: const Text(
+          'This freezes the current Bill of Materials as final. It cannot be '
+          'edited or unlocked afterward — continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Finalize'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _finalizing = true);
+
+    final bom = _bom;
+    final manualEntries = await widget.repository.getBomManualEntries(
+      widget.site.id,
+    );
+
+    final lines = <BomSnapshotLine>[
+      if (bom != null)
+        for (final group in MaterialGroup.values)
+          for (final line in bom[group] ?? const <BomLine>[])
+            BomSnapshotLine(
+              id: '',
+              snapshotId: '',
+              sku: line.sku,
+              item: _snapshotItemLabel(line),
+              unit: line.unit,
+              qty: line.quantity,
+              group: line.group,
+              source: BomSnapshotSource.auto,
+            ),
+      for (final entry in manualEntries)
+        BomSnapshotLine(
+          id: '',
+          snapshotId: '',
+          sku: entry.sku,
+          item: entry.materialName,
+          unit: entry.unit,
+          qty: entry.qty,
+          group: entry.group,
+          source: BomSnapshotSource.manual,
+        ),
+    ];
+
+    await widget.repository.finalizeBom(
+      surveyId: widget.site.id,
+      lines: lines,
+      finalizedBy: widget.addedByRole,
+    );
+
+    if (!mounted) return;
+    setState(() => _finalizing = false);
+    await _generate();
+  }
+
+  static String _snapshotItemLabel(BomLine line) =>
+      line.variantLabel == '—'
+      ? line.materialName
+      : '${line.materialName} (${line.variantLabel})';
+
   Future<void> _export() async {
     setState(() => _exporting = true);
     try {
@@ -180,13 +273,26 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   @override
   Widget build(BuildContext context) {
     final bom = _bom;
-    final hasNoMaterials = bom != null && bom.values.every((l) => l.isEmpty);
+    final locked = _snapshot != null;
+    final hasNoMaterials =
+        !locked && bom != null && bom.values.every((l) => l.isEmpty);
     final canExport = !_loading && !hasNoMaterials;
+    final canFinalize = !_loading && !locked && !hasNoMaterials;
 
     return Scaffold(
       appBar: AppBar(
         title: Text('BoM — ${widget.site.name}'),
         actions: [
+          if (locked)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8),
+              child: Center(
+                child: Chip(
+                  label: Text('Finalized'),
+                  avatar: Icon(Icons.lock_outline, size: 18),
+                ),
+              ),
+            ),
           IconButton(
             tooltip: 'Add materials (D/E/G)',
             onPressed: _openManualEntries,
@@ -205,6 +311,19 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           ),
         ],
       ),
+      floatingActionButton: canFinalize
+          ? FloatingActionButton.extended(
+              onPressed: _finalizing ? null : _finalize,
+              icon: _finalizing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.lock_outline),
+              label: const Text('Finalize'),
+            )
+          : null,
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : hasNoMaterials
@@ -218,6 +337,20 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                   textAlign: TextAlign.center,
                 ),
               ),
+            )
+          : locked
+          ? ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                for (final group in MaterialGroup.values)
+                  if (_snapshotLines.any((l) => l.group == group))
+                    _SnapshotGroupSection(
+                      group: group,
+                      lines: _snapshotLines
+                          .where((l) => l.group == group)
+                          .toList(),
+                    ),
+              ],
             )
           : ListView(
               padding: const EdgeInsets.all(16),
@@ -279,6 +412,67 @@ class _BomLineRow extends StatelessWidget {
       subtitle: Text(line.variantLabel),
       trailing: Text(
         '${_formatQuantity(line.quantity)} ${line.unit}',
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  static String _formatQuantity(double q) {
+    return q == q.roundToDouble() ? q.toInt().toString() : q.toStringAsFixed(2);
+  }
+}
+
+/// Read-only rendering of one group's frozen [BomSnapshotLine]s. Mirrors
+/// [_GroupSection]'s look so a finalized BoM feels like the same screen, not
+/// a different feature.
+class _SnapshotGroupSection extends StatelessWidget {
+  const _SnapshotGroupSection({required this.group, required this.lines});
+
+  final MaterialGroup group;
+  final List<BomSnapshotLine> lines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: double.infinity,
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Text(
+                '${group.code} — ${group.label}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                ),
+              ),
+            ),
+            for (final line in lines) _SnapshotLineRow(line: line),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SnapshotLineRow extends StatelessWidget {
+  const _SnapshotLineRow({required this.line});
+
+  final BomSnapshotLine line;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      title: Text(line.item),
+      subtitle: Text(line.source.label),
+      trailing: Text(
+        '${_formatQuantity(line.qty)} ${line.unit}',
         style: const TextStyle(fontWeight: FontWeight.w600),
       ),
     );

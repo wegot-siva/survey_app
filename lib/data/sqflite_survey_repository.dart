@@ -1,6 +1,8 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../models/bom_manual_entry.dart';
+import '../models/bom_snapshot.dart';
+import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
 import '../models/footer.dart';
@@ -157,6 +159,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
       clientInputs: clientInputs,
       status: siteRow['status'] as String?,
       assignedTo: siteRow['assigned_to'] as String?,
+      bomLocked: _intToBool(siteRow['bom_locked'] as int?) ?? false,
     );
   }
 
@@ -531,6 +534,69 @@ class SqfliteSurveyRepository implements SurveyRepository {
   @override
   Future<void> deleteBomManualEntry(String id) async {
     await _db.delete('bom_manual_entries', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---- BoM snapshots ---------------------------------------------------
+
+  @override
+  Future<BomSnapshot?> getBomSnapshot(String surveyId) async {
+    final rows = await _db.query(
+      'bom_snapshots',
+      where: 'survey_id = ?',
+      whereArgs: [surveyId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return _bomSnapshotFromRow(rows.first);
+  }
+
+  @override
+  Future<List<BomSnapshotLine>> getBomSnapshotLines(String snapshotId) async {
+    final rows = await _db.query(
+      'bom_snapshot_lines',
+      where: 'snapshot_id = ?',
+      whereArgs: [snapshotId],
+      orderBy: 'group_code, rowid',
+    );
+    return rows.map(_bomSnapshotLineFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<BomSnapshot> finalizeBom({
+    required String surveyId,
+    required List<BomSnapshotLine> lines,
+    required String finalizedBy,
+  }) async {
+    // Idempotent: a survey can only ever have one snapshot in this slice —
+    // guards against a double-tap (or any future caller) creating a duplicate.
+    final existing = await getBomSnapshot(surveyId);
+    if (existing != null) return existing;
+
+    final snapshot = BomSnapshot(
+      id: _idService.newId(),
+      surveyId: surveyId,
+      finalizedBy: finalizedBy,
+      finalizedAt: DateTime.now(),
+    );
+
+    await _db.transaction((txn) async {
+      await txn.insert('bom_snapshots', _bomSnapshotToRow(snapshot));
+      for (final line in lines) {
+        final stored = line.copyWithIds(
+          id: _idService.newId(),
+          snapshotId: snapshot.id,
+        );
+        await txn.insert('bom_snapshot_lines', _bomSnapshotLineToRow(stored));
+      }
+      await txn.update(
+        'sites',
+        {'bom_locked': 1},
+        where: 'id = ?',
+        whereArgs: [surveyId],
+      );
+    });
+
+    return snapshot;
   }
 }
 
@@ -1001,5 +1067,69 @@ BomManualEntry _bomManualEntryFromRow(Map<String, Object?> r) {
     addedBy: (r['added_by'] as String?) ?? '',
     addedAt:
         DateTime.tryParse((r['added_at'] as String?) ?? '') ?? DateTime(1970),
+  );
+}
+
+/// Like [_materialGroupFromCode] but searches the full A–G range — a
+/// snapshot line can be either an auto-computed line (A/B/C/F) or a manual
+/// entry (D/E/G), unlike bom_manual_entries rows which are always D/E/G.
+MaterialGroup _materialGroupFromAnyCode(String? code) {
+  for (final group in MaterialGroup.values) {
+    if (group.code == code) return group;
+  }
+  return MaterialGroup.a;
+}
+
+Map<String, Object?> _bomSnapshotToRow(BomSnapshot s) {
+  return {
+    'id': s.id,
+    'survey_id': s.surveyId,
+    'version': s.version,
+    'status': s.status,
+    'finalized_by': s.finalizedBy,
+    'finalized_at': s.finalizedAt.toIso8601String(),
+  };
+}
+
+BomSnapshot _bomSnapshotFromRow(Map<String, Object?> r) {
+  return BomSnapshot(
+    id: r['id']! as String,
+    surveyId: r['survey_id']! as String,
+    version: (r['version'] as int?) ?? 1,
+    status: (r['status'] as String?) ?? kBomSnapshotStatusFinal,
+    finalizedBy: (r['finalized_by'] as String?) ?? '',
+    finalizedAt:
+        DateTime.tryParse((r['finalized_at'] as String?) ?? '') ?? DateTime(1970),
+  );
+}
+
+Map<String, Object?> _bomSnapshotLineToRow(BomSnapshotLine l) {
+  return {
+    'id': l.id,
+    'snapshot_id': l.snapshotId,
+    'sku': l.sku,
+    'item': l.item,
+    'unit': l.unit,
+    'qty': l.qty,
+    // Literal 'A'..'G' — mirrors the bom_manual_entries.group_code convention,
+    // but over the full range since a snapshot line can be auto (A/B/C/F) or
+    // manual (D/E/G).
+    'group_code': l.group.code,
+    'source': l.source.name, // literal 'auto' | 'manual'
+  };
+}
+
+BomSnapshotLine _bomSnapshotLineFromRow(Map<String, Object?> r) {
+  return BomSnapshotLine(
+    id: r['id']! as String,
+    snapshotId: r['snapshot_id']! as String,
+    sku: (r['sku'] as String?) ?? '',
+    item: (r['item'] as String?) ?? '',
+    unit: (r['unit'] as String?) ?? '',
+    qty: (r['qty'] as num?)?.toDouble() ?? 0,
+    group: _materialGroupFromAnyCode(r['group_code'] as String?),
+    source:
+        _enumByName(BomSnapshotSource.values, r['source'] as String?) ??
+        BomSnapshotSource.auto,
   );
 }

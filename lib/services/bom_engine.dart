@@ -47,6 +47,7 @@ class BomEngine {
         BomLine(
           group: item.group,
           materialName: item.materialName,
+          sku: item.sku,
           variantLabel: _variantLabel(item),
           quantity: quantity,
           unit: item.unit,

@@ -1,4 +1,6 @@
 import '../models/bom_manual_entry.dart';
+import '../models/bom_snapshot.dart';
+import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
 import '../models/footer.dart';
@@ -30,6 +32,8 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, MaterialMasterAuditEntry> _materialMasterAudit = {};
   static const _auditBuilder = MaterialMasterAuditBuilder();
   final Map<String, BomManualEntry> _bomManualEntries = {};
+  final Map<String, BomSnapshot> _bomSnapshots = {}; // keyed by surveyId
+  final Map<String, List<BomSnapshotLine>> _bomSnapshotLines = {}; // keyed by snapshotId
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -314,5 +318,50 @@ class InMemorySurveyRepository implements SurveyRepository {
   @override
   Future<void> deleteBomManualEntry(String id) async {
     _bomManualEntries.remove(id);
+  }
+
+  @override
+  Future<BomSnapshot?> getBomSnapshot(String surveyId) async =>
+      _bomSnapshots[surveyId];
+
+  @override
+  Future<List<BomSnapshotLine>> getBomSnapshotLines(String snapshotId) async =>
+      List.unmodifiable(_bomSnapshotLines[snapshotId] ?? const []);
+
+  @override
+  Future<BomSnapshot> finalizeBom({
+    required String surveyId,
+    required List<BomSnapshotLine> lines,
+    required String finalizedBy,
+  }) async {
+    final existing = _bomSnapshots[surveyId];
+    if (existing != null) return existing;
+
+    final snapshot = BomSnapshot(
+      id: _idService.newId(),
+      surveyId: surveyId,
+      finalizedBy: finalizedBy,
+      finalizedAt: DateTime.now(),
+    );
+    _bomSnapshots[surveyId] = snapshot;
+    _bomSnapshotLines[snapshot.id] = [
+      for (final line in lines)
+        line.copyWithIds(id: _idService.newId(), snapshotId: snapshot.id),
+    ];
+
+    final site = _sites[surveyId];
+    if (site != null) {
+      _sites[surveyId] = Site(
+        id: site.id,
+        name: site.name,
+        blocks: site.blocks,
+        clientInputs: site.clientInputs,
+        status: site.status,
+        assignedTo: site.assignedTo,
+        bomLocked: true,
+      );
+    }
+
+    return snapshot;
   }
 }

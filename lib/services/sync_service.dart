@@ -23,6 +23,7 @@ class SyncResult {
     this.materialMasterAuditEntries = 0,
     this.photos = 0,
     this.bomManualEntries = 0,
+    this.bomSnapshots = 0,
     this.message,
   });
 
@@ -39,6 +40,7 @@ class SyncResult {
   final int materialMasterAuditEntries;
   final int photos;
   final int bomManualEntries;
+  final int bomSnapshots;
   final String? message;
 }
 
@@ -81,6 +83,7 @@ class SyncService {
       var gateways = 0;
       var footers = 0;
       var bomManualEntries = 0;
+      var bomSnapshots = 0;
       for (final site in sites) {
         // Site (and its blocks/client inputs) first — children FK to it.
         await _remote.pushSite(site);
@@ -122,6 +125,16 @@ class SyncService {
           await _remote.pushBomManualEntry(entry);
         }
         bomManualEntries += manualEntries.length;
+
+        final snapshot = await _repository.getBomSnapshot(site.id);
+        if (snapshot != null) {
+          await _remote.pushBomSnapshot(snapshot);
+          final lines = await _repository.getBomSnapshotLines(snapshot.id);
+          for (final line in lines) {
+            await _remote.pushBomSnapshotLine(line);
+          }
+          bomSnapshots++;
+        }
       }
 
       // Material Master is global reference data, not site-scoped — push the
@@ -160,6 +173,7 @@ class SyncService {
         materialMasterAuditEntries: auditEntries.length,
         photos: photos,
         bomManualEntries: bomManualEntries,
+        bomSnapshots: bomSnapshots,
       );
     } on PostgrestException catch (e) {
       return SyncResult(

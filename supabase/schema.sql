@@ -377,3 +377,58 @@ alter table public.bom_manual_entries enable row level security;
 drop policy if exists "dev all - bom_manual_entries" on public.bom_manual_entries;
 create policy "dev all - bom_manual_entries" on public.bom_manual_entries
   for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
+-- Finalize — freezes the current BoM as an immutable version-1 snapshot.
+--
+-- `bom_locked` defaults to false, so every existing survey stays unlocked
+-- until explicitly finalized. bom_snapshots is one row per survey in this
+-- slice (version always 1; no revisions/re-finalize flow yet), FK'd to sites.
+-- bom_snapshot_lines is NOT linked to material_master_items or
+-- bom_manual_entries by id — sku/item/unit/qty/group are copied in at
+-- finalize time, so editing either later cannot alter an existing snapshot.
+-- `group_code` stores the literal 'A'..'G' (see the matching comment on
+-- bom_manual_entries above for why this differs from
+-- material_master_items.group_code); `source` stores literal 'auto'|'manual'.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.sites
+  add column if not exists bom_locked boolean not null default false;
+
+create table if not exists public.bom_snapshots (
+  id            text primary key,
+  survey_id     text not null references public.sites (id) on delete cascade,
+  version       integer not null default 1,
+  status        text not null,   -- literal: 'final' (no other status exists yet)
+  finalized_by  text not null,   -- role label, e.g. "Engineer" (shared login)
+  finalized_at  text not null    -- ISO-8601 string (mirrors SQLite TEXT storage)
+);
+
+create index if not exists bom_snapshots_survey_idx
+  on public.bom_snapshots (survey_id);
+
+create table if not exists public.bom_snapshot_lines (
+  id          text primary key,
+  snapshot_id text not null references public.bom_snapshots (id) on delete cascade,
+  sku         text,
+  item        text not null,
+  unit        text not null,
+  qty         double precision not null,
+  group_code  text not null,   -- literal: 'A'..'G'
+  source      text not null    -- literal: 'auto' | 'manual'
+);
+
+create index if not exists bom_snapshot_lines_snapshot_idx
+  on public.bom_snapshot_lines (snapshot_id);
+
+alter table public.bom_snapshots      enable row level security;
+alter table public.bom_snapshot_lines enable row level security;
+
+drop policy if exists "dev all - bom_snapshots" on public.bom_snapshots;
+create policy "dev all - bom_snapshots" on public.bom_snapshots
+  for all to anon, authenticated using (true) with check (true);
+
+drop policy if exists "dev all - bom_snapshot_lines" on public.bom_snapshot_lines;
+create policy "dev all - bom_snapshot_lines" on public.bom_snapshot_lines
+  for all to anon, authenticated using (true) with check (true);
