@@ -14,6 +14,7 @@ import '../models/source_point.dart';
 import '../services/bom_engine.dart';
 import '../services/bom_excel_exporter.dart';
 import '../services/bom_revision_engine.dart';
+import '../services/sun_bom_exporter.dart';
 import 'bom_manual_entries_screen.dart';
 import 'bom_revisions_screen.dart';
 
@@ -43,6 +44,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Map<MaterialGroup, List<BomLine>>? _bom;
   bool _loading = true;
   bool _exporting = false;
+  bool _exportingSunBom = false;
   bool _finalizing = false;
 
   // Loaded inputs, kept so export can recompute per-block without re-fetching.
@@ -290,6 +292,38 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       ? line.materialName
       : '${line.materialName} (${line.variantLabel})';
 
+  /// v1 snapshot lines + every revision's deltas, summed per (sku, item).
+  /// Empty when the survey isn't locked yet (both source lists are empty).
+  List<BomRunningTotalLine> get _runningTotal =>
+      const BomRevisionEngine().computeRunningTotal(
+        snapshotLines: _snapshotLines,
+        revisionLines: _allRevisionLines,
+      );
+
+  /// Exports the current running total (latest only — an older version's
+  /// export is a later slice) as a Sun_BOM .xlsx and opens the share sheet.
+  Future<void> _exportSunBom() async {
+    setState(() => _exportingSunBom = true);
+    try {
+      final path = await const SunBomExporter().export(
+        siteName: widget.site.name,
+        lines: _runningTotal,
+      );
+      if (!mounted) return;
+      setState(() => _exportingSunBom = false);
+      await Share.shareXFiles(
+        [XFile(path)],
+        subject: 'Sun_BOM — ${widget.site.name}',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _exportingSunBom = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not export Sun_BOM: $e')),
+      );
+    }
+  }
+
   Future<void> _export() async {
     setState(() => _exporting = true);
     try {
@@ -320,12 +354,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
         !locked && bom != null && bom.values.every((l) => l.isEmpty);
     final canExport = !_loading && !hasNoMaterials;
     final canFinalize = !_loading && !locked && !hasNoMaterials;
-    final runningTotal = locked
-        ? const BomRevisionEngine().computeRunningTotal(
-            snapshotLines: _snapshotLines,
-            revisionLines: _allRevisionLines,
-          )
-        : const <BomRunningTotalLine>[];
+    final runningTotal = _runningTotal;
 
     return Scaffold(
       appBar: AppBar(
@@ -346,6 +375,18 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
               tooltip: 'Version history / add revision',
               onPressed: _openRevisions,
               icon: const Icon(Icons.history),
+            ),
+          if (locked)
+            IconButton(
+              tooltip: 'Export BoM (Sun_BOM)',
+              onPressed: _exportingSunBom ? null : _exportSunBom,
+              icon: _exportingSunBom
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.grid_on_outlined),
             ),
           IconButton(
             tooltip: 'Add materials (D/E/G)',
