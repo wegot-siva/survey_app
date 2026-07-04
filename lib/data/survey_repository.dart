@@ -1,4 +1,6 @@
 import '../models/bom_manual_entry.dart';
+import '../models/bom_revision.dart';
+import '../models/bom_revision_line.dart';
 import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
@@ -177,5 +179,31 @@ abstract class SurveyRepository {
     required String surveyId,
     required List<BomSnapshotLine> lines,
     required String finalizedBy,
+  });
+
+  // ---- BoM revisions (additive deltas on top of a locked v1 snapshot) ------
+  //
+  // Version 2+ only — v1 is the BomSnapshot above. A revision's own row and
+  // its lines never change after creation; a later correction is a new
+  // revision, not an edit. The running total (see BomRevisionEngine) is
+  // computed on read only, from the v1 snapshot lines plus every revision's
+  // delta lines — no per-version total is ever stored.
+
+  /// All revisions for a survey, oldest first (v2, v3, ...). Empty if the
+  /// survey has no revisions yet.
+  Future<List<BomRevision>> getBomRevisions(String surveyId);
+
+  /// One revision's delta lines, in the order they were written.
+  Future<List<BomRevisionLine>> getBomRevisionLines(String revisionId);
+
+  /// Creates a new revision — version is (the survey's highest existing
+  /// revision version, or 1 if it has none) + 1 — plus its delta lines, in
+  /// one atomic write. [lines]' `id` / `revisionId` are ignored (assigned
+  /// fresh).
+  Future<BomRevision> addBomRevision({
+    required String surveyId,
+    required String reason,
+    required List<BomRevisionLine> lines,
+    required String createdBy,
   });
 }

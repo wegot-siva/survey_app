@@ -3,6 +3,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/survey_repository.dart';
 import '../models/bom_line.dart';
+import '../models/bom_revision_line.dart';
 import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/duct_lora.dart';
@@ -12,7 +13,9 @@ import '../models/site.dart';
 import '../models/source_point.dart';
 import '../services/bom_engine.dart';
 import '../services/bom_excel_exporter.dart';
+import '../services/bom_revision_engine.dart';
 import 'bom_manual_entries_screen.dart';
+import 'bom_revisions_screen.dart';
 
 /// On-screen BoM preview for one site (Material Master phase). Reads
 /// Material Master rows + the site's survey data, runs [BomEngine], and shows
@@ -54,6 +57,15 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   BomSnapshot? _snapshot;
   List<BomSnapshotLine> _snapshotLines = const [];
 
+  // Every revision's delta lines, flattened across all revisions (v2+), for
+  // computing the running total. Which revision each line came from doesn't
+  // matter here — that detail lives in BomRevisionsScreen's history view.
+  List<BomRevisionLine> _allRevisionLines = const [];
+
+  // Toggles the locked view between the running total (default — the
+  // operationally relevant number) and the v1 frozen snapshot.
+  bool _showRunningTotal = true;
+
   @override
   void initState() {
     super.initState();
@@ -85,6 +97,18 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
         ? const <BomSnapshotLine>[]
         : await widget.repository.getBomSnapshotLines(snapshot.id);
 
+    var allRevisionLines = const <BomRevisionLine>[];
+    if (snapshot != null) {
+      final revisions = await widget.repository.getBomRevisions(
+        widget.site.id,
+      );
+      final lines = <BomRevisionLine>[];
+      for (final revision in revisions) {
+        lines.addAll(await widget.repository.getBomRevisionLines(revision.id));
+      }
+      allRevisionLines = lines;
+    }
+
     if (!mounted) return;
     setState(() {
       _materials = materials;
@@ -94,6 +118,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       _bom = bom;
       _snapshot = snapshot;
       _snapshotLines = snapshotLines;
+      _allRevisionLines = allRevisionLines;
       _loading = false;
     });
   }
@@ -171,6 +196,23 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     );
     // Manual entries aren't part of the computed BoM shown here yet
     // (mechanics only this slice) — no need to regenerate on return.
+  }
+
+  /// Opens the version history (v1 + every revision), each viewable, with
+  /// its own "Add revision" action. Only reachable once the survey is locked.
+  Future<void> _openRevisions() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BomRevisionsScreen(
+          repository: widget.repository,
+          surveyId: widget.site.id,
+          surveyName: widget.site.name,
+          createdByRole: widget.addedByRole,
+        ),
+      ),
+    );
+    // A revision may have been added — refresh the running total.
+    await _generate();
   }
 
   /// Freezes the current BoM (live A/B/C/F + D/E/G manual entries) as an
@@ -278,6 +320,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
         !locked && bom != null && bom.values.every((l) => l.isEmpty);
     final canExport = !_loading && !hasNoMaterials;
     final canFinalize = !_loading && !locked && !hasNoMaterials;
+    final runningTotal = locked
+        ? const BomRevisionEngine().computeRunningTotal(
+            snapshotLines: _snapshotLines,
+            revisionLines: _allRevisionLines,
+          )
+        : const <BomRunningTotalLine>[];
 
     return Scaffold(
       appBar: AppBar(
@@ -292,6 +340,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                   avatar: Icon(Icons.lock_outline, size: 18),
                 ),
               ),
+            ),
+          if (locked)
+            IconButton(
+              tooltip: 'Version history / add revision',
+              onPressed: _openRevisions,
+              icon: const Icon(Icons.history),
             ),
           IconButton(
             tooltip: 'Add materials (D/E/G)',
@@ -339,17 +393,50 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
               ),
             )
           : locked
-          ? ListView(
-              padding: const EdgeInsets.all(16),
+          ? Column(
               children: [
-                for (final group in MaterialGroup.values)
-                  if (_snapshotLines.any((l) => l.group == group))
-                    _SnapshotGroupSection(
-                      group: group,
-                      lines: _snapshotLines
-                          .where((l) => l.group == group)
-                          .toList(),
-                    ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                  child: SegmentedButton<bool>(
+                    showSelectedIcon: false,
+                    segments: const [
+                      ButtonSegment(value: true, label: Text('Running total')),
+                      ButtonSegment(value: false, label: Text('v1 (Frozen)')),
+                    ],
+                    selected: {_showRunningTotal},
+                    onSelectionChanged: (sel) =>
+                        setState(() => _showRunningTotal = sel.first),
+                  ),
+                ),
+                Expanded(
+                  child: _showRunningTotal
+                      ? ListView(
+                          padding: const EdgeInsets.all(16),
+                          children: [
+                            for (final group in MaterialGroup.values)
+                              if (runningTotal.any((l) => l.group == group))
+                                _RunningTotalGroupSection(
+                                  group: group,
+                                  lines: runningTotal
+                                      .where((l) => l.group == group)
+                                      .toList(),
+                                ),
+                          ],
+                        )
+                      : ListView(
+                          padding: const EdgeInsets.all(16),
+                          children: [
+                            for (final group in MaterialGroup.values)
+                              if (_snapshotLines.any((l) => l.group == group))
+                                _SnapshotGroupSection(
+                                  group: group,
+                                  lines: _snapshotLines
+                                      .where((l) => l.group == group)
+                                      .toList(),
+                                ),
+                          ],
+                        ),
+                ),
               ],
             )
           : ListView(
@@ -474,6 +561,77 @@ class _SnapshotLineRow extends StatelessWidget {
       trailing: Text(
         '${_formatQuantity(line.qty)} ${line.unit}',
         style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  static String _formatQuantity(double q) {
+    return q == q.roundToDouble() ? q.toInt().toString() : q.toStringAsFixed(2);
+  }
+}
+
+/// Read-only rendering of one group's running-total lines (v1 + every
+/// revision's deltas, summed). Mirrors [_GroupSection]'s look.
+class _RunningTotalGroupSection extends StatelessWidget {
+  const _RunningTotalGroupSection({required this.group, required this.lines});
+
+  final MaterialGroup group;
+  final List<BomRunningTotalLine> lines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: double.infinity,
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Text(
+                '${group.code} — ${group.label}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                ),
+              ),
+            ),
+            for (final line in lines) _RunningTotalLineRow(line: line),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RunningTotalLineRow extends StatelessWidget {
+  const _RunningTotalLineRow({required this.line});
+
+  final BomRunningTotalLine line;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      title: Text(line.sku.isEmpty ? line.item : '${line.item} (${line.sku})'),
+      subtitle: line.isBelowZero
+          ? Text(
+              'Revisions push this below zero — showing 0',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            )
+          : null,
+      leading: line.isBelowZero
+          ? Icon(Icons.warning_amber_rounded, color: Theme.of(context).colorScheme.error)
+          : null,
+      trailing: Text(
+        '${_formatQuantity(line.displayQty)} ${line.unit}',
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: line.isBelowZero ? Theme.of(context).colorScheme.error : null,
+        ),
       ),
     );
   }

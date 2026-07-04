@@ -231,7 +231,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   '• ${result.bomManualEntries} manual BoM entr'
                   '${result.bomManualEntries == 1 ? 'y' : 'ies'}\n'
                   '• ${result.bomSnapshots} finalized BoM snapshot'
-                  '${result.bomSnapshots == 1 ? '' : 's'}',
+                  '${result.bomSnapshots == 1 ? '' : 's'}\n'
+                  '• ${result.bomRevisions} BoM revision'
+                  '${result.bomRevisions == 1 ? '' : 's'}',
                 )
               : SelectableText(result.message ?? 'Unknown error.'),
         ),

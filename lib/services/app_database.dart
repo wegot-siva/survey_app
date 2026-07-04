@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 11;
+const int _dbVersion = 12;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -85,6 +85,13 @@ Future<Database> openAppDatabase() async {
         await _createBomSnapshotsTable(db);
         await _createBomSnapshotLinesTable(db);
       }
+      // v11 -> v12: BoM revisions — additive delta layers (v2+) on top of a
+      // locked v1 snapshot. Running total is computed on read only; no
+      // per-version snapshot is stored, so nothing else changes.
+      if (oldVersion < 12) {
+        await _createBomRevisionsTable(db);
+        await _createBomRevisionLinesTable(db);
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -142,6 +149,8 @@ Future<Database> openAppDatabase() async {
       await _createBomManualEntriesTable(db);
       await _createBomSnapshotsTable(db);
       await _createBomSnapshotLinesTable(db);
+      await _createBomRevisionsTable(db);
+      await _createBomRevisionLinesTable(db);
     },
   );
 }
@@ -454,5 +463,51 @@ Future<void> _createBomSnapshotLinesTable(Database db) async {
   await db.execute(
     'CREATE INDEX bom_snapshot_lines_snapshot_idx '
     'ON bom_snapshot_lines (snapshot_id)',
+  );
+}
+
+/// BoM revisions table (v12) — additive delta layers (version 2+) on top of
+/// a survey's locked v1 snapshot. FK'd to sites (cascade delete), like
+/// bom_manual_entries. A revision's own row never changes after creation; a
+/// later correction is a new revision, not an edit.
+Future<void> _createBomRevisionsTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE bom_revisions (
+      id          TEXT PRIMARY KEY,
+      survey_id   TEXT NOT NULL,
+      version     INTEGER NOT NULL,
+      reason      TEXT NOT NULL,
+      created_by  TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX bom_revisions_survey_idx ON bom_revisions (survey_id)',
+  );
+}
+
+/// BoM revision lines table (v12) — the delta values of one [BomRevision].
+/// FK'd to bom_revisions (cascade delete); NOT linked to material_master_items
+/// by id — sku/item/unit are copied in at the moment the picker's dropdown
+/// selection is made, same convention as bom_manual_entries and
+/// bom_snapshot_lines. `qty_delta` may be negative. `group_code` stores the
+/// literal 'A'..'G' (a revision line is not restricted to D/E/G).
+Future<void> _createBomRevisionLinesTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE bom_revision_lines (
+      id          TEXT PRIMARY KEY,
+      revision_id TEXT NOT NULL,
+      sku         TEXT,
+      item        TEXT NOT NULL,
+      unit        TEXT NOT NULL,
+      qty_delta   REAL NOT NULL,
+      group_code  TEXT NOT NULL,
+      FOREIGN KEY (revision_id) REFERENCES bom_revisions (id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX bom_revision_lines_revision_idx '
+    'ON bom_revision_lines (revision_id)',
   );
 }

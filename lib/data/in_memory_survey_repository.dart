@@ -1,4 +1,6 @@
 import '../models/bom_manual_entry.dart';
+import '../models/bom_revision.dart';
+import '../models/bom_revision_line.dart';
 import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
@@ -34,6 +36,8 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, BomManualEntry> _bomManualEntries = {};
   final Map<String, BomSnapshot> _bomSnapshots = {}; // keyed by surveyId
   final Map<String, List<BomSnapshotLine>> _bomSnapshotLines = {}; // keyed by snapshotId
+  final Map<String, BomRevision> _bomRevisions = {}; // keyed by id
+  final Map<String, List<BomRevisionLine>> _bomRevisionLines = {}; // keyed by revisionId
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -363,5 +367,46 @@ class InMemorySurveyRepository implements SurveyRepository {
     }
 
     return snapshot;
+  }
+
+  @override
+  Future<List<BomRevision>> getBomRevisions(String surveyId) async {
+    final list =
+        _bomRevisions.values.where((r) => r.surveyId == surveyId).toList()
+          ..sort((a, b) => a.version.compareTo(b.version));
+    return List.unmodifiable(list);
+  }
+
+  @override
+  Future<List<BomRevisionLine>> getBomRevisionLines(String revisionId) async =>
+      List.unmodifiable(_bomRevisionLines[revisionId] ?? const []);
+
+  @override
+  Future<BomRevision> addBomRevision({
+    required String surveyId,
+    required String reason,
+    required List<BomRevisionLine> lines,
+    required String createdBy,
+  }) async {
+    final existingVersions = await getBomRevisions(surveyId);
+    final nextVersion = existingVersions.isEmpty
+        ? 2
+        : existingVersions.map((r) => r.version).reduce((a, b) => a > b ? a : b) + 1;
+
+    final revision = BomRevision(
+      id: _idService.newId(),
+      surveyId: surveyId,
+      version: nextVersion,
+      reason: reason,
+      createdBy: createdBy,
+      createdAt: DateTime.now(),
+    );
+    _bomRevisions[revision.id] = revision;
+    _bomRevisionLines[revision.id] = [
+      for (final line in lines)
+        line.copyWithIds(id: _idService.newId(), revisionId: revision.id),
+    ];
+
+    return revision;
   }
 }

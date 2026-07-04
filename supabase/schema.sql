@@ -432,3 +432,55 @@ create policy "dev all - bom_snapshots" on public.bom_snapshots
 drop policy if exists "dev all - bom_snapshot_lines" on public.bom_snapshot_lines;
 create policy "dev all - bom_snapshot_lines" on public.bom_snapshot_lines
   for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
+-- BoM revisions — additive delta layers (version 2+) on top of a survey's
+-- locked v1 snapshot.
+--
+-- A revision's own row and its lines never change after creation — a later
+-- correction is a NEW revision, not an edit. Like bom_snapshot_lines,
+-- bom_revision_lines is NOT linked to material_master_items by id — sku/item/
+-- unit are copied in when the picker's dropdown selection is made.
+-- `qty_delta` may be negative (reduces the running total for that sku/item).
+-- `group_code` stores the literal 'A'..'G' — a revision line is not
+-- restricted to D/E/G like bom_manual_entries. The running total itself
+-- (v1 snapshot lines + every revision's deltas) is computed on read only;
+-- no per-version total is stored anywhere.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.bom_revisions (
+  id          text primary key,
+  survey_id   text not null references public.sites (id) on delete cascade,
+  version     integer not null,   -- 2, 3, 4, ... (v1 is bom_snapshots, not this table)
+  reason      text not null,      -- required: why this change was made
+  created_by  text not null,      -- role label, e.g. "Engineer" (shared login)
+  created_at  text not null       -- ISO-8601 string (mirrors SQLite TEXT storage)
+);
+
+create index if not exists bom_revisions_survey_idx
+  on public.bom_revisions (survey_id);
+
+create table if not exists public.bom_revision_lines (
+  id          text primary key,
+  revision_id text not null references public.bom_revisions (id) on delete cascade,
+  sku         text,
+  item        text not null,
+  unit        text not null,
+  qty_delta   double precision not null,
+  group_code  text not null   -- literal: 'A'..'G'
+);
+
+create index if not exists bom_revision_lines_revision_idx
+  on public.bom_revision_lines (revision_id);
+
+alter table public.bom_revisions      enable row level security;
+alter table public.bom_revision_lines enable row level security;
+
+drop policy if exists "dev all - bom_revisions" on public.bom_revisions;
+create policy "dev all - bom_revisions" on public.bom_revisions
+  for all to anon, authenticated using (true) with check (true);
+
+drop policy if exists "dev all - bom_revision_lines" on public.bom_revision_lines;
+create policy "dev all - bom_revision_lines" on public.bom_revision_lines
+  for all to anon, authenticated using (true) with check (true);

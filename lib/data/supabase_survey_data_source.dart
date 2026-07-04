@@ -4,6 +4,8 @@ import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/bom_manual_entry.dart';
+import '../models/bom_revision.dart';
+import '../models/bom_revision_line.dart';
 import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
@@ -151,6 +153,20 @@ class SupabaseSurveyDataSource {
     await _client
         .from('bom_snapshot_lines')
         .upsert(_bomSnapshotLineToRemoteRow(line));
+  }
+
+  /// Upserts a BoM revision by its id (idempotent). The parent site must
+  /// already have been pushed (FK).
+  Future<void> pushBomRevision(BomRevision revision) async {
+    await _client.from('bom_revisions').upsert(_bomRevisionToRemoteRow(revision));
+  }
+
+  /// Upserts a BoM revision line by its id (idempotent). The parent revision
+  /// must already have been pushed (FK).
+  Future<void> pushBomRevisionLine(BomRevisionLine line) async {
+    await _client
+        .from('bom_revision_lines')
+        .upsert(_bomRevisionLineToRemoteRow(line));
   }
 }
 
@@ -385,5 +401,30 @@ Map<String, Object?> _bomSnapshotLineToRemoteRow(BomSnapshotLine l) {
     // sqflite_survey_repository.dart's _bomSnapshotLineToRow.
     'group_code': l.group.code,
     'source': l.source.name, // literal 'auto' | 'manual'
+  };
+}
+
+Map<String, Object?> _bomRevisionToRemoteRow(BomRevision v) {
+  return {
+    'id': v.id,
+    'survey_id': v.surveyId,
+    'version': v.version,
+    'reason': v.reason,
+    'created_by': v.createdBy,
+    'created_at': v.createdAt.toIso8601String(),
+  };
+}
+
+Map<String, Object?> _bomRevisionLineToRemoteRow(BomRevisionLine l) {
+  return {
+    'id': l.id,
+    'revision_id': l.revisionId,
+    'sku': l.sku,
+    'item': l.item,
+    'unit': l.unit,
+    'qty_delta': l.qtyDelta,
+    // Literal 'A'..'G' — see the matching comment in
+    // sqflite_survey_repository.dart's _bomRevisionLineToRow.
+    'group_code': l.group.code,
   };
 }

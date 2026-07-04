@@ -1,6 +1,8 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../models/bom_manual_entry.dart';
+import '../models/bom_revision.dart';
+import '../models/bom_revision_line.dart';
 import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
@@ -598,6 +600,65 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
     return snapshot;
   }
+
+  // ---- BoM revisions ----------------------------------------------------
+
+  @override
+  Future<List<BomRevision>> getBomRevisions(String surveyId) async {
+    final rows = await _db.query(
+      'bom_revisions',
+      where: 'survey_id = ?',
+      whereArgs: [surveyId],
+      orderBy: 'version',
+    );
+    return rows.map(_bomRevisionFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<List<BomRevisionLine>> getBomRevisionLines(String revisionId) async {
+    final rows = await _db.query(
+      'bom_revision_lines',
+      where: 'revision_id = ?',
+      whereArgs: [revisionId],
+      orderBy: 'group_code, rowid',
+    );
+    return rows.map(_bomRevisionLineFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<BomRevision> addBomRevision({
+    required String surveyId,
+    required String reason,
+    required List<BomRevisionLine> lines,
+    required String createdBy,
+  }) async {
+    final existingVersions = await getBomRevisions(surveyId);
+    final nextVersion = existingVersions.isEmpty
+        ? 2
+        : existingVersions.map((r) => r.version).reduce((a, b) => a > b ? a : b) + 1;
+
+    final revision = BomRevision(
+      id: _idService.newId(),
+      surveyId: surveyId,
+      version: nextVersion,
+      reason: reason,
+      createdBy: createdBy,
+      createdAt: DateTime.now(),
+    );
+
+    await _db.transaction((txn) async {
+      await txn.insert('bom_revisions', _bomRevisionToRow(revision));
+      for (final line in lines) {
+        final stored = line.copyWithIds(
+          id: _idService.newId(),
+          revisionId: revision.id,
+        );
+        await txn.insert('bom_revision_lines', _bomRevisionLineToRow(stored));
+      }
+    });
+
+    return revision;
+  }
 }
 
 // ---- Row <-> model mapping (hand-written, no codegen) -----------------------
@@ -1131,5 +1192,54 @@ BomSnapshotLine _bomSnapshotLineFromRow(Map<String, Object?> r) {
     source:
         _enumByName(BomSnapshotSource.values, r['source'] as String?) ??
         BomSnapshotSource.auto,
+  );
+}
+
+Map<String, Object?> _bomRevisionToRow(BomRevision v) {
+  return {
+    'id': v.id,
+    'survey_id': v.surveyId,
+    'version': v.version,
+    'reason': v.reason,
+    'created_by': v.createdBy,
+    'created_at': v.createdAt.toIso8601String(),
+  };
+}
+
+BomRevision _bomRevisionFromRow(Map<String, Object?> r) {
+  return BomRevision(
+    id: r['id']! as String,
+    surveyId: r['survey_id']! as String,
+    version: (r['version'] as int?) ?? 2,
+    reason: (r['reason'] as String?) ?? '',
+    createdBy: (r['created_by'] as String?) ?? '',
+    createdAt:
+        DateTime.tryParse((r['created_at'] as String?) ?? '') ?? DateTime(1970),
+  );
+}
+
+Map<String, Object?> _bomRevisionLineToRow(BomRevisionLine l) {
+  return {
+    'id': l.id,
+    'revision_id': l.revisionId,
+    'sku': l.sku,
+    'item': l.item,
+    'unit': l.unit,
+    'qty_delta': l.qtyDelta,
+    // Literal 'A'..'G' — mirrors bom_snapshot_lines.group_code; a revision
+    // line is not restricted to D/E/G like bom_manual_entries.
+    'group_code': l.group.code,
+  };
+}
+
+BomRevisionLine _bomRevisionLineFromRow(Map<String, Object?> r) {
+  return BomRevisionLine(
+    id: r['id']! as String,
+    revisionId: r['revision_id']! as String,
+    sku: (r['sku'] as String?) ?? '',
+    item: (r['item'] as String?) ?? '',
+    unit: (r['unit'] as String?) ?? '',
+    qtyDelta: (r['qty_delta'] as num?)?.toDouble() ?? 0,
+    group: _materialGroupFromAnyCode(r['group_code'] as String?),
   );
 }
