@@ -3,6 +3,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/survey_repository.dart';
 import '../models/bom_line.dart';
+import '../models/bom_revision.dart';
 import '../models/bom_revision_line.dart';
 import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
@@ -10,9 +11,15 @@ import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../services/bom_engine.dart';
 import '../services/bom_revision_engine.dart';
+import '../services/lumax_exporter.dart';
 import '../services/sun_bom_exporter.dart';
 import 'bom_manual_entries_screen.dart';
 import 'bom_revisions_screen.dart';
+
+/// Which export formatter to use — both read the same running-total data
+/// (see [_BomPreviewScreenState._cumulativeTotalForVersion]); only the
+/// output layout differs.
+enum _ExportFormat { sunBom, lumax }
 
 /// On-screen BoM preview for one site (Material Master phase). Reads
 /// Material Master rows + the site's survey data, runs [BomEngine], and shows
@@ -39,7 +46,7 @@ class BomPreviewScreen extends StatefulWidget {
 class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Map<MaterialGroup, List<BomLine>>? _bom;
   bool _loading = true;
-  bool _exportingSunBom = false;
+  bool _exporting = false;
   bool _finalizing = false;
 
   // Set once a survey has been finalized. Non-null means the review screen
@@ -48,14 +55,29 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   BomSnapshot? _snapshot;
   List<BomSnapshotLine> _snapshotLines = const [];
 
-  // Every revision's delta lines, flattened across all revisions (v2+), for
-  // computing the running total. Which revision each line came from doesn't
-  // matter here — that detail lives in BomRevisionsScreen's history view.
-  List<BomRevisionLine> _allRevisionLines = const [];
+  // Every revision (v2+) for this survey, oldest first, plus its delta
+  // lines keyed by revision id — kept separate (rather than one flattened
+  // list) so a cumulative total can be computed for any version, not just
+  // the latest. See _cumulativeTotalForVersion.
+  List<BomRevision> _revisions = const [];
+  Map<String, List<BomRevisionLine>> _revisionLinesByRevision = const {};
 
   // Toggles the locked view between the running total (default — the
   // operationally relevant number) and the v1 frozen snapshot.
   bool _showRunningTotal = true;
+
+  // Which version Export reads from. Defaults to the latest version every
+  // time the screen (re)loads — see _generate.
+  int _selectedExportVersion = 1;
+
+  // Which output format Export writes. Defaults to Sun_BOM — current
+  // behavior is unchanged unless this is touched.
+  _ExportFormat _selectedExportFormat = _ExportFormat.sunBom;
+
+  // Display-only filter: hides zero-qty rows (and groups with none left)
+  // in every on-screen view. Default OFF = hidden. Never affects export,
+  // which already excludes zero-qty rows/empty groups on its own.
+  bool _showAllItems = false;
 
   @override
   void initState() {
@@ -88,16 +110,17 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
         ? const <BomSnapshotLine>[]
         : await widget.repository.getBomSnapshotLines(snapshot.id);
 
-    var allRevisionLines = const <BomRevisionLine>[];
+    var revisions = const <BomRevision>[];
+    var revisionLinesByRevision = const <String, List<BomRevisionLine>>{};
     if (snapshot != null) {
-      final revisions = await widget.repository.getBomRevisions(
-        widget.site.id,
-      );
-      final lines = <BomRevisionLine>[];
+      revisions = await widget.repository.getBomRevisions(widget.site.id);
+      final byRevision = <String, List<BomRevisionLine>>{};
       for (final revision in revisions) {
-        lines.addAll(await widget.repository.getBomRevisionLines(revision.id));
+        byRevision[revision.id] = await widget.repository.getBomRevisionLines(
+          revision.id,
+        );
       }
-      allRevisionLines = lines;
+      revisionLinesByRevision = byRevision;
     }
 
     if (!mounted) return;
@@ -105,9 +128,29 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       _bom = bom;
       _snapshot = snapshot;
       _snapshotLines = snapshotLines;
-      _allRevisionLines = allRevisionLines;
+      _revisions = revisions;
+      _revisionLinesByRevision = revisionLinesByRevision;
+      // Reset to the latest version on every (re)load — see the field doc.
+      _selectedExportVersion = revisions.isEmpty ? 1 : revisions.last.version;
       _loading = false;
     });
+  }
+
+  int get _latestVersion => _revisions.isEmpty ? 1 : _revisions.last.version;
+
+  /// The cumulative total *as of* [version]: v1 snapshot lines plus every
+  /// revision up through (and including) [version] — not just that
+  /// version's own delta. [version] 1 yields the v1 snapshot alone.
+  List<BomRunningTotalLine> _cumulativeTotalForVersion(int version) {
+    final lines = <BomRevisionLine>[
+      for (final revision in _revisions)
+        if (revision.version <= version)
+          ...(_revisionLinesByRevision[revision.id] ?? const []),
+    ];
+    return const BomRevisionEngine().computeRunningTotal(
+      snapshotLines: _snapshotLines,
+      revisionLines: lines,
+    );
   }
 
   /// Opens the D/E/G "Add materials" picker for this survey. Available any
@@ -186,6 +229,10 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
               snapshotId: '',
               sku: line.sku,
               item: _snapshotItemLabel(line),
+              materialName: line.materialName,
+              itemLabel: line.itemLabel,
+              sensorSize: line.sensorSize,
+              sensorType: line.sensorType,
               unit: line.unit,
               qty: line.quantity,
               group: line.group,
@@ -197,6 +244,10 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           snapshotId: '',
           sku: entry.sku,
           item: entry.materialName,
+          materialName: entry.materialName,
+          itemLabel: entry.itemLabel,
+          sensorSize: entry.sensorSize,
+          sensorType: entry.sensorType,
           unit: entry.unit,
           qty: entry.qty,
           group: entry.group,
@@ -222,34 +273,154 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
 
   /// v1 snapshot lines + every revision's deltas, summed per (sku, item).
   /// Empty when the survey isn't locked yet (both source lists are empty).
+  /// Always the latest version, regardless of what Export has selected —
+  /// this feeds the on-screen "Running total" toggle, a separate,
+  /// already-decided display that Export's version selector doesn't affect.
   List<BomRunningTotalLine> get _runningTotal =>
-      const BomRevisionEngine().computeRunningTotal(
-        snapshotLines: _snapshotLines,
-        revisionLines: _allRevisionLines,
-      );
+      _cumulativeTotalForVersion(_latestVersion);
 
-  /// Exports the current running total (latest only — an older version's
-  /// export is a later slice) as a Sun_BOM .xlsx and opens the share sheet.
-  Future<void> _exportSunBom() async {
-    setState(() => _exportingSunBom = true);
+  /// Exports the cumulative total as of [_selectedExportVersion] (defaults
+  /// to latest), in whichever format [_selectedExportFormat] has selected,
+  /// and opens the share sheet. One shared data fetch
+  /// (_cumulativeTotalForVersion) feeds both formatters — only the output
+  /// layout differs.
+  Future<void> _exportBom() async {
+    setState(() => _exporting = true);
+    final formatName = _selectedExportFormat == _ExportFormat.lumax
+        ? 'Lumax'
+        : 'Sun_BOM';
     try {
-      final path = await const SunBomExporter().export(
-        siteName: widget.site.name,
-        lines: _runningTotal,
-      );
+      final lines = _cumulativeTotalForVersion(_selectedExportVersion);
+      final path = switch (_selectedExportFormat) {
+        _ExportFormat.sunBom => await const SunBomExporter().export(
+          siteName: widget.site.name,
+          lines: lines,
+        ),
+        _ExportFormat.lumax => await const LumaxExporter().export(
+          siteName: widget.site.name,
+          lines: lines,
+        ),
+      };
       if (!mounted) return;
-      setState(() => _exportingSunBom = false);
+      setState(() => _exporting = false);
       await Share.shareXFiles(
         [XFile(path)],
-        subject: 'Sun_BOM — ${widget.site.name}',
+        subject: '$formatName — ${widget.site.name}',
       );
     } catch (e) {
       if (!mounted) return;
-      setState(() => _exportingSunBom = false);
+      setState(() => _exporting = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not export Sun_BOM: $e')),
+        SnackBar(content: Text('Could not export $formatName: $e')),
       );
     }
+  }
+
+  /// Groups with no visible lines after filtering are simply skipped by the
+  /// callers below — this only decides which lines survive within a group.
+  List<BomLine> _visibleBomLines(MaterialGroup group, Map<MaterialGroup, List<BomLine>> bom) {
+    final lines = bom[group] ?? const [];
+    return _showAllItems ? lines : lines.where((l) => l.quantity > 0).toList();
+  }
+
+  List<BomRunningTotalLine> _visibleRunningTotal(List<BomRunningTotalLine> lines) =>
+      _showAllItems ? lines : lines.where((l) => l.rawQty > 0).toList();
+
+  List<BomSnapshotLine> _visibleSnapshotLines(List<BomSnapshotLine> lines) =>
+      _showAllItems ? lines : lines.where((l) => l.qty > 0).toList();
+
+  /// Format + version selectors for Export, living below the AppBar rather
+  /// than as AppBar actions — six wide items (chip, history icon, two
+  /// text-heavy dropdowns, export icon, add-materials icon) don't fit an
+  /// AppBar's fixed-width action row, and AppBar.actions doesn't wrap or
+  /// scroll; the ones furthest right (Export, Add materials) were the ones
+  /// silently clipped off-screen. A [Wrap] here can drop to a second line on
+  /// narrow screens instead of overflowing.
+  Widget _exportOptionsRow() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Wrap(
+        spacing: 16,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Format: '),
+              DropdownButtonHideUnderline(
+                child: DropdownButton<_ExportFormat>(
+                  value: _selectedExportFormat,
+                  onChanged: (f) {
+                    if (f != null) setState(() => _selectedExportFormat = f);
+                  },
+                  items: const [
+                    DropdownMenuItem(
+                      value: _ExportFormat.sunBom,
+                      child: Text('Sun_BOM format'),
+                    ),
+                    DropdownMenuItem(
+                      value: _ExportFormat.lumax,
+                      child: Text('Lumax format'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Version: '),
+              DropdownButtonHideUnderline(
+                child: DropdownButton<int>(
+                  value: _selectedExportVersion,
+                  onChanged: (v) {
+                    if (v != null) setState(() => _selectedExportVersion = v);
+                  },
+                  // Compact "vN" while closed; full "Export vN" in the menu.
+                  selectedItemBuilder: (context) => [
+                    for (var v = 1; v <= _latestVersion; v++) Text('v$v'),
+                  ],
+                  items: [
+                    for (var v = 1; v <= _latestVersion; v++)
+                      DropdownMenuItem(value: v, child: Text('Export v$v')),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _showAllItemsToggle() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Row(
+        children: [
+          Switch(
+            value: _showAllItems,
+            onChanged: (v) => setState(() => _showAllItems = v),
+          ),
+          const Text('Show all items (including zero quantity)'),
+        ],
+      ),
+    );
+  }
+
+  Widget _noVisibleItemsMessage() {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Text(
+          'Nothing has a quantity greater than 0 yet.\n\n'
+          'Toggle "Show all items" above to see the full catalog.',
+          textAlign: TextAlign.center,
+        ),
+      ),
+    );
   }
 
   @override
@@ -260,6 +431,11 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
         !locked && bom != null && bom.values.every((l) => l.isEmpty);
     final canFinalize = !_loading && !locked && !hasNoMaterials;
     final runningTotal = _runningTotal;
+    final visibleRunningTotal = _visibleRunningTotal(runningTotal);
+    final visibleSnapshotLines = _visibleSnapshotLines(_snapshotLines);
+    final visibleBom = bom == null
+        ? null
+        : {for (final g in MaterialGroup.values) g: _visibleBomLines(g, bom)};
 
     return Scaffold(
       appBar: AppBar(
@@ -281,14 +457,19 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
               onPressed: _openRevisions,
               icon: const Icon(Icons.history),
             ),
-          // Export is only offered once finalized: it emits the snapshot +
-          // revision running total (Sun_BOM format, zero-qty lines excluded),
-          // which doesn't exist until there's a v1 snapshot to read from.
+          // Format/version selectors live below the AppBar now — see
+          // _exportOptionsRow. Keeping AppBar.actions to fixed-size icons
+          // only guarantees it never overflows (AppBar.actions doesn't wrap
+          // or scroll), so Export stays reachable with one visible tap.
+          //
+          // Export is only offered once finalized: it emits the selected
+          // version's cumulative total in the selected format, zero-qty
+          // lines excluded, which doesn't exist until there's a v1 snapshot.
           if (locked)
             IconButton(
-              tooltip: 'Export BoM (Sun_BOM)',
-              onPressed: _exportingSunBom ? null : _exportSunBom,
-              icon: _exportingSunBom
+              tooltip: 'Export BoM',
+              onPressed: _exporting ? null : _exportBom,
+              icon: _exporting
                   ? const SizedBox(
                       width: 18,
                       height: 18,
@@ -333,6 +514,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           : locked
           ? Column(
               children: [
+                _exportOptionsRow(),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   child: SegmentedButton<bool>(
@@ -346,16 +528,24 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                         setState(() => _showRunningTotal = sel.first),
                   ),
                 ),
+                _showAllItemsToggle(),
                 Expanded(
-                  child: _showRunningTotal
+                  child:
+                      (_showRunningTotal
+                          ? visibleRunningTotal.isEmpty
+                          : visibleSnapshotLines.isEmpty)
+                      ? _noVisibleItemsMessage()
+                      : _showRunningTotal
                       ? ListView(
                           padding: const EdgeInsets.all(16),
                           children: [
                             for (final group in MaterialGroup.values)
-                              if (runningTotal.any((l) => l.group == group))
+                              if (visibleRunningTotal.any(
+                                (l) => l.group == group,
+                              ))
                                 _RunningTotalGroupSection(
                                   group: group,
-                                  lines: runningTotal
+                                  lines: visibleRunningTotal
                                       .where((l) => l.group == group)
                                       .toList(),
                                 ),
@@ -365,10 +555,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                           padding: const EdgeInsets.all(16),
                           children: [
                             for (final group in MaterialGroup.values)
-                              if (_snapshotLines.any((l) => l.group == group))
+                              if (visibleSnapshotLines.any(
+                                (l) => l.group == group,
+                              ))
                                 _SnapshotGroupSection(
                                   group: group,
-                                  lines: _snapshotLines
+                                  lines: visibleSnapshotLines
                                       .where((l) => l.group == group)
                                       .toList(),
                                 ),
@@ -377,12 +569,24 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                 ),
               ],
             )
-          : ListView(
-              padding: const EdgeInsets.all(16),
+          : Column(
               children: [
-                for (final group in MaterialGroup.values)
-                  if ((bom![group] ?? const []).isNotEmpty)
-                    _GroupSection(group: group, lines: bom[group]!),
+                _showAllItemsToggle(),
+                Expanded(
+                  child: visibleBom!.values.every((l) => l.isEmpty)
+                      ? _noVisibleItemsMessage()
+                      : ListView(
+                          padding: const EdgeInsets.all(16),
+                          children: [
+                            for (final group in MaterialGroup.values)
+                              if (visibleBom[group]!.isNotEmpty)
+                                _GroupSection(
+                                  group: group,
+                                  lines: visibleBom[group]!,
+                                ),
+                          ],
+                        ),
+                ),
               ],
             ),
     );
