@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../data/survey_repository.dart';
 import '../models/site.dart';
@@ -50,6 +51,36 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
         ),
       ),
     );
+    await _load();
+  }
+
+  /// Opens the standard Add form pre-filled from [source] (identity fields
+  /// and photos cleared — see [SourcePoint.copyAsDuplicate]), letting the
+  /// user review/adjust before it saves as a brand-new record.
+  Future<void> _duplicate(SourcePoint source) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SourcePointFormScreen(
+          repository: widget.repository,
+          site: widget.site,
+          duplicateFrom: source.copyAsDuplicate(),
+        ),
+      ),
+    );
+    await _load();
+  }
+
+  /// Creates [count] independent copies of [source] directly (no per-record
+  /// form review), each via the same [SurveyRepository.addSourcePoint] path
+  /// used everywhere else — not a shared template, so editing one later
+  /// never affects the others.
+  Future<void> _duplicateMany(SourcePoint source) async {
+    final count = await _promptForCount(context);
+    if (count == null) return;
+
+    for (var i = 0; i < count; i++) {
+      await widget.repository.addSourcePoint(source.copyAsDuplicate());
+    }
     await _load();
   }
 
@@ -120,17 +151,121 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
                 final sp = _points[i];
                 return ListTile(
                   leading: const Icon(Icons.water_drop_outlined),
-                  title: Text(_titleFor(sp)),
+                  title: Row(
+                    children: [
+                      Flexible(child: Text(_titleFor(sp))),
+                      if (sp.apartment.trim().isEmpty) ...[
+                        const SizedBox(width: 8),
+                        const _IncompleteBadge(),
+                      ],
+                    ],
+                  ),
                   subtitle: Text(_subtitleFor(sp)),
                   onTap: () => _addOrEdit(sp),
-                  trailing: IconButton(
-                    tooltip: 'Delete',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => _delete(sp),
+                  trailing: PopupMenuButton<_SourcePointAction>(
+                    onSelected: (action) {
+                      switch (action) {
+                        case _SourcePointAction.duplicate:
+                          _duplicate(sp);
+                        case _SourcePointAction.duplicateMany:
+                          _duplicateMany(sp);
+                        case _SourcePointAction.delete:
+                          _delete(sp);
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(
+                        value: _SourcePointAction.duplicate,
+                        child: ListTile(
+                          leading: Icon(Icons.copy_outlined),
+                          title: Text('Duplicate'),
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: _SourcePointAction.duplicateMany,
+                        child: ListTile(
+                          leading: Icon(Icons.library_add_outlined),
+                          title: Text('Duplicate ×N'),
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: _SourcePointAction.delete,
+                        child: ListTile(
+                          leading: Icon(Icons.delete_outline),
+                          title: Text('Delete'),
+                        ),
+                      ),
+                    ],
                   ),
                 );
               },
             ),
     );
   }
+}
+
+enum _SourcePointAction { duplicate, duplicateMany, delete }
+
+/// Small, visibly-distinct marker shown next to a point whose identity field
+/// (apartment) is still blank — meant to be noticeable before the survey is
+/// submitted, not just on close inspection.
+class _IncompleteBadge extends StatelessWidget {
+  const _IncompleteBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.errorContainer,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        'Incomplete',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: Theme.of(context).colorScheme.onErrorContainer,
+        ),
+      ),
+    );
+  }
+}
+
+/// Prompts for a positive integer count (capped at 100 as a sanity limit).
+/// Returns null if cancelled or the input never validates.
+Future<int?> _promptForCount(BuildContext context) {
+  final controller = TextEditingController(text: '2');
+  return showDialog<int>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Duplicate ×N'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: const InputDecoration(labelText: 'Number of copies'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final n = int.tryParse(controller.text.trim());
+            if (n == null || n < 1 || n > 100) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Enter a number from 1 to 100.')),
+              );
+              return;
+            }
+            Navigator.of(context).pop(n);
+          },
+          child: const Text('Create'),
+        ),
+      ],
+    ),
+  );
 }

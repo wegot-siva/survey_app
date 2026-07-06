@@ -114,4 +114,43 @@ class SourcePoint {
     transmittingPartOpenToAir: transmittingPartOpenToAir,
     nrvFeasibility: nrvFeasibility,
   );
+
+  /// Returns a duplicate-ready draft: every technical/spec field copied, but
+  /// unpersisted (empty [id]) and with the identity fields — [apartment] and
+  /// [inletDescription] — cleared, since those describe this specific
+  /// physical point and shouldn't silently carry onto a new one. Never
+  /// copies photos (photos are looked up by id in a separate table, and a
+  /// fresh id never matches an existing photo row).
+  SourcePoint copyAsDuplicate() => SourcePoint(
+    id: '',
+    siteId: siteId,
+    block: block,
+    apartment: '',
+    inletDescription: '',
+    sensorSize: sensorSize,
+    sensorOd: sensorOd,
+    pipeSize: pipeSize,
+    pipeType: pipeType,
+    qty: qty,
+    sensorType: sensorType,
+    rework: rework,
+    reworkDetails: reworkDetails,
+    flowDirection: flowDirection,
+    clearance10x: clearance10x,
+    pipeFull: pipeFull,
+    valveDownstream: valveDownstream,
+    reducerSpec: reducerSpec,
+    reducerSpecDetails: reducerSpecDetails,
+    downstreamOutletAbovePipeFig1: downstreamOutletAbovePipeFig1,
+    airVentNeededFig2: airVentNeededFig2,
+    reverseFlow: reverseFlow,
+    distanceFromMotorPumpFig3: distanceFromMotorPumpFig3,
+    noFlexiblePipeWithin20x: noFlexiblePipeWithin20x,
+    maxAndContinuousPressureBar: maxAndContinuousPressureBar,
+    strainerScreenFilter: strainerScreenFilter,
+    chamberInstallation: chamberInstallation,
+    antennaRequired: antennaRequired,
+    transmittingPartOpenToAir: transmittingPartOpenToAir,
+    nrvFeasibility: nrvFeasibility,
+  );
 }

@@ -17,11 +17,18 @@ class SourcePointFormScreen extends StatefulWidget {
     required this.repository,
     required this.site,
     this.existing,
+    this.duplicateFrom,
   });
 
   final SurveyRepository repository;
   final Site site;
   final SourcePoint? existing;
+
+  /// Pre-fills the form from this record — via [SourcePoint.copyAsDuplicate],
+  /// so identity fields are already blank — while still saving as a brand
+  /// new record. Mutually exclusive with [existing]; ignored if both are set.
+  /// Unlike [existing], never triggers a photo load.
+  final SourcePoint? duplicateFrom;
 
   @override
   State<SourcePointFormScreen> createState() => _SourcePointFormScreenState();
@@ -68,8 +75,11 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
   @override
   void initState() {
     super.initState();
-    final e = widget.existing;
-    if (e != null) _loadPhotos(e.id);
+    // duplicateFrom only supplies prefill values (already identity-cleared
+    // via copyAsDuplicate) — existing is what drives photo loading and the
+    // save-path decision (add vs update) further down.
+    final e = widget.existing ?? widget.duplicateFrom;
+    if (widget.existing != null) _loadPhotos(widget.existing!.id);
 
     _apartment = TextEditingController(text: e?.apartment ?? '');
     _inletDescription = TextEditingController(text: e?.inletDescription ?? '');

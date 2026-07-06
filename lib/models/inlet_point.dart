@@ -93,4 +93,38 @@ class InletPoint {
     civilWorkNeeded: civilWorkNeeded,
     civilWorkDetails: civilWorkDetails,
   );
+
+  /// Returns a duplicate-ready draft: every technical/spec field copied
+  /// (including [series]), but unpersisted (empty [id]) and with the
+  /// identity field — [apartmentBhk] — cleared, since it describes this
+  /// specific physical point and shouldn't silently carry onto a new one.
+  /// Never copies photos (photos are looked up by id in a separate table,
+  /// and a fresh id never matches an existing photo row).
+  InletPoint copyAsDuplicate() => InletPoint(
+    id: '',
+    siteId: siteId,
+    block: block,
+    apartmentBhk: '',
+    sensorSize: sensorSize,
+    series: series,
+    sensorOd: sensorOd,
+    pipeSize: pipeSize,
+    pipeType: pipeType,
+    qty: qty,
+    sensorType: sensorType,
+    rework: rework,
+    reworkDetails: reworkDetails,
+    linearDistanceClearance10x: linearDistanceClearance10x,
+    reverseFlow: reverseFlow,
+    ohtHns: ohtHns,
+    distanceFromMotorPump: distanceFromMotorPump,
+    maxAndContinuousPressureBar: maxAndContinuousPressureBar,
+    strainerScreenFilter: strainerScreenFilter,
+    flowDirection: flowDirection,
+    accessMode: accessMode,
+    cableRunLength: cableRunLength,
+    conduitClamping: conduitClamping,
+    civilWorkNeeded: civilWorkNeeded,
+    civilWorkDetails: civilWorkDetails,
+  );
 }
