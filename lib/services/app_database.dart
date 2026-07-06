@@ -3,6 +3,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/engineer_directory.dart';
 import 'material_master_seed.dart';
 
 /// Opens (and on first run, creates) the local SQLite database.
@@ -10,7 +11,7 @@ import 'material_master_seed.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 13;
+const int _dbVersion = 14;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -137,6 +138,17 @@ Future<Database> openAppDatabase() async {
           'ALTER TABLE bom_snapshot_lines ADD COLUMN sensor_type TEXT',
         );
       }
+      // v13 -> v14: lightweight engineer roster + survey reassignment audit
+      // log. The roster is a plain list Sales assigns/reassigns against — not
+      // a real per-user auth system (the shared Engineer login is unchanged)
+      // — seeded from the same names AssignSurveyScreen has always offered
+      // (kEngineerDirectory) so reassignment offers exactly the same choices
+      // as initial assignment did.
+      if (oldVersion < 14) {
+        await _createEngineersTable(db);
+        await _seedEngineers(db);
+        await _createSurveyAssignmentAuditTable(db);
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -199,6 +211,9 @@ Future<Database> openAppDatabase() async {
       await _createBomSnapshotLinesTable(db);
       await _createBomRevisionsTable(db);
       await _createBomRevisionLinesTable(db);
+      await _createEngineersTable(db);
+      await _seedEngineers(db);
+      await _createSurveyAssignmentAuditTable(db);
     },
   );
 }
@@ -578,5 +593,59 @@ Future<void> _createBomRevisionLinesTable(Database db) async {
   await db.execute(
     'CREATE INDEX bom_revision_lines_revision_idx '
     'ON bom_revision_lines (revision_id)',
+  );
+}
+
+/// Engineer roster table (v14) — Sales assigns/reassigns surveys against this
+/// list. A roster, not an auth system: the shared Engineer login (see
+/// UserRole) is unchanged; `name` is the plain string written to
+/// `sites.assigned_to`. Not site-scoped, so no FK — same shape as
+/// material_master_items.
+Future<void> _createEngineersTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE engineers (
+      id   TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE
+    )
+  ''');
+}
+
+/// Seeds the roster from the same names AssignSurveyScreen has always
+/// offered (kEngineerDirectory), so reassignment offers exactly who could
+/// already be picked at initial assignment. Guarded by the table's
+/// UNIQUE(name) + ConflictAlgorithm.ignore, so calling this more than once is
+/// harmless.
+Future<void> _seedEngineers(Database db) async {
+  const uuid = Uuid();
+  await db.transaction((txn) async {
+    for (final name in kEngineerDirectory) {
+      await txn.insert(
+        'engineers',
+        {'id': uuid.v4(), 'name': name},
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+  });
+}
+
+/// Survey reassignment audit log (v14). Genuinely survey-scoped — FK'd to
+/// sites (cascade delete), like bom_manual_entries/bom_revisions. One row per
+/// reassignment (never per initial assignment — that's a plain `updateSite`
+/// call from AssignSurveyScreen, not this path).
+Future<void> _createSurveyAssignmentAuditTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE survey_assignment_audit (
+      id              TEXT PRIMARY KEY,
+      site_id         TEXT NOT NULL,
+      old_assignee    TEXT,
+      new_assignee    TEXT NOT NULL,
+      changed_by_role TEXT NOT NULL,
+      changed_at      TEXT NOT NULL,
+      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX survey_assignment_audit_site_idx '
+    'ON survey_assignment_audit (site_id)',
   );
 }

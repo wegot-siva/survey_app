@@ -5,6 +5,7 @@ import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
+import '../models/engineer.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
@@ -12,6 +13,7 @@ import '../models/material_master_audit_entry.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
+import '../models/survey_assignment_audit_entry.dart';
 import '../models/survey_photo.dart';
 
 /// The single gateway between the UI and stored survey data.
@@ -206,4 +208,28 @@ abstract class SurveyRepository {
     required List<BomRevisionLine> lines,
     required String createdBy,
   });
+
+  // ---- Engineer roster + survey reassignment -------------------------------
+  //
+  // A lightweight roster, not an auth system — the shared Engineer login is
+  // unchanged (see UserRole / SessionController.currentEngineerName).
+  // Reassignment is only meaningful while a survey is still 'assigned' —
+  // enforced here (throws StateError otherwise), not just hidden in the UI —
+  // and each change writes one audit row recording who it moved from/to.
+
+  /// The engineer roster Sales assigns/reassigns surveys against.
+  Future<List<Engineer>> getEngineers();
+
+  /// Reassigns [siteId] to [newAssignee] and writes one audit entry. Throws
+  /// [StateError] if the site doesn't exist or its status isn't 'assigned'.
+  Future<void> reassignSurvey({
+    required String siteId,
+    required String newAssignee,
+    required String changedByRole,
+  });
+
+  /// One survey's reassignment history, newest first.
+  Future<List<SurveyAssignmentAuditEntry>> getSurveyAssignmentAuditLog(
+    String siteId,
+  );
 }

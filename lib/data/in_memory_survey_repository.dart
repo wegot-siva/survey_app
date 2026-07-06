@@ -5,6 +5,8 @@ import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
+import '../models/engineer.dart';
+import '../models/engineer_directory.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
@@ -12,7 +14,9 @@ import '../models/material_master_audit_entry.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
+import '../models/survey_assignment_audit_entry.dart';
 import '../models/survey_photo.dart';
+import '../models/survey_status.dart';
 import '../services/id_service.dart';
 import '../services/material_master_audit_builder.dart';
 import 'survey_repository.dart';
@@ -20,7 +24,12 @@ import 'survey_repository.dart';
 /// Phase 0 storage: everything lives in a map and is lost on restart.
 /// Swappable for a real DB later — the UI only sees [SurveyRepository].
 class InMemorySurveyRepository implements SurveyRepository {
-  InMemorySurveyRepository(this._idService);
+  InMemorySurveyRepository(this._idService) {
+    _engineers = [
+      for (final name in kEngineerDirectory)
+        Engineer(id: _idService.newId(), name: name),
+    ];
+  }
 
   final IdService _idService;
   final Map<String, Site> _sites = {};
@@ -38,6 +47,8 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, List<BomSnapshotLine>> _bomSnapshotLines = {}; // keyed by snapshotId
   final Map<String, BomRevision> _bomRevisions = {}; // keyed by id
   final Map<String, List<BomRevisionLine>> _bomRevisionLines = {}; // keyed by revisionId
+  late final List<Engineer> _engineers;
+  final Map<String, SurveyAssignmentAuditEntry> _assignmentAudit = {};
 
   @override
   Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
@@ -408,5 +419,49 @@ class InMemorySurveyRepository implements SurveyRepository {
     ];
 
     return revision;
+  }
+
+  @override
+  Future<List<Engineer>> getEngineers() async => List.unmodifiable(_engineers);
+
+  @override
+  Future<void> reassignSurvey({
+    required String siteId,
+    required String newAssignee,
+    required String changedByRole,
+  }) async {
+    final site = _sites[siteId];
+    if (site == null) {
+      throw StateError('Cannot reassign: site "$siteId" not found.');
+    }
+    if (site.status != SurveyStatus.assigned) {
+      throw StateError(
+        'Cannot reassign: survey "$siteId" is not in "assigned" status '
+        '(current: ${site.status ?? 'none'}).',
+      );
+    }
+
+    final oldAssignee = site.assignedTo;
+    _sites[siteId] = site.copyWith(assignedTo: newAssignee);
+
+    final entry = SurveyAssignmentAuditEntry(
+      id: _idService.newId(),
+      siteId: siteId,
+      oldAssignee: oldAssignee,
+      newAssignee: newAssignee,
+      changedByRole: changedByRole,
+      changedAt: DateTime.now(),
+    );
+    _assignmentAudit[entry.id] = entry;
+  }
+
+  @override
+  Future<List<SurveyAssignmentAuditEntry>> getSurveyAssignmentAuditLog(
+    String siteId,
+  ) async {
+    final list =
+        _assignmentAudit.values.where((e) => e.siteId == siteId).toList()
+          ..sort((a, b) => b.changedAt.compareTo(a.changedAt));
+    return List.unmodifiable(list);
   }
 }

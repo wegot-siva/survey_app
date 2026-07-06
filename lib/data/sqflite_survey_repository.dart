@@ -7,6 +7,7 @@ import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
+import '../models/engineer.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
@@ -14,8 +15,10 @@ import '../models/material_master_audit_entry.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
+import '../models/survey_assignment_audit_entry.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
+import '../models/survey_status.dart';
 import '../services/id_service.dart';
 import '../services/material_master_audit_builder.dart';
 import 'survey_repository.dart';
@@ -659,6 +662,72 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
     return revision;
   }
+
+  // ---- Engineer roster + survey reassignment -------------------------------
+
+  @override
+  Future<List<Engineer>> getEngineers() async {
+    final rows = await _db.query('engineers', orderBy: 'name COLLATE NOCASE');
+    return rows
+        .map((r) => Engineer(id: r['id']! as String, name: r['name']! as String))
+        .toList(growable: false);
+  }
+
+  @override
+  Future<void> reassignSurvey({
+    required String siteId,
+    required String newAssignee,
+    required String changedByRole,
+  }) async {
+    final rows = await _db.query(
+      'sites',
+      columns: ['assigned_to', 'status'],
+      where: 'id = ?',
+      whereArgs: [siteId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      throw StateError('Cannot reassign: site "$siteId" not found.');
+    }
+    final oldAssignee = rows.first['assigned_to'] as String?;
+    final status = rows.first['status'] as String?;
+    if (status != SurveyStatus.assigned) {
+      throw StateError(
+        'Cannot reassign: survey "$siteId" is not in "assigned" status '
+        '(current: ${status ?? 'none'}).',
+      );
+    }
+
+    await _db.transaction((txn) async {
+      await txn.update(
+        'sites',
+        {'assigned_to': newAssignee},
+        where: 'id = ?',
+        whereArgs: [siteId],
+      );
+      await txn.insert('survey_assignment_audit', {
+        'id': _idService.newId(),
+        'site_id': siteId,
+        'old_assignee': oldAssignee,
+        'new_assignee': newAssignee,
+        'changed_by_role': changedByRole,
+        'changed_at': DateTime.now().toIso8601String(),
+      });
+    });
+  }
+
+  @override
+  Future<List<SurveyAssignmentAuditEntry>> getSurveyAssignmentAuditLog(
+    String siteId,
+  ) async {
+    final rows = await _db.query(
+      'survey_assignment_audit',
+      where: 'site_id = ?',
+      whereArgs: [siteId],
+      orderBy: 'changed_at DESC, rowid DESC',
+    );
+    return rows.map(_surveyAssignmentAuditEntryFromRow).toList(growable: false);
+  }
 }
 
 // ---- Row <-> model mapping (hand-written, no codegen) -----------------------
@@ -1265,5 +1334,19 @@ BomRevisionLine _bomRevisionLineFromRow(Map<String, Object?> r) {
     unit: (r['unit'] as String?) ?? '',
     qtyDelta: (r['qty_delta'] as num?)?.toDouble() ?? 0,
     group: _materialGroupFromAnyCode(r['group_code'] as String?),
+  );
+}
+
+SurveyAssignmentAuditEntry _surveyAssignmentAuditEntryFromRow(
+  Map<String, Object?> r,
+) {
+  return SurveyAssignmentAuditEntry(
+    id: r['id']! as String,
+    siteId: r['site_id']! as String,
+    oldAssignee: r['old_assignee'] as String?,
+    newAssignee: (r['new_assignee'] as String?) ?? '',
+    changedByRole: (r['changed_by_role'] as String?) ?? '',
+    changedAt:
+        DateTime.tryParse((r['changed_at'] as String?) ?? '') ?? DateTime(1970),
   );
 }
