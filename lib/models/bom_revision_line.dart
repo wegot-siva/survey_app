@@ -1,4 +1,5 @@
 import 'material_master_item.dart';
+import 'survey_options.dart';
 
 /// One delta line of a [BomRevision] — adds to (or, with a negative
 /// [qtyDelta], subtracts from) the running total for its (sku, item) pair.
@@ -10,6 +11,10 @@ class BomRevisionLine {
     required this.revisionId,
     this.sku = '',
     required this.item,
+    this.materialName = '',
+    this.itemLabel = '',
+    this.sensorSize,
+    this.sensorType,
     required this.unit,
     required this.qtyDelta,
     required this.group,
@@ -24,7 +29,28 @@ class BomRevisionLine {
   final String revisionId;
 
   final String sku;
+
+  /// Display string — the picked material's name, plus its variant in
+  /// parens if it has one (see [BomRevisionLineFormScreen._itemLabelFor]).
+  /// Unchanged by the Lumax-format fields below: Sun_BOM's "Item" column
+  /// keeps reading this exactly as before.
   final String item;
+
+  /// The plain picked material name, without any variant suffix — unlike
+  /// [item], which may have "(DN25 · Wired)" appended. Needed as a genuinely
+  /// separate field for Lumax's "Materials" column; recovering it by
+  /// stripping [item]'s suffix would be a string-splitting guess.
+  final String materialName;
+
+  /// Copied from the picked catalog row's [MaterialMasterItem.itemLabel].
+  final String itemLabel;
+
+  /// Copied from the picked catalog row, if it has one set. Most D/E/G
+  /// catalog rows won't (they're general line items, not sensor-variant
+  /// specific), so this is usually null.
+  final SensorSize? sensorSize;
+  final SensorType? sensorType;
+
   final String unit;
 
   /// May be negative (reduces the running total for this sku/item).
@@ -43,6 +69,10 @@ class BomRevisionLine {
     revisionId: revisionId,
     sku: sku,
     item: item,
+    materialName: materialName,
+    itemLabel: itemLabel,
+    sensorSize: sensorSize,
+    sensorType: sensorType,
     unit: unit,
     qtyDelta: qtyDelta,
     group: group,

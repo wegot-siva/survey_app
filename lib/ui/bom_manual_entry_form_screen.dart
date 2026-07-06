@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../data/survey_repository.dart';
 import '../models/bom_manual_entry.dart';
 import '../models/material_master_item.dart';
+import '../models/survey_options.dart';
 import 'widgets/form_fields.dart';
 
 /// The reusable "Add materials" picker: pick a Material Master catalog row
@@ -51,6 +52,9 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
 
   String _materialName = '';
   String _sku = '';
+  String _itemLabel = '';
+  SensorSize? _sensorSize;
+  SensorType? _sensorType;
   String _unit = '';
   MaterialGroup? _group;
 
@@ -63,6 +67,9 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     _qty = TextEditingController(text: e?.qty.toString() ?? '');
     _materialName = e?.materialName ?? '';
     _sku = e?.sku ?? '';
+    _itemLabel = e?.itemLabel ?? '';
+    _sensorSize = e?.sensorSize;
+    _sensorType = e?.sensorType;
     _unit = e?.unit ?? '';
     _group = e?.group;
     _loadCatalog();
@@ -89,6 +96,9 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
       if (item != null) {
         _materialName = item.materialName;
         _sku = item.sku;
+        _itemLabel = item.itemLabel;
+        _sensorSize = item.sensorSize;
+        _sensorType = item.sensorType;
         _unit = item.unit;
       }
     });
@@ -124,6 +134,9 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
       surveyId: widget.surveyId,
       materialName: _materialName,
       sku: _sku,
+      itemLabel: _itemLabel,
+      sensorSize: _sensorSize,
+      sensorType: _sensorType,
       unit: _unit,
       qty: qty,
       group: group,

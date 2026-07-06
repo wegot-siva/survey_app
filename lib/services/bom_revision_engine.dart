@@ -1,6 +1,7 @@
 import '../models/bom_revision_line.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/material_master_item.dart';
+import '../models/survey_options.dart';
 
 /// One (sku, item) pair's running total: the locked v1 snapshot quantity plus
 /// every revision's delta for that same pair.
@@ -8,6 +9,10 @@ class BomRunningTotalLine {
   const BomRunningTotalLine({
     required this.sku,
     required this.item,
+    this.materialName = '',
+    this.itemLabel = '',
+    this.sensorSize,
+    this.sensorType,
     required this.unit,
     required this.group,
     required this.rawQty,
@@ -15,6 +20,19 @@ class BomRunningTotalLine {
 
   final String sku;
   final String item;
+
+  /// The plain material name (no variant suffix) — for Lumax's "Materials"
+  /// column. Sun_BOM keeps reading [item], unaffected.
+  final String materialName;
+
+  /// For Lumax's "Item" column.
+  final String itemLabel;
+
+  /// For Lumax's sheet-per-variant grouping. Null for lines with no variant
+  /// (most D/E/G manual/revision entries) — those land on a catch-all sheet.
+  final SensorSize? sensorSize;
+  final SensorType? sensorType;
+
   final String unit;
   final MaterialGroup group;
 
@@ -48,6 +66,14 @@ class BomRevisionEngine {
       totals[key] = BomRunningTotalLine(
         sku: line.sku,
         item: line.item,
+        materialName: existing?.materialName.isNotEmpty ?? false
+            ? existing!.materialName
+            : line.materialName,
+        itemLabel: existing?.itemLabel.isNotEmpty ?? false
+            ? existing!.itemLabel
+            : line.itemLabel,
+        sensorSize: existing?.sensorSize ?? line.sensorSize,
+        sensorType: existing?.sensorType ?? line.sensorType,
         unit: line.unit,
         group: line.group,
         rawQty: (existing?.rawQty ?? 0) + line.qty,
@@ -60,6 +86,14 @@ class BomRevisionEngine {
       totals[key] = BomRunningTotalLine(
         sku: line.sku,
         item: line.item,
+        materialName: existing?.materialName.isNotEmpty ?? false
+            ? existing!.materialName
+            : line.materialName,
+        itemLabel: existing?.itemLabel.isNotEmpty ?? false
+            ? existing!.itemLabel
+            : line.itemLabel,
+        sensorSize: existing?.sensorSize ?? line.sensorSize,
+        sensorType: existing?.sensorType ?? line.sensorType,
         unit: existing?.unit ?? line.unit,
         group: existing?.group ?? line.group,
         rawQty: (existing?.rawQty ?? 0) + line.qtyDelta,

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../data/survey_repository.dart';
 import '../models/bom_revision_line.dart';
 import '../models/material_master_item.dart';
+import '../models/survey_options.dart';
 import 'widgets/form_fields.dart';
 
 /// Builds one draft [BomRevisionLine] for the "Add revision" flow: pick a
@@ -39,6 +40,9 @@ class _BomRevisionLineFormScreenState
   MaterialMasterItem? _selectedMaterial;
   String _materialName = '';
   String _sku = '';
+  String _itemLabel = '';
+  SensorSize? _sensorSize;
+  SensorType? _sensorType;
   String _unit = '';
   MaterialGroup? _group;
 
@@ -69,6 +73,9 @@ class _BomRevisionLineFormScreenState
       if (item != null) {
         _materialName = item.materialName;
         _sku = item.sku;
+        _itemLabel = item.itemLabel;
+        _sensorSize = item.sensorSize;
+        _sensorType = item.sensorType;
         _unit = item.unit;
         _group = item.group;
       }
@@ -105,6 +112,10 @@ class _BomRevisionLineFormScreenState
         revisionId: '',
         sku: _sku,
         item: _itemLabelFor(_materialName, _selectedMaterial),
+        materialName: _materialName,
+        itemLabel: _itemLabel,
+        sensorSize: _sensorSize,
+        sensorType: _sensorType,
         unit: _unit,
         qtyDelta: qty,
         group: group,

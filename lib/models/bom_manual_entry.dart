@@ -1,4 +1,5 @@
 import 'material_master_item.dart';
+import 'survey_options.dart';
 
 /// Groups the "Add materials" picker allows a manual entry to be filed under.
 /// Only D (Plumbing rework), E (Electrical), and G (Labour) — the auto-computed
@@ -25,6 +26,9 @@ class BomManualEntry {
     required this.surveyId,
     required this.materialName,
     this.sku = '',
+    this.itemLabel = '',
+    this.sensorSize,
+    this.sensorType,
     required this.unit,
     required this.qty,
     required this.group,
@@ -40,6 +44,18 @@ class BomManualEntry {
 
   final String materialName;
   final String sku;
+
+  /// Copied from the picked catalog row's [MaterialMasterItem.itemLabel] at
+  /// the moment of selection — same "copied, not linked by id" convention as
+  /// [materialName]/[sku]/[unit].
+  final String itemLabel;
+
+  /// Copied from the picked catalog row, if it has one set. Most D/E/G
+  /// catalog rows won't (they're general line items, not sensor-variant
+  /// specific), so this is usually null.
+  final SensorSize? sensorSize;
+  final SensorType? sensorType;
+
   final String unit;
   final double qty;
 
@@ -61,6 +77,9 @@ class BomManualEntry {
     surveyId: surveyId,
     materialName: materialName,
     sku: sku,
+    itemLabel: itemLabel,
+    sensorSize: sensorSize,
+    sensorType: sensorType,
     unit: unit,
     qty: qty,
     group: group,

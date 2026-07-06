@@ -234,6 +234,7 @@ create table if not exists public.material_master_items (
   group_code           text not null,              -- enum name: a..g
   material_name        text not null,
   sku                  text,                        -- optional SKU / part code
+  item_label           text,                        -- optional short label, distinct from material_name (Lumax export)
   unit                 text not null,
   behavior_type        text not null,              -- enum name: fixed | derived | variable
   sensor_size          text,                        -- enum name; null = any size
@@ -362,6 +363,9 @@ create table if not exists public.bom_manual_entries (
   survey_id     text not null references public.sites (id) on delete cascade,
   material_name text not null,
   sku           text,
+  item_label    text,            -- optional short label (Lumax export)
+  sensor_size   text,            -- enum name; usually null (D/E/G items rarely have a variant)
+  sensor_type   text,            -- enum name; usually null
   unit          text not null,
   qty           double precision not null,
   group_code    text not null,   -- literal: 'D' | 'E' | 'G'
@@ -409,14 +413,18 @@ create index if not exists bom_snapshots_survey_idx
   on public.bom_snapshots (survey_id);
 
 create table if not exists public.bom_snapshot_lines (
-  id          text primary key,
-  snapshot_id text not null references public.bom_snapshots (id) on delete cascade,
-  sku         text,
-  item        text not null,
-  unit        text not null,
-  qty         double precision not null,
-  group_code  text not null,   -- literal: 'A'..'G'
-  source      text not null    -- literal: 'auto' | 'manual'
+  id            text primary key,
+  snapshot_id   text not null references public.bom_snapshots (id) on delete cascade,
+  sku           text,
+  item          text not null,
+  material_name text,            -- plain name, no variant suffix (Lumax "Materials")
+  item_label    text,            -- short label (Lumax "Item")
+  sensor_size   text,            -- enum name; frozen from the source at finalize time
+  sensor_type   text,            -- enum name
+  unit          text not null,
+  qty           double precision not null,
+  group_code    text not null,   -- literal: 'A'..'G'
+  source        text not null    -- literal: 'auto' | 'manual'
 );
 
 create index if not exists bom_snapshot_lines_snapshot_idx
@@ -462,13 +470,17 @@ create index if not exists bom_revisions_survey_idx
   on public.bom_revisions (survey_id);
 
 create table if not exists public.bom_revision_lines (
-  id          text primary key,
-  revision_id text not null references public.bom_revisions (id) on delete cascade,
-  sku         text,
-  item        text not null,
-  unit        text not null,
-  qty_delta   double precision not null,
-  group_code  text not null   -- literal: 'A'..'G'
+  id            text primary key,
+  revision_id   text not null references public.bom_revisions (id) on delete cascade,
+  sku           text,
+  item          text not null,
+  material_name text,            -- plain name, no variant suffix (Lumax "Materials")
+  item_label    text,            -- short label (Lumax "Item")
+  sensor_size   text,            -- enum name; frozen from the source at pick time
+  sensor_type   text,            -- enum name
+  unit          text not null,
+  qty_delta     double precision not null,
+  group_code    text not null   -- literal: 'A'..'G'
 );
 
 create index if not exists bom_revision_lines_revision_idx
@@ -484,3 +496,35 @@ create policy "dev all - bom_revisions" on public.bom_revisions
 drop policy if exists "dev all - bom_revision_lines" on public.bom_revision_lines;
 create policy "dev all - bom_revision_lines" on public.bom_revision_lines
   for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------------
+-- Lumax export format — Item (short label, distinct from the full
+-- descriptive name) and the frozen sensor variant on every line that can
+-- feed an export, so sheet-per-variant grouping and the Item/Materials/Size
+-- columns don't need to guess at a string split.
+--
+-- `alter table add column if not exists` covers projects that already ran
+-- the blocks above before these columns existed; the `create table`
+-- statements above already include them for fresh setups. All nullable, so
+-- existing rows are unaffected. Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.material_master_items
+  add column if not exists item_label text;
+
+alter table public.bom_manual_entries
+  add column if not exists item_label  text,
+  add column if not exists sensor_size text,
+  add column if not exists sensor_type text;
+
+alter table public.bom_snapshot_lines
+  add column if not exists material_name text,
+  add column if not exists item_label    text,
+  add column if not exists sensor_size   text,
+  add column if not exists sensor_type   text;
+
+alter table public.bom_revision_lines
+  add column if not exists material_name text,
+  add column if not exists item_label    text,
+  add column if not exists sensor_size   text,
+  add column if not exists sensor_type   text;

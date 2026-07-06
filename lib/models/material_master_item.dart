@@ -72,6 +72,7 @@ class MaterialMasterItem {
     required this.unit,
     required this.behaviorType,
     this.sku = '',
+    this.itemLabel = '',
     this.sensorSize,
     this.sensorType,
     this.quantityPerSensor = 0,
@@ -87,6 +88,11 @@ class MaterialMasterItem {
 
   /// Optional SKU / part code. Free text — not every material has one yet.
   final String sku;
+
+  /// Optional short label distinct from [materialName] — e.g. an export
+  /// column ("Item") that isn't the full descriptive name ("Materials").
+  /// Free text; blank until an admin fills it in.
+  final String itemLabel;
 
   final String unit;
   final MaterialBehaviorType behaviorType;
@@ -118,6 +124,7 @@ class MaterialMasterItem {
     unit: unit,
     behaviorType: behaviorType,
     sku: sku,
+    itemLabel: itemLabel,
     sensorSize: sensorSize,
     sensorType: sensorType,
     quantityPerSensor: quantityPerSensor,

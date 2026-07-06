@@ -10,7 +10,7 @@ import 'material_master_seed.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 12;
+const int _dbVersion = 13;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -93,6 +93,49 @@ Future<Database> openAppDatabase() async {
       if (oldVersion < 12) {
         await _createBomRevisionsTable(db);
         await _createBomRevisionLinesTable(db);
+      }
+      // v12 -> v13: Lumax export format — needs Item (short label, distinct
+      // from the full descriptive name) and the frozen sensor variant on
+      // every line that can feed an export, so sheet-per-variant grouping
+      // and the Item/Materials/Size columns don't need to guess at a string
+      // split. All nullable/blank-default, so existing rows are unaffected.
+      if (oldVersion < 13) {
+        await db.execute(
+          'ALTER TABLE material_master_items ADD COLUMN item_label TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_manual_entries ADD COLUMN item_label TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_manual_entries ADD COLUMN sensor_size TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_manual_entries ADD COLUMN sensor_type TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_revision_lines ADD COLUMN material_name TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_revision_lines ADD COLUMN item_label TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_revision_lines ADD COLUMN sensor_size TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_revision_lines ADD COLUMN sensor_type TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_snapshot_lines ADD COLUMN material_name TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_snapshot_lines ADD COLUMN item_label TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_snapshot_lines ADD COLUMN sensor_size TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_snapshot_lines ADD COLUMN sensor_type TEXT',
+        );
       }
     },
     onCreate: (db, version) async {
@@ -348,7 +391,7 @@ Future<void> _migrateDuctLoraPlacementPhotoToPhotosTable(Database db) async {
   }
 }
 
-/// Material Master table (v5, +sku in v9). Admin-editable reference data —
+/// Material Master table (v5, +sku in v9, +item_label in v13). Admin-editable reference data —
 /// NOT site-scoped (no FK to sites). The BoM engine reads every quantity from
 /// this table at generation time; it starts empty and is populated via the
 /// admin screen.
@@ -359,6 +402,7 @@ Future<void> _createMaterialMasterItemsTable(Database db) async {
       group_code           TEXT NOT NULL,
       material_name        TEXT NOT NULL,
       sku                  TEXT,
+      item_label           TEXT,
       unit                 TEXT NOT NULL,
       behavior_type        TEXT NOT NULL,
       sensor_size          TEXT,
@@ -394,7 +438,8 @@ Future<void> _createMaterialMasterAuditTable(Database db) async {
   );
 }
 
-/// BoM manual entries table (v10) — the D/E/G "Add materials" picker. A
+/// BoM manual entries table (v10, +item_label/sensor_size/sensor_type in
+/// v13). A
 /// survey has many; FK'd to sites (cascade delete, like source/inlet points)
 /// since these are genuinely survey-scoped, unlike Material Master. Not
 /// linked to any material_master_items row by id — name/sku/unit are copied
@@ -410,6 +455,9 @@ Future<void> _createBomManualEntriesTable(Database db) async {
       survey_id     TEXT NOT NULL,
       material_name TEXT NOT NULL,
       sku           TEXT,
+      item_label    TEXT,
+      sensor_size   TEXT,
+      sensor_type   TEXT,
       unit          TEXT NOT NULL,
       qty           REAL NOT NULL,
       group_code    TEXT NOT NULL,
@@ -444,24 +492,33 @@ Future<void> _createBomSnapshotsTable(Database db) async {
   );
 }
 
-/// BoM snapshot lines table (v11) — the frozen values of one [BomSnapshot].
+/// BoM snapshot lines table (v11, +material_name/item_label/sensor_size/
+/// sensor_type in v13). The frozen values of one [BomSnapshot].
 /// FK'd to bom_snapshots (cascade delete); NOT linked to material_master_items
 /// or bom_manual_entries by id — sku/item/unit/qty/group are copied at
 /// finalize time, so editing either later cannot alter an existing snapshot.
 /// `group_code` stores the literal 'A'..'G' (see the matching comment on
 /// bom_manual_entries above for why this differs from
 /// material_master_items.group_code); `source` stores literal 'auto'|'manual'.
+/// The v13 fields are separate from `item` (which stays exactly as before,
+/// still what Sun_BOM's "Item" column reads) — they exist purely so the
+/// Lumax format's Item/Materials/Size/sheet-grouping don't need to guess a
+/// string split.
 Future<void> _createBomSnapshotLinesTable(Database db) async {
   await db.execute('''
     CREATE TABLE bom_snapshot_lines (
-      id          TEXT PRIMARY KEY,
-      snapshot_id TEXT NOT NULL,
-      sku         TEXT,
-      item        TEXT NOT NULL,
-      unit        TEXT NOT NULL,
-      qty         REAL NOT NULL,
-      group_code  TEXT NOT NULL,
-      source      TEXT NOT NULL,
+      id            TEXT PRIMARY KEY,
+      snapshot_id   TEXT NOT NULL,
+      sku           TEXT,
+      item          TEXT NOT NULL,
+      material_name TEXT,
+      item_label    TEXT,
+      sensor_size   TEXT,
+      sensor_type   TEXT,
+      unit          TEXT NOT NULL,
+      qty           REAL NOT NULL,
+      group_code    TEXT NOT NULL,
+      source        TEXT NOT NULL,
       FOREIGN KEY (snapshot_id) REFERENCES bom_snapshots (id) ON DELETE CASCADE
     )
   ''');
@@ -492,22 +549,29 @@ Future<void> _createBomRevisionsTable(Database db) async {
   );
 }
 
-/// BoM revision lines table (v12) — the delta values of one [BomRevision].
+/// BoM revision lines table (v12, +material_name/item_label/sensor_size/
+/// sensor_type in v13) — the delta values of one [BomRevision].
 /// FK'd to bom_revisions (cascade delete); NOT linked to material_master_items
 /// by id — sku/item/unit are copied in at the moment the picker's dropdown
 /// selection is made, same convention as bom_manual_entries and
 /// bom_snapshot_lines. `qty_delta` may be negative. `group_code` stores the
-/// literal 'A'..'G' (a revision line is not restricted to D/E/G).
+/// literal 'A'..'G' (a revision line is not restricted to D/E/G). The v13
+/// fields mirror bom_snapshot_lines' — `item` is untouched (Sun_BOM
+/// compatibility), the new columns feed Lumax only.
 Future<void> _createBomRevisionLinesTable(Database db) async {
   await db.execute('''
     CREATE TABLE bom_revision_lines (
-      id          TEXT PRIMARY KEY,
-      revision_id TEXT NOT NULL,
-      sku         TEXT,
-      item        TEXT NOT NULL,
-      unit        TEXT NOT NULL,
-      qty_delta   REAL NOT NULL,
-      group_code  TEXT NOT NULL,
+      id            TEXT PRIMARY KEY,
+      revision_id   TEXT NOT NULL,
+      sku           TEXT,
+      item          TEXT NOT NULL,
+      material_name TEXT,
+      item_label    TEXT,
+      sensor_size   TEXT,
+      sensor_type   TEXT,
+      unit          TEXT NOT NULL,
+      qty_delta     REAL NOT NULL,
+      group_code    TEXT NOT NULL,
       FOREIGN KEY (revision_id) REFERENCES bom_revisions (id) ON DELETE CASCADE
     )
   ''');

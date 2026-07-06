@@ -1,4 +1,5 @@
 import 'material_master_item.dart';
+import 'survey_options.dart';
 
 /// Whether a frozen [BomSnapshotLine] came from the auto-computed BoM
 /// (A/B/C/F, via [BomEngine]) or a hand-added D/E/G [BomManualEntry]. `.name`
@@ -20,6 +21,10 @@ class BomSnapshotLine {
     required this.snapshotId,
     this.sku = '',
     required this.item,
+    this.materialName = '',
+    this.itemLabel = '',
+    this.sensorSize,
+    this.sensorType,
     required this.unit,
     required this.qty,
     required this.group,
@@ -35,7 +40,25 @@ class BomSnapshotLine {
   final String snapshotId;
 
   final String sku;
+
+  /// Display string — unchanged by the Lumax-format fields below: Sun_BOM's
+  /// "Item" column keeps reading this exactly as before.
   final String item;
+
+  /// The plain material name, without any variant suffix — needed as a
+  /// genuinely separate field for Lumax's "Materials" column; recovering it
+  /// by stripping [item]'s suffix would be a string-splitting guess.
+  final String materialName;
+
+  /// Copied from the source [MaterialMasterItem.itemLabel] (auto lines) or
+  /// the picked catalog row (manual entries) at finalize time.
+  final String itemLabel;
+
+  /// Frozen from the source at finalize time — null for manual entries whose
+  /// catalog row had no variant set (the common case for D/E/G items).
+  final SensorSize? sensorSize;
+  final SensorType? sensorType;
+
   final String unit;
   final double qty;
   final MaterialGroup group;
@@ -50,6 +73,10 @@ class BomSnapshotLine {
         snapshotId: snapshotId,
         sku: sku,
         item: item,
+        materialName: materialName,
+        itemLabel: itemLabel,
+        sensorSize: sensorSize,
+        sensorType: sensorType,
         unit: unit,
         qty: qty,
         group: group,

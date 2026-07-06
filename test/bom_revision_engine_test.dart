@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:survey_app/models/bom_revision_line.dart';
 import 'package:survey_app/models/bom_snapshot_line.dart';
 import 'package:survey_app/models/material_master_item.dart';
+import 'package:survey_app/models/survey_options.dart';
 import 'package:survey_app/services/bom_revision_engine.dart';
 
 void main() {
@@ -18,11 +19,19 @@ void main() {
     double qty = 10,
     MaterialGroup group = MaterialGroup.a,
     BomSnapshotSource source = BomSnapshotSource.auto,
+    String materialName = '',
+    String itemLabel = '',
+    SensorSize? sensorSize,
+    SensorType? sensorType,
   }) => BomSnapshotLine(
     id: 'sl1',
     snapshotId: 'snap1',
     sku: sku,
     item: item,
+    materialName: materialName,
+    itemLabel: itemLabel,
+    sensorSize: sensorSize,
+    sensorType: sensorType,
     unit: 'pcs',
     qty: qty,
     group: group,
@@ -34,11 +43,19 @@ void main() {
     String item = 'Sensor',
     double qtyDelta = 1,
     MaterialGroup group = MaterialGroup.a,
+    String materialName = '',
+    String itemLabel = '',
+    SensorSize? sensorSize,
+    SensorType? sensorType,
   }) => BomRevisionLine(
     id: 'rl1',
     revisionId: 'rev1',
     sku: sku,
     item: item,
+    materialName: materialName,
+    itemLabel: itemLabel,
+    sensorSize: sensorSize,
+    sensorType: sensorType,
     unit: 'pcs',
     qtyDelta: qtyDelta,
     group: group,
@@ -131,4 +148,80 @@ void main() {
     );
     expect(result.single.group, MaterialGroup.g);
   });
+
+  test(
+    'materialName/itemLabel/sensorSize/sensorType carry through from the v1 '
+    'snapshot line (Lumax export fields)',
+    () {
+      final result = engine.computeRunningTotal(
+        snapshotLines: [
+          snapshotLine(
+            materialName: 'Sensor Alpha',
+            itemLabel: 'SEN-A',
+            sensorSize: SensorSize.dn25,
+            sensorType: SensorType.wired,
+          ),
+        ],
+        revisionLines: const [],
+      );
+      expect(result.single.materialName, 'Sensor Alpha');
+      expect(result.single.itemLabel, 'SEN-A');
+      expect(result.single.sensorSize, SensorSize.dn25);
+      expect(result.single.sensorType, SensorType.wired);
+    },
+  );
+
+  test(
+    'a revision delta on a brand-new sku/item carries its own '
+    'materialName/itemLabel/sensorSize/sensorType (no snapshot line to '
+    'inherit from)',
+    () {
+      final result = engine.computeRunningTotal(
+        snapshotLines: const [],
+        revisionLines: [
+          revisionLine(
+            sku: 'NEW-1',
+            item: 'Extra elbow',
+            materialName: 'Elbow 25mm',
+            itemLabel: 'ELB-1',
+            sensorSize: SensorSize.dn32,
+            sensorType: SensorType.wireless,
+          ),
+        ],
+      );
+      expect(result.single.materialName, 'Elbow 25mm');
+      expect(result.single.itemLabel, 'ELB-1');
+      expect(result.single.sensorSize, SensorSize.dn32);
+      expect(result.single.sensorType, SensorType.wireless);
+    },
+  );
+
+  test(
+    'the v1 snapshot line\'s Lumax fields take precedence over a later '
+    'revision delta on the same sku/item',
+    () {
+      final result = engine.computeRunningTotal(
+        snapshotLines: [
+          snapshotLine(
+            materialName: 'Sensor Alpha',
+            itemLabel: 'SEN-A',
+            sensorSize: SensorSize.dn25,
+            sensorType: SensorType.wired,
+          ),
+        ],
+        revisionLines: [
+          revisionLine(
+            materialName: 'Should not win',
+            itemLabel: 'SHOULD-NOT-WIN',
+            sensorSize: SensorSize.dn50,
+            sensorType: SensorType.wireless,
+          ),
+        ],
+      );
+      expect(result.single.materialName, 'Sensor Alpha');
+      expect(result.single.itemLabel, 'SEN-A');
+      expect(result.single.sensorSize, SensorSize.dn25);
+      expect(result.single.sensorType, SensorType.wired);
+    },
+  );
 }

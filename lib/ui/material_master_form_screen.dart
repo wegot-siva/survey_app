@@ -34,6 +34,7 @@ class MaterialMasterFormScreen extends StatefulWidget {
 class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
   late final TextEditingController _materialName;
   late final TextEditingController _sku;
+  late final TextEditingController _itemLabel;
   late final TextEditingController _unit;
   late final TextEditingController _quantityPerSensor;
   late final TextEditingController _formulaDivisor;
@@ -55,6 +56,7 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
 
     _materialName = TextEditingController(text: e?.materialName ?? '');
     _sku = TextEditingController(text: e?.sku ?? '');
+    _itemLabel = TextEditingController(text: e?.itemLabel ?? '');
     _unit = TextEditingController(text: e?.unit ?? '');
     _quantityPerSensor = TextEditingController(
       text: e?.quantityPerSensor.toString() ?? '0',
@@ -77,6 +79,7 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
   void dispose() {
     _materialName.dispose();
     _sku.dispose();
+    _itemLabel.dispose();
     _unit.dispose();
     _quantityPerSensor.dispose();
     _formulaDivisor.dispose();
@@ -101,6 +104,7 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
       group: _group,
       materialName: name,
       sku: _sku.text.trim(),
+      itemLabel: _itemLabel.text.trim(),
       unit: unit,
       behaviorType: _behaviorType,
       sensorSize: _sensorSize,
@@ -150,6 +154,10 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
         children: [
           AppTextField(controller: _materialName, label: 'Material name'),
           AppTextField(controller: _sku, label: 'SKU (optional)'),
+          AppTextField(
+            controller: _itemLabel,
+            label: 'Item label (optional — for Lumax export)',
+          ),
           AppTextField(controller: _unit, label: 'Unit (e.g. pcs, m, set)'),
           AppDropdownField<MaterialGroup>(
             label: 'Group',

@@ -94,6 +94,7 @@ class MaterialMasterAuditBuilder {
     compare('Group', oldItem.group.label, newItem.group.label);
     compare('Material name', oldItem.materialName, newItem.materialName);
     compare('SKU', oldItem.sku, newItem.sku);
+    compare('Item label', oldItem.itemLabel, newItem.itemLabel);
     compare('Unit', oldItem.unit, newItem.unit);
     compare('Behaviour', oldItem.behaviorType.label, newItem.behaviorType.label);
     compare('Sensor size', oldItem.sensorSize?.label, newItem.sensorSize?.label);
