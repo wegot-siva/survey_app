@@ -276,7 +276,11 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      floatingActionButton: widget.session.currentRole == UserRole.sales
+      // Admin gets the same create+assign flow as Sales (this slice) — every
+      // other role still gets the bare "New site" flow.
+      floatingActionButton:
+          widget.session.currentRole == UserRole.sales ||
+              widget.session.currentRole == UserRole.admin
           ? FloatingActionButton.extended(
               onPressed: _openAssignSurvey,
               icon: const Icon(Icons.add_task),

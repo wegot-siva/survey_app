@@ -262,6 +262,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     final site = _site;
     final isEngineer = widget.session.currentRole == UserRole.engineer;
     final isSales = widget.session.currentRole == UserRole.sales;
+    final isAdmin = widget.session.currentRole == UserRole.admin;
+    // Admin gets the same reassignment/config capabilities as Sales (this
+    // slice) — deliberately NOT Submit (Engineer-only) or Approve, which
+    // Admin never routes to at all (see home_screen.dart's row-tap logic).
+    final canReassignRole = isSales || isAdmin;
     final canSubmit =
         site?.status == SurveyStatus.assigned ||
         site?.status == SurveyStatus.inProgress;
@@ -271,13 +276,13 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
       appBar: AppBar(
         title: Text(site?.name ?? 'Site'),
         actions: [
-          if (site != null && isSales)
+          if (site != null && canReassignRole)
             IconButton(
               tooltip: 'Reassignment history',
               onPressed: () => _openAssignmentLog(site),
               icon: const Icon(Icons.history),
             ),
-          if (site != null && isSales && canReassign)
+          if (site != null && canReassignRole && canReassign)
             IconButton(
               tooltip: 'Edit assignee',
               onPressed: () => _editAssignee(site),
