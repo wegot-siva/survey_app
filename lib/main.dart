@@ -7,10 +7,12 @@ import 'data/survey_repository.dart';
 import 'services/app_database.dart';
 import 'services/id_service.dart';
 import 'services/session_controller.dart';
+import 'services/shared_preferences_session_store.dart';
 import 'services/supabase_service.dart';
 import 'services/sync_service.dart';
 import 'ui/home_screen.dart';
 import 'ui/login_screen.dart';
+import 'ui/theme/app_theme.dart';
 
 Future<void> main() async {
   // Needed before any platform-channel call (path_provider / sqflite).
@@ -37,7 +39,15 @@ Future<void> main() async {
 
   // Role-based login (Roles & Assignment — Slice A). Shared-per-role login,
   // behind the AuthRepository seam so real per-user auth can replace it later.
-  final session = SessionController(const SharedPasswordAuthRepository());
+  // The active role is persisted (SharedPreferencesSessionStore) so an app
+  // close/reopen restores it directly — restore() checks for that before the
+  // first frame, so the login screen only shows when nothing was persisted
+  // (or the previous session ended with an explicit logout).
+  final session = SessionController(
+    const SharedPasswordAuthRepository(),
+    const SharedPreferencesSessionStore(),
+  );
+  await session.restore();
 
   runApp(
     SurveyApp(
@@ -67,10 +77,7 @@ class SurveyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Survey App',
-      theme: ThemeData(
-        colorSchemeSeed: Colors.teal,
-        useMaterial3: true,
-      ),
+      theme: AppTheme.light,
       home: _AuthGate(
         repository: repository,
         supabaseService: supabaseService,

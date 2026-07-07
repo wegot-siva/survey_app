@@ -192,7 +192,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-    if (confirmed == true) widget.session.logout();
+    if (confirmed == true) await widget.session.logout();
   }
 
   Future<void> _syncNow() async {
