@@ -149,7 +149,7 @@ class _BomRevisionsScreenState extends State<BomRevisionsScreen> {
                 ),
                 for (final revision in _revisions)
                   ListTile(
-                    leading: const Icon(Icons.history),
+                    leading: const Icon(Icons.difference_outlined),
                     title: Text('v${revision.version} — ${revision.reason}'),
                     subtitle: Text(
                       'Added by ${revision.createdBy} on '

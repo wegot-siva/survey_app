@@ -126,7 +126,7 @@ class _BomManualEntriesScreenState extends State<BomManualEntriesScreen> {
                     ),
                     for (final entry in _entries.where((e) => e.group == group))
                       ListTile(
-                        leading: const Icon(Icons.add_shopping_cart_outlined),
+                        leading: const Icon(Icons.inventory_2_outlined),
                         title: Text(
                           entry.sku.isEmpty
                               ? entry.materialName

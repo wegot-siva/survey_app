@@ -21,6 +21,11 @@ import 'bom_revisions_screen.dart';
 /// output layout differs.
 enum _ExportFormat { sunBom, lumax }
 
+/// Entries in the AppBar's version menu — consolidates what used to be a
+/// "Finalized" chip, a history icon button, and a running-total/v1
+/// SegmentedButton into one control.
+enum _VersionMenuAction { runningTotal, v1Frozen, history }
+
 /// On-screen BoM preview for one site (Material Master phase). Reads
 /// Material Master rows + the site's survey data, runs [BomEngine], and shows
 /// the result grouped A–G. No prices, no export — that's a later phase.
@@ -75,9 +80,17 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   _ExportFormat _selectedExportFormat = _ExportFormat.sunBom;
 
   // Display-only filter: hides zero-qty rows (and groups with none left)
-  // in every on-screen view. Default OFF = hidden. Never affects export,
-  // which already excludes zero-qty rows/empty groups on its own.
+  // in the locked view (running total + v1 snapshot). Default OFF = hidden.
+  // Never affects export, which already excludes zero-qty rows/empty groups
+  // on its own. The unlocked/live view has its own per-group toggle instead
+  // — see _showAllInGroup.
   bool _showAllItems = false;
+
+  // Per-group "show all" toggle for the unlocked/live view only (bom_engine
+  // emits every Material Master row regardless of quantity, so most groups
+  // are mostly zero-qty rows by default). Empty = every group hides its
+  // zero-qty lines.
+  final Set<MaterialGroup> _showAllInGroup = {};
 
   @override
   void initState() {
@@ -316,13 +329,6 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     }
   }
 
-  /// Groups with no visible lines after filtering are simply skipped by the
-  /// callers below — this only decides which lines survive within a group.
-  List<BomLine> _visibleBomLines(MaterialGroup group, Map<MaterialGroup, List<BomLine>> bom) {
-    final lines = bom[group] ?? const [];
-    return _showAllItems ? lines : lines.where((l) => l.quantity > 0).toList();
-  }
-
   List<BomRunningTotalLine> _visibleRunningTotal(List<BomRunningTotalLine> lines) =>
       _showAllItems ? lines : lines.where((l) => l.rawQty > 0).toList();
 
@@ -330,12 +336,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       _showAllItems ? lines : lines.where((l) => l.qty > 0).toList();
 
   /// Format + version selectors for Export, living below the AppBar rather
-  /// than as AppBar actions — six wide items (chip, history icon, two
-  /// text-heavy dropdowns, export icon, add-materials icon) don't fit an
-  /// AppBar's fixed-width action row, and AppBar.actions doesn't wrap or
-  /// scroll; the ones furthest right (Export, Add materials) were the ones
-  /// silently clipped off-screen. A [Wrap] here can drop to a second line on
-  /// narrow screens instead of overflowing.
+  /// than as AppBar actions — wide items (two text-heavy dropdowns, plus the
+  /// version menu, export icon, add-materials icon) don't fit an AppBar's
+  /// fixed-width action row, and AppBar.actions doesn't wrap or scroll; the
+  /// ones furthest right (Export, Add materials) were the ones silently
+  /// clipped off-screen. A [Wrap] here can drop to a second line on narrow
+  /// screens instead of overflowing.
   Widget _exportOptionsRow() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -433,29 +439,49 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     final runningTotal = _runningTotal;
     final visibleRunningTotal = _visibleRunningTotal(runningTotal);
     final visibleSnapshotLines = _visibleSnapshotLines(_snapshotLines);
-    final visibleBom = bom == null
-        ? null
-        : {for (final g in MaterialGroup.values) g: _visibleBomLines(g, bom)};
 
     return Scaffold(
       appBar: AppBar(
         title: Text('BoM — ${widget.site.name}'),
         actions: [
           if (locked)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8),
-              child: Center(
-                child: Chip(
-                  label: Text('Finalized'),
-                  avatar: Icon(Icons.lock_outline, size: 18),
+            PopupMenuButton<_VersionMenuAction>(
+              tooltip: 'Version',
+              onSelected: (action) {
+                switch (action) {
+                  case _VersionMenuAction.runningTotal:
+                    setState(() => _showRunningTotal = true);
+                  case _VersionMenuAction.v1Frozen:
+                    setState(() => _showRunningTotal = false);
+                  case _VersionMenuAction.history:
+                    _openRevisions();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _VersionMenuAction.runningTotal,
+                  child: Text('Running total'),
+                ),
+                PopupMenuItem(
+                  value: _VersionMenuAction.v1Frozen,
+                  child: Text('v1 (Frozen)'),
+                ),
+                PopupMenuDivider(),
+                PopupMenuItem(
+                  value: _VersionMenuAction.history,
+                  child: Text('Version history'),
+                ),
+              ],
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_showRunningTotal ? 'Running total' : 'v1 (Frozen)'),
+                    const Icon(Icons.arrow_drop_down),
+                  ],
                 ),
               ),
-            ),
-          if (locked)
-            IconButton(
-              tooltip: 'Version history / add revision',
-              onPressed: _openRevisions,
-              icon: const Icon(Icons.history),
             ),
           // Format/version selectors live below the AppBar now — see
           // _exportOptionsRow. Keeping AppBar.actions to fixed-size icons
@@ -480,7 +506,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           IconButton(
             tooltip: 'Add materials (D/E/G)',
             onPressed: _openManualEntries,
-            icon: const Icon(Icons.add_shopping_cart_outlined),
+            icon: const Icon(Icons.playlist_add_outlined),
           ),
         ],
       ),
@@ -515,19 +541,6 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           ? Column(
               children: [
                 _exportOptionsRow(),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                  child: SegmentedButton<bool>(
-                    showSelectedIcon: false,
-                    segments: const [
-                      ButtonSegment(value: true, label: Text('Running total')),
-                      ButtonSegment(value: false, label: Text('v1 (Frozen)')),
-                    ],
-                    selected: {_showRunningTotal},
-                    onSelectionChanged: (sel) =>
-                        setState(() => _showRunningTotal = sel.first),
-                  ),
-                ),
                 _showAllItemsToggle(),
                 Expanded(
                   child:
@@ -569,38 +582,51 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                 ),
               ],
             )
-          : Column(
+          : ListView(
+              padding: const EdgeInsets.all(16),
               children: [
-                _showAllItemsToggle(),
-                Expanded(
-                  child: visibleBom!.values.every((l) => l.isEmpty)
-                      ? _noVisibleItemsMessage()
-                      : ListView(
-                          padding: const EdgeInsets.all(16),
-                          children: [
-                            for (final group in MaterialGroup.values)
-                              if (visibleBom[group]!.isNotEmpty)
-                                _GroupSection(
-                                  group: group,
-                                  lines: visibleBom[group]!,
-                                ),
-                          ],
-                        ),
-                ),
+                for (final group in MaterialGroup.values)
+                  if (bom![group]!.isNotEmpty)
+                    _GroupSection(
+                      group: group,
+                      lines: bom[group]!,
+                      showAll: _showAllInGroup.contains(group),
+                      onToggleShowAll: () => setState(() {
+                        if (!_showAllInGroup.remove(group)) {
+                          _showAllInGroup.add(group);
+                        }
+                      }),
+                    ),
               ],
             ),
     );
   }
 }
 
+/// Live/unlocked group section. Hides zero-qty lines by default — bom_engine
+/// emits every Material Master row regardless of computed quantity, so most
+/// rows are zero — with a per-group "Show all (N)" button to reveal them.
 class _GroupSection extends StatelessWidget {
-  const _GroupSection({required this.group, required this.lines});
+  const _GroupSection({
+    required this.group,
+    required this.lines,
+    required this.showAll,
+    required this.onToggleShowAll,
+  });
 
   final MaterialGroup group;
   final List<BomLine> lines;
+  final bool showAll;
+  final VoidCallback onToggleShowAll;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hiddenCount = lines.where((l) => l.quantity <= 0).length;
+    final visibleLines = showAll
+        ? lines
+        : lines.where((l) => l.quantity > 0).toList();
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Card(
@@ -610,17 +636,36 @@ class _GroupSection extends StatelessWidget {
           children: [
             Container(
               width: double.infinity,
-              color: Theme.of(context).colorScheme.secondaryContainer,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Text(
-                '${group.code} — ${group.label}',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Theme.of(context).colorScheme.onSecondaryContainer,
-                ),
+              color: scheme.secondaryContainer,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${group.code} — ${group.label}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSecondaryContainer,
+                      ),
+                    ),
+                  ),
+                  if (hiddenCount > 0)
+                    TextButton(
+                      onPressed: onToggleShowAll,
+                      style: TextButton.styleFrom(
+                        foregroundColor: scheme.onSecondaryContainer,
+                      ),
+                      child: Text(
+                        showAll ? 'Hide zero-qty' : 'Show all ($hiddenCount)',
+                      ),
+                    ),
+                ],
               ),
             ),
-            for (final line in lines) _BomLineRow(line: line),
+            for (final line in visibleLines) _BomLineRow(line: line),
           ],
         ),
       ),

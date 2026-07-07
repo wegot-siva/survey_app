@@ -186,7 +186,7 @@ class _ReviewStatusBanner extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            Icon(Icons.timeline_outlined, color: scheme.onSecondaryContainer),
+            Icon(Icons.pending_actions_outlined, color: scheme.onSecondaryContainer),
             const SizedBox(width: 12),
             Text(
               'Status: ${SurveyStatus.label(status)}',

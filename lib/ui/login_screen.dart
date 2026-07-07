@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/engineer_directory.dart';
 import '../models/user_role.dart';
 import '../services/session_controller.dart';
+import 'theme/app_theme.dart';
 
 /// Role-based sign-in shown at app start (Slice A). The user picks a role and
 /// enters the shared password for it. On success, [SessionController] flips to
@@ -65,37 +66,62 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Sign in')),
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.xl,
+            AppSpacing.lg,
+            AppSpacing.xl,
+            AppSpacing.xl,
+          ),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.badge_outlined, size: 64),
-                const SizedBox(height: 16),
                 Text(
-                  'Choose your role',
+                  'Survey App',
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleLarge,
+                  style: AppTextStyles.title,
                 ),
-                const SizedBox(height: 24),
-                SegmentedButton<UserRole>(
-                  segments: [
+                const SizedBox(height: AppSpacing.lg),
+                Text('Role', style: AppTextStyles.label),
+                const SizedBox(height: AppSpacing.sm),
+                GridView.count(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisCount: 2,
+                  mainAxisSpacing: AppSpacing.sm,
+                  crossAxisSpacing: AppSpacing.sm,
+                  childAspectRatio: 2.6,
+                  children: [
                     for (final role in UserRole.values)
-                      ButtonSegment(value: role, label: Text(role.label)),
+                      Center(
+                        child: ChoiceChip(
+                          label: Text(role.label),
+                          showCheckmark: false,
+                          selected: _role == role,
+                          selectedColor: colorScheme.primaryContainer,
+                          backgroundColor: colorScheme.secondaryContainer,
+                          labelStyle: TextStyle(
+                            color: _role == role
+                                ? colorScheme.onPrimaryContainer
+                                : colorScheme.onSecondaryContainer,
+                          ),
+                          onSelected: _submitting
+                              ? null
+                              : (_) => setState(() {
+                                  _role = role;
+                                  if (_role != UserRole.engineer) {
+                                    _engineerName = null;
+                                  }
+                                }),
+                        ),
+                      ),
                   ],
-                  selected: {_role},
-                  onSelectionChanged: _submitting
-                      ? null
-                      : (sel) => setState(() {
-                          _role = sel.first;
-                          if (_role != UserRole.engineer) _engineerName = null;
-                        }),
                 ),
                 if (_role == UserRole.engineer) ...[
                   const SizedBox(height: 24),

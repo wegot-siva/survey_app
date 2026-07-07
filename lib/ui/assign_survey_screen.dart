@@ -218,7 +218,7 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
         OutlinedButton.icon(
           onPressed: _openClientInputs,
           icon: Icon(
-            hasInputs ? Icons.check_circle_outline : Icons.assignment_outlined,
+            hasInputs ? Icons.check_circle_outline : Icons.radio_button_unchecked,
           ),
           label: Text(
             hasInputs ? 'Client inputs saved — edit' : 'Fill Client inputs',

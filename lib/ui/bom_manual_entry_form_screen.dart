@@ -79,7 +79,9 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     final items = await widget.repository.getMaterialMasterItems();
     if (!mounted) return;
     setState(() {
-      _catalog = items;
+      _catalog = items
+          .where((item) => kBomManualEntryGroups.contains(item.group))
+          .toList();
       _loadingCatalog = false;
     });
   }
