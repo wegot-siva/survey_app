@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
@@ -214,26 +215,49 @@ class _HomeScreenState extends State<HomeScreen> {
         title: Text(result.success ? 'Sync complete' : 'Sync failed'),
         content: SingleChildScrollView(
           child: result.success
-              ? Text(
-                  'Pushed to Supabase:\n\n'
-                  '• ${result.sites} site(s)\n'
-                  '• ${result.blocks} block(s)\n'
-                  '• ${result.clientInputs} client input form(s)\n'
-                  '• ${result.sourcePoints} source point(s)\n'
-                  '• ${result.inletPoints} inlet point(s)\n'
-                  '• ${result.ductLoras} Duct LoRa unit(s)\n'
-                  '• ${result.gateways} gateway(s)\n'
-                  '• ${result.footers} footer form(s)\n'
-                  '• ${result.materialMasterItems} material master item(s)\n'
-                  '• ${result.materialMasterAuditEntries} change log entr'
-                  '${result.materialMasterAuditEntries == 1 ? 'y' : 'ies'}\n'
-                  '• ${result.photos} photo(s)\n'
-                  '• ${result.bomManualEntries} manual BoM entr'
-                  '${result.bomManualEntries == 1 ? 'y' : 'ies'}\n'
-                  '• ${result.bomSnapshots} finalized BoM snapshot'
-                  '${result.bomSnapshots == 1 ? '' : 's'}\n'
-                  '• ${result.bomRevisions} BoM revision'
-                  '${result.bomRevisions == 1 ? '' : 's'}',
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Synced ${_syncItemTotal(result)} item(s) to Supabase.',
+                    ),
+                    Theme(
+                      // ExpansionTile paints its own divider lines; hide them
+                      // so it sits flush inside the dialog.
+                      data: Theme.of(context).copyWith(
+                        dividerColor: Colors.transparent,
+                      ),
+                      child: ExpansionTile(
+                        tilePadding: EdgeInsets.zero,
+                        childrenPadding: EdgeInsets.zero,
+                        expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                        title: const Text('Show details'),
+                        children: [
+                          Text(
+                            '• ${result.sites} site(s)\n'
+                            '• ${result.blocks} block(s)\n'
+                            '• ${result.clientInputs} client input form(s)\n'
+                            '• ${result.sourcePoints} source point(s)\n'
+                            '• ${result.inletPoints} inlet point(s)\n'
+                            '• ${result.ductLoras} Duct LoRa unit(s)\n'
+                            '• ${result.gateways} gateway(s)\n'
+                            '• ${result.footers} footer form(s)\n'
+                            '• ${result.materialMasterItems} material master item(s)\n'
+                            '• ${result.materialMasterAuditEntries} change log entr'
+                            '${result.materialMasterAuditEntries == 1 ? 'y' : 'ies'}\n'
+                            '• ${result.photos} photo(s)\n'
+                            '• ${result.bomManualEntries} manual BoM entr'
+                            '${result.bomManualEntries == 1 ? 'y' : 'ies'}\n'
+                            '• ${result.bomSnapshots} finalized BoM snapshot'
+                            '${result.bomSnapshots == 1 ? '' : 's'}\n'
+                            '• ${result.bomRevisions} BoM revision'
+                            '${result.bomRevisions == 1 ? '' : 's'}',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 )
               : SelectableText(result.message ?? 'Unknown error.'),
         ),
@@ -247,6 +271,24 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Sum of every per-table push count in [result] — the single number the
+  /// sync dialog leads with, before the itemized "Show details" breakdown.
+  static int _syncItemTotal(SyncResult result) =>
+      result.sites +
+      result.blocks +
+      result.clientInputs +
+      result.sourcePoints +
+      result.inletPoints +
+      result.ductLoras +
+      result.gateways +
+      result.footers +
+      result.materialMasterItems +
+      result.materialMasterAuditEntries +
+      result.photos +
+      result.bomManualEntries +
+      result.bomSnapshots +
+      result.bomRevisions;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -259,11 +301,15 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: _openMaterialMaster,
               icon: const Icon(Icons.inventory_2_outlined),
             ),
-          IconButton(
-            tooltip: 'Test Supabase connection',
-            onPressed: _testSupabase,
-            icon: const Icon(Icons.cloud_outlined),
-          ),
+          // Developer diagnostic — compiled out of release builds entirely.
+          // This is a build-type concern (dev vs field), not a role/permission
+          // one, so kDebugMode is the right gate, not an admin-role check.
+          if (kDebugMode)
+            IconButton(
+              tooltip: 'Test Supabase connection',
+              onPressed: _testSupabase,
+              icon: const Icon(Icons.cloud_outlined),
+            ),
           IconButton(
             tooltip: 'Sync now (push to Supabase)',
             onPressed: _syncNow,
