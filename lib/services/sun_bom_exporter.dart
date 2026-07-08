@@ -30,17 +30,20 @@ class SunBomExporter {
   ];
 
   /// Builds the workbook from [lines] and writes it to a temp file (suitable
-  /// for the share sheet). Returns the file path. [siteName] names the file.
+  /// for the share sheet). Returns the file path. Named
+  /// `<site name>-Sun_BOM-v<version>.xlsx` — deterministic, so re-exporting
+  /// the same site/version simply overwrites the prior temp file (harmless;
+  /// it's consumed immediately by the share sheet).
   Future<String> export({
     required String siteName,
     required List<BomRunningTotalLine> lines,
+    required int version,
   }) async {
     final bytes = buildXlsxBytes(lines);
     final dir = await getTemporaryDirectory();
     final filePath = p.join(
       dir.path,
-      'Sun_BOM_${_safeFileName(siteName)}_'
-      '${DateTime.now().millisecondsSinceEpoch}.xlsx',
+      '${_safeFileName(siteName)}-Sun_BOM-v$version.xlsx',
     );
     await File(filePath).writeAsBytes(bytes);
     return filePath;

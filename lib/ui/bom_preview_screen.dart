@@ -308,10 +308,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
         _ExportFormat.sunBom => await const SunBomExporter().export(
           siteName: widget.site.name,
           lines: lines,
+          version: _selectedExportVersion,
         ),
         _ExportFormat.lumax => await const LumaxExporter().export(
           siteName: widget.site.name,
           lines: lines,
+          version: _selectedExportVersion,
         ),
       };
       if (!mounted) return;

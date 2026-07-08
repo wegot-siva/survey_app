@@ -37,18 +37,21 @@ class LumaxExporter {
   static const _generalSheetLabel = 'General';
 
   /// Builds the workbook from [lines] and writes it to a temp file (suitable
-  /// for the share sheet). Returns the file path. [siteName] names both the
-  /// file and the row written at the top of every sheet.
+  /// for the share sheet). Returns the file path. [siteName] also names the
+  /// row written at the top of every sheet. The file itself is named
+  /// `<site name>-Lumax-v<version>.xlsx` — deterministic, so re-exporting the
+  /// same site/version simply overwrites the prior temp file (harmless; it's
+  /// consumed immediately by the share sheet).
   Future<String> export({
     required String siteName,
     required List<BomRunningTotalLine> lines,
+    required int version,
   }) async {
     final bytes = buildXlsxBytes(siteName: siteName, lines: lines);
     final dir = await getTemporaryDirectory();
     final filePath = p.join(
       dir.path,
-      'Lumax_${_safeFileName(siteName)}_'
-      '${DateTime.now().millisecondsSinceEpoch}.xlsx',
+      '${_safeFileName(siteName)}-Lumax-v$version.xlsx',
     );
     await File(filePath).writeAsBytes(bytes);
     return filePath;
