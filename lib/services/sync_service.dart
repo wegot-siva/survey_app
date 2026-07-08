@@ -76,7 +76,10 @@ class SyncService {
     }
 
     try {
-      final sites = await _repository.getSites();
+      // Archived sites are excluded from every UI list, but their already-
+      // recorded survey/BoM/photo data must keep syncing — nothing archived
+      // is ever deleted, so nothing archived should stop syncing either.
+      final sites = await _repository.getSites(includeArchived: true);
       var blocks = 0;
       var clientInputs = 0;
       var sourcePoints = 0;

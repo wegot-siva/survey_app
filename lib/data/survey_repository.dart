@@ -22,7 +22,11 @@ import '../models/survey_photo.dart';
 /// writes go through a [SurveyRepository]. The local implementation is sqflite;
 /// an in-memory stub backs widget tests.
 abstract class SurveyRepository {
-  Future<List<Site>> getSites();
+  /// Lists sites, ordered by name. Excludes soft-deleted (archived) sites
+  /// unless [includeArchived] is true — sync needs the full set so an
+  /// archived site's already-recorded survey/BoM/photo data keeps syncing;
+  /// every UI list should use the default (active only).
+  Future<List<Site>> getSites({bool includeArchived = false});
 
   Future<Site?> getSiteById(String id);
 

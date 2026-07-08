@@ -11,7 +11,7 @@ import 'material_master_seed.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 14;
+const int _dbVersion = 15;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -149,15 +149,33 @@ Future<Database> openAppDatabase() async {
         await _seedEngineers(db);
         await _createSurveyAssignmentAuditTable(db);
       }
+      // v14 -> v15: Sales site management — soft-delete flag ("archived",
+      // hides a site from active lists but never removes the row or its
+      // FK'd data) plus site-level name/address/client-info fields Sales can
+      // edit post-creation, distinct from the field engineer's Client Inputs
+      // survey section. All default to unset, so existing sites are
+      // unaffected until explicitly edited.
+      if (oldVersion < 15) {
+        await db.execute(
+          'ALTER TABLE sites ADD COLUMN archived INTEGER NOT NULL DEFAULT 0',
+        );
+        await db.execute('ALTER TABLE sites ADD COLUMN address TEXT');
+        await db.execute('ALTER TABLE sites ADD COLUMN client_name TEXT');
+        await db.execute('ALTER TABLE sites ADD COLUMN client_contact TEXT');
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
         CREATE TABLE sites (
-          id          TEXT PRIMARY KEY,
-          name        TEXT NOT NULL,
-          status      TEXT,
-          assigned_to TEXT,
-          bom_locked  INTEGER NOT NULL DEFAULT 0
+          id             TEXT PRIMARY KEY,
+          name           TEXT NOT NULL,
+          status         TEXT,
+          assigned_to    TEXT,
+          bom_locked     INTEGER NOT NULL DEFAULT 0,
+          archived       INTEGER NOT NULL DEFAULT 0,
+          address        TEXT,
+          client_name    TEXT,
+          client_contact TEXT
         )
       ''');
 

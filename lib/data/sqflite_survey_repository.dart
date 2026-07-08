@@ -36,8 +36,12 @@ class SqfliteSurveyRepository implements SurveyRepository {
   final IdService _idService;
 
   @override
-  Future<List<Site>> getSites() async {
-    final rows = await _db.query('sites', orderBy: 'name COLLATE NOCASE');
+  Future<List<Site>> getSites({bool includeArchived = false}) async {
+    final rows = await _db.query(
+      'sites',
+      where: includeArchived ? null : 'archived = 0',
+      orderBy: 'name COLLATE NOCASE',
+    );
     final sites = <Site>[];
     for (final row in rows) {
       sites.add(await _hydrate(row));
@@ -75,7 +79,15 @@ class SqfliteSurveyRepository implements SurveyRepository {
     await _db.transaction((txn) async {
       await txn.update(
         'sites',
-        {'name': site.name, 'status': site.status, 'assigned_to': site.assignedTo},
+        {
+          'name': site.name,
+          'status': site.status,
+          'assigned_to': site.assignedTo,
+          'archived': site.archived ? 1 : 0,
+          'address': site.address,
+          'client_name': site.clientName,
+          'client_contact': site.clientContact,
+        },
         where: 'id = ?',
         whereArgs: [site.id],
       );
@@ -165,6 +177,10 @@ class SqfliteSurveyRepository implements SurveyRepository {
       status: siteRow['status'] as String?,
       assignedTo: siteRow['assigned_to'] as String?,
       bomLocked: _intToBool(siteRow['bom_locked'] as int?) ?? false,
+      archived: _intToBool(siteRow['archived'] as int?) ?? false,
+      address: siteRow['address'] as String? ?? '',
+      clientName: siteRow['client_name'] as String? ?? '',
+      clientContact: siteRow['client_contact'] as String? ?? '',
     );
   }
 

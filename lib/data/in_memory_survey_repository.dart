@@ -51,7 +51,10 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, SurveyAssignmentAuditEntry> _assignmentAudit = {};
 
   @override
-  Future<List<Site>> getSites() async => _sites.values.toList(growable: false);
+  Future<List<Site>> getSites({bool includeArchived = false}) async => _sites
+      .values
+      .where((s) => includeArchived || !s.archived)
+      .toList(growable: false);
 
   @override
   Future<Site?> getSiteById(String id) async => _sites[id];
@@ -374,6 +377,10 @@ class InMemorySurveyRepository implements SurveyRepository {
         status: site.status,
         assignedTo: site.assignedTo,
         bomLocked: true,
+        archived: site.archived,
+        address: site.address,
+        clientName: site.clientName,
+        clientContact: site.clientContact,
       );
     }
 

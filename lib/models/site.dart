@@ -11,6 +11,10 @@ class Site {
     this.status,
     this.assignedTo,
     this.bomLocked = false,
+    this.archived = false,
+    this.address = '',
+    this.clientName = '',
+    this.clientContact = '',
   });
 
   final String id;
@@ -32,12 +36,28 @@ class Site {
   /// there is no unlock/re-finalize flow yet.
   final bool bomLocked;
 
+  /// Soft-delete flag — Sales' "Delete site" sets this instead of removing
+  /// the row, so no FK'd survey/BoM/photo data is ever destroyed. See
+  /// [SurveyRepository.getSites].
+  final bool archived;
+
+  /// Site-level metadata Sales can edit post-creation via "Edit site
+  /// details" — distinct from [clientInputs], which is the field engineer's
+  /// own Client Inputs survey section filled in during the visit.
+  final String address;
+  final String clientName;
+  final String clientContact;
+
   Site copyWith({
     String? name,
     List<String>? blocks,
     ClientInputs? clientInputs,
     String? status,
     String? assignedTo,
+    bool? archived,
+    String? address,
+    String? clientName,
+    String? clientContact,
   }) {
     return Site(
       id: id,
@@ -47,6 +67,10 @@ class Site {
       status: status ?? this.status,
       assignedTo: assignedTo ?? this.assignedTo,
       bomLocked: bomLocked,
+      archived: archived ?? this.archived,
+      address: address ?? this.address,
+      clientName: clientName ?? this.clientName,
+      clientContact: clientContact ?? this.clientContact,
     );
   }
 }

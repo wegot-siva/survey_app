@@ -9,6 +9,7 @@ import '../services/session_controller.dart';
 import 'bom_preview_screen.dart';
 import 'client_inputs_screen.dart';
 import 'duct_loras_list_screen.dart';
+import 'edit_site_details_screen.dart';
 import 'footer_screen.dart';
 import 'gateways_list_screen.dart';
 import 'inlet_points_list_screen.dart';
@@ -24,6 +25,9 @@ import 'theme/app_theme.dart';
 /// reaches or exceeds it. Binary sections (client inputs, footer, blocks,
 /// BoM) only ever report [empty] or [complete].
 enum _SectionStatus { empty, partial, complete }
+
+/// Actions in Site Hub's "Manage site" overflow menu — see [canReassignRole].
+enum _SiteManageAction { editDetails, delete }
 
 /// The hub for one site: jump to any section (Client inputs, Source points,
 /// Inlet points). No locked wizard — sections can be done in any order and
@@ -257,6 +261,53 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     );
   }
 
+  /// Sales' "Edit site details" action — name/address/client contact only;
+  /// never touches blocks or the Client Inputs survey section.
+  Future<void> _openEditSiteDetails(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            EditSiteDetailsScreen(repository: widget.repository, site: site),
+      ),
+    );
+    await _load();
+  }
+
+  /// Sales' "Delete site" action — soft-delete only: sets [Site.archived] so
+  /// the site drops off every active list, but its row and every FK'd
+  /// survey/BoM/photo record are left exactly as they are. Available
+  /// regardless of survey status (unlike reassignment).
+  Future<void> _deleteSite(Site site) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete site?'),
+        content: const Text(
+          'This hides it from all site lists. Survey data, BoM, and photos '
+          'are kept — nothing is permanently deleted.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await widget.repository.updateSite(site.copyWith(archived: true));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Site deleted.')),
+    );
+    Navigator.of(context).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     final site = _site;
@@ -289,6 +340,34 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
               tooltip: 'Edit assignee',
               onPressed: () => _editAssignee(site),
               icon: const Icon(Icons.person_outline),
+            ),
+          if (site != null && canReassignRole)
+            PopupMenuButton<_SiteManageAction>(
+              tooltip: 'Manage site',
+              onSelected: (action) {
+                switch (action) {
+                  case _SiteManageAction.editDetails:
+                    _openEditSiteDetails(site);
+                  case _SiteManageAction.delete:
+                    _deleteSite(site);
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _SiteManageAction.editDetails,
+                  child: ListTile(
+                    leading: Icon(Icons.edit_outlined),
+                    title: Text('Edit site details'),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: _SiteManageAction.delete,
+                  child: ListTile(
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('Delete site'),
+                  ),
+                ),
+              ],
             ),
         ],
       ),
