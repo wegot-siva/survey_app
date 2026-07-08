@@ -433,12 +433,14 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      // Admin and Approver get the same create+assign flow as Sales — every
-      // other role still gets the bare "New site" flow.
-      floatingActionButton:
-          widget.session.currentRole == UserRole.sales ||
-              widget.session.currentRole == UserRole.admin ||
-              widget.session.currentRole == UserRole.approver
+      // Admin and Approver get the same create+assign flow as Sales. Engineer
+      // creates nothing — sites/surveys reach them already assigned — so no
+      // FAB at all, rather than a "New site" action Engineer never uses.
+      floatingActionButton: widget.session.currentRole == UserRole.engineer
+          ? null
+          : widget.session.currentRole == UserRole.sales ||
+                widget.session.currentRole == UserRole.admin ||
+                widget.session.currentRole == UserRole.approver
           ? FloatingActionButton.extended(
               onPressed: _openAssignSurvey,
               icon: const Icon(Icons.add_task),
