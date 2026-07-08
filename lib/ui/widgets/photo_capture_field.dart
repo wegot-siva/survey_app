@@ -193,16 +193,31 @@ class _Thumb extends StatelessWidget {
           ),
         ),
         if (onEdit != null)
+          // The visual badge stays small (unchanged), but its tappable area
+          // is padded out to close to Material's 44dp minimum touch target —
+          // a precise tap on the tiny icon alone was unreliable. Anchored at
+          // the corner (not centered on the badge), so this only grows
+          // inward, never clipped by the Stack's bounds.
           Positioned(
-            right: 2,
-            bottom: 2,
-            child: Container(
-              decoration: const BoxDecoration(
-                color: Colors.black54,
-                shape: BoxShape.circle,
+            right: 0,
+            bottom: 0,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onEdit,
+                customBorder: const CircleBorder(),
+                child: Padding(
+                  padding: const EdgeInsets.all(13),
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    padding: const EdgeInsets.all(3),
+                    child: const Icon(Icons.edit, size: 12, color: Colors.white),
+                  ),
+                ),
               ),
-              padding: const EdgeInsets.all(3),
-              child: const Icon(Icons.edit, size: 12, color: Colors.white),
             ),
           ),
       ],
