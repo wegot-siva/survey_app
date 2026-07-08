@@ -288,12 +288,6 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
               onPressed: () => _editAssignee(site),
               icon: const Icon(Icons.person_outline),
             ),
-          if (site != null && isEngineer && canSubmit)
-            TextButton.icon(
-              onPressed: () => _markSubmitted(site),
-              icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Submit'),
-            ),
         ],
       ),
       body: _loading
@@ -374,6 +368,17 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
                       : _SectionStatus.empty,
                   onTap: () => _openBomPreview(site),
                 ),
+                if (isEngineer && canSubmit) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => _markSubmitted(site),
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: const Text('Submit'),
+                    ),
+                  ),
+                ],
               ],
             ),
     );
