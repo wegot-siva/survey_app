@@ -58,6 +58,7 @@ class PhotoOwner {
   static const gateway = 'gateway';
   static const footer = 'footer';
   static const ductLora = 'duct_lora';
+  static const clientInputs = 'client_inputs';
 }
 
 /// Slot tokens stored in [SurveyPhoto.slot], grouped by owner.
@@ -84,4 +85,7 @@ class PhotoSlot {
 
   // Footer
   static const siteMedia = 'site_media';
+
+  // Client inputs
+  static const drawings = 'drawings';
 }

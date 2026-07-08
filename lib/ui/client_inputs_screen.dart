@@ -5,6 +5,9 @@ import '../data/survey_repository.dart';
 import '../models/client_inputs.dart';
 import '../models/site.dart';
 import '../models/survey_options.dart';
+import '../models/survey_photo.dart';
+import 'photo_markup_screen.dart';
+import 'widgets/photo_capture_field.dart';
 
 /// The per-site "Client inputs" form. All fields are optional — partial
 /// entries can be saved. Pre-fills from any previously saved inputs.
@@ -44,11 +47,16 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
   bool? _reworkRequired;
   bool? _aestheticGuidelines;
 
+  /// Attached drawings — multiple allowed, site-scoped (one set per site, not
+  /// per-save-of-the-form). Loaded alongside the form; reconciled on save.
+  final List<PhotoDraft> _drawingPhotos = [];
+
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
+    _loadPhotos();
     final existing = widget.site.clientInputs;
 
     _siteName = TextEditingController(
@@ -100,6 +108,70 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     super.dispose();
   }
 
+  Future<void> _loadPhotos() async {
+    final loaded = await widget.repository.getPhotos(
+      PhotoOwner.clientInputs,
+      widget.site.id,
+    );
+    if (!mounted) return;
+    setState(() {
+      for (final p in loaded) {
+        if (p.slot == PhotoSlot.drawings) {
+          _drawingPhotos.add(
+            PhotoDraft(id: p.id, localPath: p.localPath, remotePath: p.remotePath),
+          );
+        }
+      }
+    });
+  }
+
+  void _onDrawingAdded(String localPath) {
+    setState(() => _drawingPhotos.add(PhotoDraft(localPath: localPath)));
+  }
+
+  void _onDrawingRemoved(int index) {
+    setState(() => _drawingPhotos.removeAt(index));
+  }
+
+  /// Opens the markup screen for an existing drawing photo. The photo keeps
+  /// its id (so saving updates the same record/Storage object instead of
+  /// creating an orphan); only its local path changes, and remotePath resets
+  /// to null so the marked-up version is re-uploaded on the next sync.
+  Future<void> _onDrawingEdit(int index) async {
+    final draft = _drawingPhotos[index];
+    final path = draft.localPath;
+    if (path == null) return;
+
+    final newPath = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => PhotoMarkupScreen(imagePath: path)),
+    );
+    if (newPath == null || !mounted) return;
+    setState(() {
+      draft.localPath = newPath;
+      draft.remotePath = null;
+    });
+  }
+
+  List<SurveyPhoto> _drawingPhotoList() {
+    final list = <SurveyPhoto>[];
+    for (var i = 0; i < _drawingPhotos.length; i++) {
+      final draft = _drawingPhotos[i];
+      if (draft.localPath == null) continue;
+      list.add(
+        SurveyPhoto(
+          id: draft.id,
+          ownerType: PhotoOwner.clientInputs,
+          ownerId: widget.site.id,
+          slot: PhotoSlot.drawings,
+          position: i,
+          localPath: draft.localPath,
+          remotePath: draft.remotePath,
+        ),
+      );
+    }
+    return list;
+  }
+
   Future<void> _save() async {
     setState(() => _saving = true);
     final inputs = ClientInputs(
@@ -123,6 +195,11 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     );
 
     await widget.repository.saveClientInputs(widget.site.id, inputs);
+    await widget.repository.setPhotos(
+      PhotoOwner.clientInputs,
+      widget.site.id,
+      _drawingPhotoList(),
+    );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Client inputs saved.')),
@@ -185,14 +262,15 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
             _finalisedDrawings,
             (v) => setState(() => _finalisedDrawings = v),
           ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: OutlinedButton.icon(
-              // Disabled placeholder for Phase 0 — file attach comes later.
-              onPressed: null,
-              icon: const Icon(Icons.attach_file),
-              label: const Text('Attach drawings (coming soon)'),
-            ),
+          MultiPhotoCaptureField(
+            label: 'Attach drawings (photo/scan)',
+            photos: [
+              for (final d in _drawingPhotos)
+                if (d.localPath != null) PhotoView(d.localPath!, uploaded: d.uploaded),
+            ],
+            onAdded: _onDrawingAdded,
+            onRemoved: _onDrawingRemoved,
+            onEdit: _onDrawingEdit,
           ),
 
           _text(

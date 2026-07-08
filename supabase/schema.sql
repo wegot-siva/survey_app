@@ -297,7 +297,7 @@ create policy "dev all - survey-photos update" on storage.objects
 
 create table if not exists public.photos (
   id          text primary key,
-  owner_type  text not null,   -- source_point | inlet_point | gateway | footer
+  owner_type  text not null,   -- source_point | inlet_point | gateway | footer | duct_lora | client_inputs
   owner_id    text not null,
   slot        text not null,   -- e.g. inlet_marked, shaft_access, site_media
   position    integer not null default 0,
