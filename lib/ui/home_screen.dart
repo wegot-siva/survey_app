@@ -289,6 +289,117 @@ class _HomeScreenState extends State<HomeScreen> {
       result.bomSnapshots +
       result.bomRevisions;
 
+  /// Groups the Engineer's assigned surveys into three tabs by status —
+  /// display only, no status transitions happen here. "Not started" is
+  /// [SurveyStatus.assigned] (or no status at all, defensively); "In
+  /// progress" is [SurveyStatus.inProgress] (set the moment the engineer
+  /// opens an assigned survey — see [_openSite]); "Completed" covers
+  /// [SurveyStatus.submitted] onward ([SurveyStatus.approved] /
+  /// [SurveyStatus.released] included, since submitting is the engineer's
+  /// last action on a survey — later Approver/Sales stages don't need their
+  /// own engineer-facing tab).
+  Widget _buildEngineerGroupedList() {
+    final notStarted = _sites
+        .where((s) => s.status == SurveyStatus.assigned || s.status == null)
+        .toList(growable: false);
+    final inProgress = _sites
+        .where((s) => s.status == SurveyStatus.inProgress)
+        .toList(growable: false);
+    final completed = _sites
+        .where(
+          (s) =>
+              s.status == SurveyStatus.submitted ||
+              s.status == SurveyStatus.approved ||
+              s.status == SurveyStatus.released,
+        )
+        .toList(growable: false);
+
+    return DefaultTabController(
+      length: 3,
+      child: Column(
+        children: [
+          TabBar(
+            tabs: [
+              _tabLabelWithBadge(context, 'Not started', notStarted.length),
+              _tabLabelWithBadge(context, 'In progress', inProgress.length),
+              _tabLabelWithBadge(context, 'Completed', completed.length),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                _engineerSiteGroupList(notStarted),
+                _engineerSiteGroupList(inProgress),
+                _engineerSiteGroupList(completed),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// A tab label paired with a small Material [Badge] showing [count] —
+  /// replaces baking the count into the label text itself, which could
+  /// overflow a tab's narrow (1/3 of screen width) slot on small devices,
+  /// especially at 2+ digits. The label is [Flexible] so it's the part that
+  /// degrades (ellipsis) if a device is narrow enough to squeeze this row;
+  /// the badge is a fixed-size sibling and always shows the full count.
+  Tab _tabLabelWithBadge(BuildContext context, String label, int count) {
+    final scheme = Theme.of(context).colorScheme;
+    return Tab(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(label, overflow: TextOverflow.ellipsis, maxLines: 1),
+          ),
+          const SizedBox(width: 6),
+          Badge(
+            backgroundColor: scheme.primary,
+            textColor: scheme.onPrimary,
+            label: Text('$count'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _engineerSiteGroupList(List<Site> sites) {
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: sites.isEmpty
+          // Still wrapped in a scrollable, so pull-to-refresh works even on
+          // an empty tab.
+          ? ListView(
+              children: const [
+                Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: Text('No surveys in this group yet.')),
+                ),
+              ],
+            )
+          : ListView.separated(
+              itemCount: sites.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, i) => _engineerSiteTile(sites[i]),
+            ),
+    );
+  }
+
+  /// Same row rendering the flat list already used for Engineer — extracted
+  /// so the grouped tabs and the (untouched) flat list for other roles don't
+  /// duplicate-and-drift.
+  Widget _engineerSiteTile(Site site) {
+    return ListTile(
+      leading: const Icon(Icons.location_city_outlined),
+      title: Text(site.name),
+      subtitle: Text('Status: ${site.status ?? 'Not assigned'}'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _openSite(site),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -345,6 +456,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? const Center(child: CircularProgressIndicator())
                 : _sites.isEmpty
                 ? _EmptyState(role: widget.session.currentRole)
+                : widget.session.currentRole == UserRole.engineer
+                ? _buildEngineerGroupedList()
                 : RefreshIndicator(
                     onRefresh: _load,
                     child: ListView.separated(
