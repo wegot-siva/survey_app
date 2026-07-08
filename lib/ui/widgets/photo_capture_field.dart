@@ -62,6 +62,8 @@ class MultiPhotoCaptureField extends StatefulWidget {
     required this.onAdded,
     required this.onRemoved,
     this.onEdit,
+    this.onView,
+    this.readOnly = false,
   });
 
   final String label;
@@ -70,9 +72,21 @@ class MultiPhotoCaptureField extends StatefulWidget {
   final ValueChanged<int> onRemoved;
 
   /// Optional — when provided, tapping a thumbnail invokes this with the
-  /// photo's index, e.g. to open a markup screen. Fields that don't pass this
-  /// render exactly as before: no edit affordance, unchanged behavior.
+  /// photo's index, e.g. to open a markup screen. Takes priority over
+  /// [onView] when both are given (only one applies at a time in practice —
+  /// [onEdit] for editable forms, [onView] for read-only ones).
   final ValueChanged<int>? onEdit;
+
+  /// Optional — when [onEdit] isn't given (or the field is [readOnly]),
+  /// tapping a thumbnail invokes this instead, e.g. to open a read-only
+  /// full-screen viewer. Lets a read-only form still preview photos without
+  /// exposing markup/edit capability.
+  final ValueChanged<int>? onView;
+
+  /// When true: no "Add photo" button, no remove badge, and no edit
+  /// affordance — tapping a thumbnail (if [onView] is given) only opens a
+  /// read-only preview.
+  final bool readOnly;
 
   @override
   State<MultiPhotoCaptureField> createState() => _MultiPhotoCaptureFieldState();
@@ -115,25 +129,30 @@ class _MultiPhotoCaptureFieldState extends State<MultiPhotoCaptureField> {
                 for (var i = 0; i < widget.photos.length; i++)
                   _Thumb(
                     photo: widget.photos[i],
-                    onRemove: () => widget.onRemoved(i),
-                    onEdit: widget.onEdit == null
+                    onRemove: widget.readOnly ? null : () => widget.onRemoved(i),
+                    onEdit: widget.readOnly || widget.onEdit == null
                         ? null
                         : () => widget.onEdit!(i),
+                    onView: widget.onView == null
+                        ? null
+                        : () => widget.onView!(i),
                   ),
               ],
             ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _capturing ? null : _add,
-            icon: _capturing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.add_a_photo_outlined),
-            label: const Text('Add photo'),
-          ),
+          if (!widget.readOnly) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _capturing ? null : _add,
+              icon: _capturing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.add_a_photo_outlined),
+              label: const Text('Add photo'),
+            ),
+          ],
         ],
       ),
     );
@@ -141,11 +160,20 @@ class _MultiPhotoCaptureFieldState extends State<MultiPhotoCaptureField> {
 }
 
 class _Thumb extends StatelessWidget {
-  const _Thumb({required this.photo, required this.onRemove, this.onEdit});
+  const _Thumb({
+    required this.photo,
+    required this.onRemove,
+    this.onEdit,
+    this.onView,
+  });
 
   final PhotoView photo;
-  final VoidCallback onRemove;
+  final VoidCallback? onRemove;
   final VoidCallback? onEdit;
+
+  /// Used for the main-image tap when [onEdit] isn't set — e.g. a read-only
+  /// full-screen preview instead of the markup editor.
+  final VoidCallback? onView;
 
   @override
   Widget build(BuildContext context) {
@@ -154,7 +182,7 @@ class _Thumb extends StatelessWidget {
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: GestureDetector(
-            onTap: onEdit,
+            onTap: onEdit ?? onView,
             child: Image.file(
               File(photo.localPath),
               height: 96,
@@ -168,21 +196,22 @@ class _Thumb extends StatelessWidget {
             ),
           ),
         ),
-        Positioned(
-          right: 2,
-          top: 2,
-          child: GestureDetector(
-            onTap: onRemove,
-            child: Container(
-              decoration: const BoxDecoration(
-                color: Colors.black54,
-                shape: BoxShape.circle,
+        if (onRemove != null)
+          Positioned(
+            right: 2,
+            top: 2,
+            child: GestureDetector(
+              onTap: onRemove,
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Colors.black54,
+                  shape: BoxShape.circle,
+                ),
+                padding: const EdgeInsets.all(2),
+                child: const Icon(Icons.close, size: 16, color: Colors.white),
               ),
-              padding: const EdgeInsets.all(2),
-              child: const Icon(Icons.close, size: 16, color: Colors.white),
             ),
           ),
-        ),
         Positioned(
           left: 2,
           bottom: 2,
@@ -233,6 +262,57 @@ class _UnavailableThumb extends StatelessWidget {
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       alignment: Alignment.center,
       child: const Text('Saved photo unavailable.'),
+    );
+  }
+}
+
+/// Opens [imagePath] full-screen, pinch-to-zoom, with no edit/markup
+/// affordance — for reviewers (e.g. Approver) who should be able to inspect
+/// a captured photo but never alter it.
+Future<void> openPhotoViewer(
+  BuildContext context,
+  String imagePath, {
+  String title = 'Photo',
+}) {
+  return Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => PhotoViewerScreen(imagePath: imagePath, title: title),
+    ),
+  );
+}
+
+class PhotoViewerScreen extends StatelessWidget {
+  const PhotoViewerScreen({
+    super.key,
+    required this.imagePath,
+    this.title = 'Photo',
+  });
+
+  final String imagePath;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      backgroundColor: Colors.black,
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 5,
+          child: Image.file(
+            File(imagePath),
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) => const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Photo unavailable.',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

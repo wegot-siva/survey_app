@@ -11,10 +11,12 @@ class GatewaysListScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.site,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
   final Site site;
+  final bool readOnly;
 
   @override
   State<GatewaysListScreen> createState() => _GatewaysListScreenState();
@@ -47,6 +49,7 @@ class _GatewaysListScreenState extends State<GatewaysListScreen> {
           repository: widget.repository,
           site: widget.site,
           existing: existing,
+          readOnly: widget.readOnly,
         ),
       ),
     );
@@ -98,11 +101,13 @@ class _GatewaysListScreenState extends State<GatewaysListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Gateways')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addOrEdit(),
-        icon: const Icon(Icons.add),
-        label: const Text('Add gateway'),
-      ),
+      floatingActionButton: widget.readOnly
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _addOrEdit(),
+              icon: const Icon(Icons.add),
+              label: const Text('Add gateway'),
+            ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _gateways.isEmpty
@@ -125,11 +130,13 @@ class _GatewaysListScreenState extends State<GatewaysListScreen> {
                   title: Text(_titleFor(g)),
                   subtitle: Text(_subtitleFor(g)),
                   onTap: () => _addOrEdit(g),
-                  trailing: IconButton(
-                    tooltip: 'Delete',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => _delete(g),
-                  ),
+                  trailing: widget.readOnly
+                      ? null
+                      : IconButton(
+                          tooltip: 'Delete',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _delete(g),
+                        ),
                 );
               },
             ),

@@ -12,10 +12,12 @@ class SourcePointsListScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.site,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
   final Site site;
+  final bool readOnly;
 
   @override
   State<SourcePointsListScreen> createState() => _SourcePointsListScreenState();
@@ -48,6 +50,7 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
           repository: widget.repository,
           site: widget.site,
           existing: existing,
+          readOnly: widget.readOnly,
         ),
       ),
     );
@@ -127,11 +130,13 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Source points')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addOrEdit(),
-        icon: const Icon(Icons.add),
-        label: const Text('Add source point'),
-      ),
+      floatingActionButton: widget.readOnly
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _addOrEdit(),
+              icon: const Icon(Icons.add),
+              label: const Text('Add source point'),
+            ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _points.isEmpty
@@ -162,41 +167,43 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
                   ),
                   subtitle: Text(_subtitleFor(sp)),
                   onTap: () => _addOrEdit(sp),
-                  trailing: PopupMenuButton<_SourcePointAction>(
-                    onSelected: (action) {
-                      switch (action) {
-                        case _SourcePointAction.duplicate:
-                          _duplicate(sp);
-                        case _SourcePointAction.duplicateMany:
-                          _duplicateMany(sp);
-                        case _SourcePointAction.delete:
-                          _delete(sp);
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                        value: _SourcePointAction.duplicate,
-                        child: ListTile(
-                          leading: Icon(Icons.copy_outlined),
-                          title: Text('Duplicate'),
+                  trailing: widget.readOnly
+                      ? null
+                      : PopupMenuButton<_SourcePointAction>(
+                          onSelected: (action) {
+                            switch (action) {
+                              case _SourcePointAction.duplicate:
+                                _duplicate(sp);
+                              case _SourcePointAction.duplicateMany:
+                                _duplicateMany(sp);
+                              case _SourcePointAction.delete:
+                                _delete(sp);
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: _SourcePointAction.duplicate,
+                              child: ListTile(
+                                leading: Icon(Icons.copy_outlined),
+                                title: Text('Duplicate'),
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: _SourcePointAction.duplicateMany,
+                              child: ListTile(
+                                leading: Icon(Icons.library_add_outlined),
+                                title: Text('Duplicate ×N'),
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: _SourcePointAction.delete,
+                              child: ListTile(
+                                leading: Icon(Icons.delete_outline),
+                                title: Text('Delete'),
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                      PopupMenuItem(
-                        value: _SourcePointAction.duplicateMany,
-                        child: ListTile(
-                          leading: Icon(Icons.library_add_outlined),
-                          title: Text('Duplicate ×N'),
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _SourcePointAction.delete,
-                        child: ListTile(
-                          leading: Icon(Icons.delete_outline),
-                          title: Text('Delete'),
-                        ),
-                      ),
-                    ],
-                  ),
                 );
               },
             ),

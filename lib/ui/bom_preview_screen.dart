@@ -35,6 +35,7 @@ class BomPreviewScreen extends StatefulWidget {
     required this.repository,
     required this.site,
     required this.addedByRole,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
@@ -43,6 +44,11 @@ class BomPreviewScreen extends StatefulWidget {
   /// Label of the signed-in role (e.g. "Engineer"), recorded on manual BoM
   /// entries added from this screen.
   final String addedByRole;
+
+  /// When true: no "Add materials" action and no Finalize FAB — a reviewer
+  /// can inspect the computed BoM (and Export/version history once locked)
+  /// without being able to change it.
+  final bool readOnly;
 
   @override
   State<BomPreviewScreen> createState() => _BomPreviewScreenState();
@@ -437,7 +443,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     final locked = _snapshot != null;
     final hasNoMaterials =
         !locked && bom != null && bom.values.every((l) => l.isEmpty);
-    final canFinalize = !_loading && !locked && !hasNoMaterials;
+    final canFinalize = !_loading && !locked && !hasNoMaterials && !widget.readOnly;
     final runningTotal = _runningTotal;
     final visibleRunningTotal = _visibleRunningTotal(runningTotal);
     final visibleSnapshotLines = _visibleSnapshotLines(_snapshotLines);
@@ -505,11 +511,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                     )
                   : const Icon(Icons.file_download_outlined),
             ),
-          IconButton(
-            tooltip: 'Add materials (D/E/G)',
-            onPressed: _openManualEntries,
-            icon: const Icon(Icons.playlist_add_outlined),
-          ),
+          if (!widget.readOnly)
+            IconButton(
+              tooltip: 'Add materials (D/E/G)',
+              onPressed: _openManualEntries,
+              icon: const Icon(Icons.playlist_add_outlined),
+            ),
         ],
       ),
       floatingActionButton: canFinalize

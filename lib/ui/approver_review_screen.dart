@@ -3,13 +3,26 @@ import 'package:flutter/material.dart';
 import '../data/survey_repository.dart';
 import '../models/site.dart';
 import '../models/survey_status.dart';
+import 'bom_preview_screen.dart';
+import 'client_inputs_screen.dart';
+import 'duct_loras_list_screen.dart';
+import 'footer_screen.dart';
+import 'gateways_list_screen.dart';
+import 'inlet_points_list_screen.dart';
+import 'source_points_list_screen.dart';
+import 'theme/app_theme.dart';
+
+/// Completion state for one section row — mirrors [SiteHubScreen]'s
+/// indicator so the review screen reads the same way the engineer's hub does.
+enum _SectionStatus { empty, partial, complete }
 
 /// Approver's read-only review of a submitted survey (Roles & Assignment —
-/// Slice D). Shows a summary of what the engineer recorded; no editing here —
-/// edits stay in the engineer's Site Hub. Approving sets status to "approved"
-/// then immediately "released", which is what makes the survey visible to
-/// Sales as ready (the actual BoM/report push and notification email are
-/// later phases, not built here).
+/// Slice D). Opens the real section screens (Client inputs, Source points,
+/// Inlet points, Duct LoRa, Gateway, Footer, BoM) in read-only mode so the
+/// Approver reviews the engineer's actual entered data, not just a summary —
+/// no editing happens here; edits stay in the engineer's Site Hub. Approving
+/// sets status to "approved" then immediately "released", which is what
+/// makes the survey visible to Sales as ready.
 class ApproverReviewScreen extends StatefulWidget {
   const ApproverReviewScreen({
     super.key,
@@ -31,6 +44,7 @@ class _ApproverReviewScreenState extends State<ApproverReviewScreen> {
   int _ductLoraCount = 0;
   int _gatewayCount = 0;
   bool _footerFilled = false;
+  bool _bomGenerated = false;
   bool _loading = true;
   bool _approving = false;
 
@@ -48,6 +62,7 @@ class _ApproverReviewScreenState extends State<ApproverReviewScreen> {
     final ductLoras = await widget.repository.getDuctLoras(widget.siteId);
     final gateways = await widget.repository.getGateways(widget.siteId);
     final footer = await widget.repository.getFooter(widget.siteId);
+    final bomSnapshot = await widget.repository.getBomSnapshot(widget.siteId);
     if (!mounted) return;
     setState(() {
       _site = site;
@@ -56,8 +71,103 @@ class _ApproverReviewScreenState extends State<ApproverReviewScreen> {
       _ductLoraCount = ductLoras.length;
       _gatewayCount = gateways.length;
       _footerFilled = footer != null;
+      _bomGenerated = bomSnapshot != null;
       _loading = false;
     });
+  }
+
+  /// Status for an open-ended count section: complete once [count] reaches
+  /// the number of blocks on the site (or once it's non-zero, if the site
+  /// has no blocks defined yet).
+  _SectionStatus _countStatus(int count, int blockCount) {
+    if (count == 0) return _SectionStatus.empty;
+    final target = blockCount > 0 ? blockCount : 1;
+    return count >= target ? _SectionStatus.complete : _SectionStatus.partial;
+  }
+
+  Future<void> _openClientInputs(Site site) {
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ClientInputsScreen(
+          repository: widget.repository,
+          site: site,
+          readOnly: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openSourcePoints(Site site) {
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SourcePointsListScreen(
+          repository: widget.repository,
+          site: site,
+          readOnly: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openInletPoints(Site site) {
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => InletPointsListScreen(
+          repository: widget.repository,
+          site: site,
+          readOnly: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openDuctLoras(Site site) {
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DuctLorasListScreen(
+          repository: widget.repository,
+          site: site,
+          readOnly: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openGateways(Site site) {
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => GatewaysListScreen(
+          repository: widget.repository,
+          site: site,
+          readOnly: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openFooter(Site site) {
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => FooterScreen(
+          repository: widget.repository,
+          site: site,
+          readOnly: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openBomPreview(Site site) {
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BomPreviewScreen(
+          repository: widget.repository,
+          site: site,
+          addedByRole: 'Approver',
+          readOnly: true,
+        ),
+      ),
+    );
   }
 
   Future<void> _approve() async {
@@ -124,35 +234,66 @@ class _ApproverReviewScreenState extends State<ApproverReviewScreen> {
                   title: 'Blocks',
                   value: site.blocks.isEmpty ? 'None' : site.blocks.join(', '),
                 ),
-                _ReviewTile(
+                _SectionTile(
                   icon: Icons.assignment_outlined,
                   title: 'Client inputs',
-                  value: site.clientInputs != null ? 'Filled' : 'Not filled',
+                  subtitle: site.clientInputs != null
+                      ? 'Filled — tap to view'
+                      : 'Not filled',
+                  status: site.clientInputs != null
+                      ? _SectionStatus.complete
+                      : _SectionStatus.empty,
+                  onTap: () => _openClientInputs(site),
                 ),
-                _ReviewTile(
+                _SectionTile(
                   icon: Icons.water_drop_outlined,
                   title: 'Source points',
-                  value: '$_sourcePointCount recorded',
+                  subtitle: '$_sourcePointCount recorded — tap to view',
+                  status: _countStatus(_sourcePointCount, site.blocks.length),
+                  onTap: () => _openSourcePoints(site),
                 ),
-                _ReviewTile(
+                _SectionTile(
                   icon: Icons.input_outlined,
                   title: 'Inlet points',
-                  value: '$_inletPointCount recorded',
+                  subtitle: '$_inletPointCount recorded — tap to view',
+                  status: _countStatus(_inletPointCount, site.blocks.length),
+                  onTap: () => _openInletPoints(site),
                 ),
-                _ReviewTile(
+                _SectionTile(
                   icon: Icons.router_outlined,
                   title: 'Duct LoRa',
-                  value: '$_ductLoraCount recorded',
+                  subtitle: '$_ductLoraCount recorded — tap to view',
+                  status: _countStatus(_ductLoraCount, site.blocks.length),
+                  onTap: () => _openDuctLoras(site),
                 ),
-                _ReviewTile(
+                _SectionTile(
                   icon: Icons.cell_tower_outlined,
                   title: 'Gateway',
-                  value: '$_gatewayCount recorded',
+                  subtitle: '$_gatewayCount recorded — tap to view',
+                  status: _countStatus(_gatewayCount, site.blocks.length),
+                  onTap: () => _openGateways(site),
                 ),
-                _ReviewTile(
+                _SectionTile(
                   icon: Icons.notes_outlined,
                   title: 'Footer',
-                  value: _footerFilled ? 'Filled' : 'Not filled',
+                  subtitle: _footerFilled
+                      ? 'Filled — tap to view'
+                      : 'Not filled',
+                  status: _footerFilled
+                      ? _SectionStatus.complete
+                      : _SectionStatus.empty,
+                  onTap: () => _openFooter(site),
+                ),
+                _SectionTile(
+                  icon: Icons.receipt_long_outlined,
+                  title: 'Generate BoM',
+                  subtitle: _bomGenerated
+                      ? 'Generated — tap to view'
+                      : 'Not generated yet — tap to preview',
+                  status: _bomGenerated
+                      ? _SectionStatus.complete
+                      : _SectionStatus.empty,
+                  onTap: () => _openBomPreview(site),
                 ),
                 const SizedBox(height: 24),
                 FilledButton.icon(
@@ -217,6 +358,54 @@ class _ReviewTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: ListTile(leading: Icon(icon), title: Text(title), subtitle: Text(value)),
+    );
+  }
+}
+
+/// A tappable section row that opens the real section screen in read-only
+/// mode — mirrors [SiteHubScreen]'s `_SectionTile` look so the review screen
+/// reads the same way the engineer's hub does.
+class _SectionTile extends StatelessWidget {
+  const _SectionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.status,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final _SectionStatus status;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final Widget statusIcon = switch (status) {
+      _SectionStatus.empty => Icon(
+        Icons.radio_button_unchecked,
+        color: scheme.outline,
+      ),
+      _SectionStatus.partial => const Icon(
+        Icons.adjust,
+        color: AppStatusColors.partial,
+      ),
+      _SectionStatus.complete => const Icon(
+        Icons.check_circle,
+        color: AppStatusColors.complete,
+      ),
+    };
+
+    return Card(
+      child: ListTile(
+        leading: Icon(icon),
+        title: Text(title),
+        subtitle: Text(subtitle),
+        trailing: statusIcon,
+        onTap: onTap,
+      ),
     );
   }
 }

@@ -18,6 +18,7 @@ class SourcePointFormScreen extends StatefulWidget {
     required this.site,
     this.existing,
     this.duplicateFrom,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
@@ -29,6 +30,8 @@ class SourcePointFormScreen extends StatefulWidget {
   /// new record. Mutually exclusive with [existing]; ignored if both are set.
   /// Unlike [existing], never triggers a photo load.
   final SourcePoint? duplicateFrom;
+
+  final bool readOnly;
 
   @override
   State<SourcePointFormScreen> createState() => _SourcePointFormScreenState();
@@ -71,6 +74,16 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
   final Map<String, List<PhotoDraft>> _photos = {};
 
   bool _saving = false;
+
+  /// Starts false; flips true when the Edit button is tapped. Irrelevant
+  /// unless [widget.readOnly] — see [_viewOnly].
+  bool _editing = false;
+
+  /// True while fields should be visible but non-interactive: opened
+  /// read-only (Approver review) and Edit hasn't been tapped yet. Gates an
+  /// [IgnorePointer], not each field's `enabled` — so the fields keep their
+  /// normal (not greyed-out) styling in view mode.
+  bool get _viewOnly => widget.readOnly && !_editing;
 
   @override
   void initState() {
@@ -175,6 +188,16 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
     });
   }
 
+  /// Read-only counterpart to [_onPhotoEdit] — opens the photo full-screen
+  /// with no markup/edit capability. Used when the form is view-only.
+  Future<void> _onPhotoView(String slot, int index) async {
+    final drafts = _photos[slot];
+    if (drafts == null || index >= drafts.length) return;
+    final path = drafts[index].localPath;
+    if (path == null) return;
+    await openPhotoViewer(context, path);
+  }
+
   List<SurveyPhoto> _photoListFor(String ownerId) {
     final list = <SurveyPhoto>[];
     for (final entry in _photos.entries) {
@@ -210,6 +233,8 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
       onAdded: (p) => _onPhotoAdded(slot, p),
       onRemoved: (i) => _onPhotoRemoved(slot, i),
       onEdit: (i) => _onPhotoEdit(slot, i),
+      onView: (i) => _onPhotoView(slot, i),
+      readOnly: _viewOnly,
     );
   }
 
@@ -278,213 +303,243 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.existing == null ? 'Add source point' : 'Edit source point',
+          _viewOnly
+              ? 'Source point'
+              : widget.existing == null
+              ? 'Add source point'
+              : 'Edit source point',
         ),
+        actions: [
+          if (_viewOnly)
+            IconButton(
+              tooltip: 'Edit',
+              onPressed: () => setState(() => _editing = true),
+              icon: const Icon(Icons.edit_outlined),
+            ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          AppDropdownField<String>(
-            label: 'Block',
-            value: _block,
-            items: widget.site.blocks,
-            itemLabel: (b) => b,
-            emptyHint: 'No blocks on this site — add them via the site first.',
-            onChanged: (v) => setState(() => _block = v),
-          ),
-          AppTextField(controller: _apartment, label: 'Apartment'),
-          AppTextField(
-            controller: _inletDescription,
-            label: 'Inlet description',
-            maxLines: 2,
-          ),
+          IgnorePointer(
+            ignoring: _viewOnly,
+            child: Column(
+              children: [
+                AppDropdownField<String>(
+                  label: 'Block',
+                  value: _block,
+                  items: widget.site.blocks,
+                  itemLabel: (b) => b,
+                  emptyHint:
+                      'No blocks on this site — add them via the site first.',
+                  onChanged: (v) => setState(() => _block = v),
+                ),
+                AppTextField(controller: _apartment, label: 'Apartment'),
+                AppTextField(
+                  controller: _inletDescription,
+                  label: 'Inlet description',
+                  maxLines: 2,
+                ),
 
-          AppDropdownField<SensorSize>(
-            label: 'Sensor size',
-            value: _sensorSize,
-            items: SensorSize.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _sensorSize = v),
-          ),
-          AppDropdownField<SensorOd>(
-            label: 'Sensor OD',
-            value: _sensorOd,
-            items: SensorOd.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _sensorOd = v),
-          ),
-          AppDropdownField<PipeSize>(
-            label: 'Pipe size',
-            value: _pipeSize,
-            items: PipeSize.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _pipeSize = v),
-          ),
-          AppDropdownField<PipeType>(
-            label: 'Pipe type',
-            value: _pipeType,
-            items: PipeType.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _pipeType = v),
-          ),
-          AppTextField(
-            controller: _qty,
-            label: 'Qty',
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          ),
-          AppDropdownField<SensorType>(
-            label: 'Sensor type',
-            value: _sensorType,
-            items: SensorType.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _sensorType = v),
-          ),
+                AppDropdownField<SensorSize>(
+                  label: 'Sensor size',
+                  value: _sensorSize,
+                  items: SensorSize.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _sensorSize = v),
+                ),
+                AppDropdownField<SensorOd>(
+                  label: 'Sensor OD',
+                  value: _sensorOd,
+                  items: SensorOd.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _sensorOd = v),
+                ),
+                AppDropdownField<PipeSize>(
+                  label: 'Pipe size',
+                  value: _pipeSize,
+                  items: PipeSize.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _pipeSize = v),
+                ),
+                AppDropdownField<PipeType>(
+                  label: 'Pipe type',
+                  value: _pipeType,
+                  items: PipeType.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _pipeType = v),
+                ),
+                AppTextField(
+                  controller: _qty,
+                  label: 'Qty',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                ),
+                AppDropdownField<SensorType>(
+                  label: 'Sensor type',
+                  value: _sensorType,
+                  items: SensorType.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _sensorType = v),
+                ),
 
-          YesNoField(
-            label: 'Rework',
-            value: _rework,
-            onChanged: (v) => setState(() => _rework = v),
-          ),
-          if (_rework == true)
-            AppTextField(
-              controller: _reworkDetails,
-              label: 'Rework details',
-              maxLines: 2,
+                YesNoField(
+                  label: 'Rework',
+                  value: _rework,
+                  onChanged: (v) => setState(() => _rework = v),
+                ),
+                if (_rework == true)
+                  AppTextField(
+                    controller: _reworkDetails,
+                    label: 'Rework details',
+                    maxLines: 2,
+                  ),
+
+                AppDropdownField<FlowDirection>(
+                  label: 'Flow direction',
+                  value: _flowDirection,
+                  items: FlowDirection.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _flowDirection = v),
+                ),
+
+                YesNoField(
+                  label: '10X clearance',
+                  value: _clearance10x,
+                  onChanged: (v) => setState(() => _clearance10x = v),
+                ),
+                YesNoField(
+                  label: 'Pipe full',
+                  value: _pipeFull,
+                  onChanged: (v) => setState(() => _pipeFull = v),
+                ),
+                YesNoField(
+                  label: 'Valve downstream',
+                  value: _valveDownstream,
+                  onChanged: (v) => setState(() => _valveDownstream = v),
+                ),
+
+                YesNoField(
+                  label: 'Reducer spec',
+                  value: _reducerSpec,
+                  onChanged: (v) => setState(() => _reducerSpec = v),
+                ),
+                if (_reducerSpec == true)
+                  AppTextField(
+                    controller: _reducerSpecDetails,
+                    label: 'Reducer spec details',
+                    maxLines: 2,
+                  ),
+
+                YesNoField(
+                  label: 'Downstream outlet above pipe (FIG1)',
+                  labelTrailing: const ReferenceLink(
+                    asset: 'assets/figures/FIG1_pipe_full_outlet_above.png',
+                    title: 'FIG1',
+                  ),
+                  value: _downstreamOutletAbovePipeFig1,
+                  onChanged: (v) =>
+                      setState(() => _downstreamOutletAbovePipeFig1 = v),
+                ),
+                YesNoField(
+                  label: 'Air vent needed (FIG2)',
+                  labelTrailing: const ReferenceLink(
+                    asset: 'assets/figures/FIG2_air_vent.png',
+                    title: 'FIG2',
+                  ),
+                  value: _airVentNeededFig2,
+                  onChanged: (v) => setState(() => _airVentNeededFig2 = v),
+                ),
+                YesNoField(
+                  label: 'Reverse flow',
+                  value: _reverseFlow,
+                  onChanged: (v) => setState(() => _reverseFlow = v),
+                ),
+                YesNoField(
+                  label: 'Distance from motor/pump (FIG3)',
+                  labelTrailing: const ReferenceLink(
+                    asset:
+                        'assets/figures/FIG3_distance_motor_reducer_valve.png',
+                    title: 'FIG3',
+                  ),
+                  value: _distanceFromMotorPumpFig3,
+                  onChanged: (v) =>
+                      setState(() => _distanceFromMotorPumpFig3 = v),
+                ),
+                YesNoField(
+                  label: 'No flexible pipe within 20X',
+                  value: _noFlexiblePipeWithin20x,
+                  onChanged: (v) =>
+                      setState(() => _noFlexiblePipeWithin20x = v),
+                ),
+
+                AppTextField(
+                  controller: _pressure,
+                  label: 'Max & continuous pressure (bar)',
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  ],
+                ),
+
+                YesNoField(
+                  label: 'Strainer / screen filter',
+                  value: _strainerScreenFilter,
+                  onChanged: (v) => setState(() => _strainerScreenFilter = v),
+                ),
+                YesNoField(
+                  label: 'Chamber installation',
+                  value: _chamberInstallation,
+                  onChanged: (v) => setState(() => _chamberInstallation = v),
+                ),
+
+                if (isWireless) ...[
+                  const FormSectionLabel('Wireless'),
+                  YesNoField(
+                    label: 'Antenna required',
+                    value: _antennaRequired,
+                    onChanged: (v) => setState(() => _antennaRequired = v),
+                  ),
+                  YesNoField(
+                    label: 'Transmitting part open to air',
+                    value: _transmittingPartOpenToAir,
+                    onChanged: (v) =>
+                        setState(() => _transmittingPartOpenToAir = v),
+                  ),
+                  YesNoField(
+                    label: 'NRV feasibility',
+                    value: _nrvFeasibility,
+                    onChanged: (v) => setState(() => _nrvFeasibility = v),
+                  ),
+                ],
+
+                const FormSectionLabel('Photos'),
+                _photoField(PhotoSlot.inletMarked, 'Inlet marked'),
+                _photoField(PhotoSlot.powerSource, 'Power source'),
+                if (isWired)
+                  _photoField(PhotoSlot.wiringRouting, 'Wiring routing'),
+                if (isWireless)
+                  _photoField(PhotoSlot.antennaRouting, 'Antenna routing'),
+              ],
             ),
-
-          AppDropdownField<FlowDirection>(
-            label: 'Flow direction',
-            value: _flowDirection,
-            items: FlowDirection.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _flowDirection = v),
           ),
 
-          YesNoField(
-            label: '10X clearance',
-            value: _clearance10x,
-            onChanged: (v) => setState(() => _clearance10x = v),
-          ),
-          YesNoField(
-            label: 'Pipe full',
-            value: _pipeFull,
-            onChanged: (v) => setState(() => _pipeFull = v),
-          ),
-          YesNoField(
-            label: 'Valve downstream',
-            value: _valveDownstream,
-            onChanged: (v) => setState(() => _valveDownstream = v),
-          ),
-
-          YesNoField(
-            label: 'Reducer spec',
-            value: _reducerSpec,
-            onChanged: (v) => setState(() => _reducerSpec = v),
-          ),
-          if (_reducerSpec == true)
-            AppTextField(
-              controller: _reducerSpecDetails,
-              label: 'Reducer spec details',
-              maxLines: 2,
-            ),
-
-          YesNoField(
-            label: 'Downstream outlet above pipe (FIG1)',
-            labelTrailing: const ReferenceLink(
-              asset: 'assets/figures/FIG1_pipe_full_outlet_above.png',
-              title: 'FIG1',
-            ),
-            value: _downstreamOutletAbovePipeFig1,
-            onChanged: (v) => setState(() => _downstreamOutletAbovePipeFig1 = v),
-          ),
-          YesNoField(
-            label: 'Air vent needed (FIG2)',
-            labelTrailing: const ReferenceLink(
-              asset: 'assets/figures/FIG2_air_vent.png',
-              title: 'FIG2',
-            ),
-            value: _airVentNeededFig2,
-            onChanged: (v) => setState(() => _airVentNeededFig2 = v),
-          ),
-          YesNoField(
-            label: 'Reverse flow',
-            value: _reverseFlow,
-            onChanged: (v) => setState(() => _reverseFlow = v),
-          ),
-          YesNoField(
-            label: 'Distance from motor/pump (FIG3)',
-            labelTrailing: const ReferenceLink(
-              asset: 'assets/figures/FIG3_distance_motor_reducer_valve.png',
-              title: 'FIG3',
-            ),
-            value: _distanceFromMotorPumpFig3,
-            onChanged: (v) => setState(() => _distanceFromMotorPumpFig3 = v),
-          ),
-          YesNoField(
-            label: 'No flexible pipe within 20X',
-            value: _noFlexiblePipeWithin20x,
-            onChanged: (v) => setState(() => _noFlexiblePipeWithin20x = v),
-          ),
-
-          AppTextField(
-            controller: _pressure,
-            label: 'Max & continuous pressure (bar)',
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-            ],
-          ),
-
-          YesNoField(
-            label: 'Strainer / screen filter',
-            value: _strainerScreenFilter,
-            onChanged: (v) => setState(() => _strainerScreenFilter = v),
-          ),
-          YesNoField(
-            label: 'Chamber installation',
-            value: _chamberInstallation,
-            onChanged: (v) => setState(() => _chamberInstallation = v),
-          ),
-
-          if (isWireless) ...[
-            const FormSectionLabel('Wireless'),
-            YesNoField(
-              label: 'Antenna required',
-              value: _antennaRequired,
-              onChanged: (v) => setState(() => _antennaRequired = v),
-            ),
-            YesNoField(
-              label: 'Transmitting part open to air',
-              value: _transmittingPartOpenToAir,
-              onChanged: (v) => setState(() => _transmittingPartOpenToAir = v),
-            ),
-            YesNoField(
-              label: 'NRV feasibility',
-              value: _nrvFeasibility,
-              onChanged: (v) => setState(() => _nrvFeasibility = v),
+          if (!_viewOnly) ...[
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: const Text('Save source point'),
             ),
           ],
-
-          const FormSectionLabel('Photos'),
-          _photoField(PhotoSlot.inletMarked, 'Inlet marked'),
-          _photoField(PhotoSlot.powerSource, 'Power source'),
-          if (isWired) _photoField(PhotoSlot.wiringRouting, 'Wiring routing'),
-          if (isWireless)
-            _photoField(PhotoSlot.antennaRouting, 'Antenna routing'),
-
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_outlined),
-            label: const Text('Save source point'),
-          ),
         ],
       ),
     );

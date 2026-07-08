@@ -16,10 +16,12 @@ class FooterScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.site,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
   final Site site;
+  final bool readOnly;
 
   @override
   State<FooterScreen> createState() => _FooterScreenState();
@@ -41,6 +43,16 @@ class _FooterScreenState extends State<FooterScreen> {
 
   bool _loading = true;
   bool _saving = false;
+
+  /// Starts false; flips true when the Edit button is tapped. Irrelevant
+  /// unless [widget.readOnly] — see [_viewOnly].
+  bool _editing = false;
+
+  /// True while fields should be visible but non-interactive: opened
+  /// read-only (Approver review) and Edit hasn't been tapped yet. Gates an
+  /// [IgnorePointer], not each field's `enabled` — so the fields keep their
+  /// normal (not greyed-out) styling in view mode.
+  bool get _viewOnly => widget.readOnly && !_editing;
 
   @override
   void initState() {
@@ -105,6 +117,14 @@ class _FooterScreenState extends State<FooterScreen> {
       draft.localPath = newPath;
       draft.remotePath = null;
     });
+  }
+
+  /// Read-only counterpart to [_onPhotoEdit] — opens the photo full-screen
+  /// with no markup/edit capability. Used when the form is view-only.
+  Future<void> _onPhotoView(int index) async {
+    final path = _sitePhotos[index].localPath;
+    if (path == null) return;
+    await openPhotoViewer(context, path, title: 'Site photo');
   }
 
   List<SurveyPhoto> _photoList() {
@@ -183,86 +203,110 @@ class _FooterScreenState extends State<FooterScreen> {
         : 'Survey date: ${_surveyDate!.toIso8601String().split('T').first}';
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Footer')),
+      appBar: AppBar(
+        title: const Text('Footer'),
+        actions: [
+          if (_viewOnly)
+            IconButton(
+              tooltip: 'Edit',
+              onPressed: () => setState(() => _editing = true),
+              icon: const Icon(Icons.edit_outlined),
+            ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                AppTextField(
-                  controller: _tds,
-                  label: 'TDS (ppm)',
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                  ],
-                ),
-                AppTextField(
-                  controller: _tss,
-                  label: 'TSS (ppm)',
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                  ],
-                ),
-                YesNoField(
-                  label: 'TCL service',
-                  value: _tclService,
-                  onChanged: (v) => setState(() => _tclService = v),
-                ),
-                if (_tclService == true)
-                  AppTextField(
-                    controller: _tclServiceDetails,
-                    label: 'TCL service details',
-                    maxLines: 2,
-                  ),
-                AppTextField(
-                  controller: _generalRemarks,
-                  label: 'General remarks',
-                  maxLines: 3,
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: OutlinedButton.icon(
-                    onPressed: _pickDate,
-                    icon: const Icon(Icons.calendar_today_outlined),
-                    label: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(dateLabel),
-                    ),
-                  ),
-                ),
-                AppTextField(controller: _surveyorName, label: 'Surveyor name'),
+                IgnorePointer(
+                  ignoring: _viewOnly,
+                  child: Column(
+                    children: [
+                      AppTextField(
+                        controller: _tds,
+                        label: 'TDS (ppm)',
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                        ],
+                      ),
+                      AppTextField(
+                        controller: _tss,
+                        label: 'TSS (ppm)',
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                        ],
+                      ),
+                      YesNoField(
+                        label: 'TCL service',
+                        value: _tclService,
+                        onChanged: (v) => setState(() => _tclService = v),
+                      ),
+                      if (_tclService == true)
+                        AppTextField(
+                          controller: _tclServiceDetails,
+                          label: 'TCL service details',
+                          maxLines: 2,
+                        ),
+                      AppTextField(
+                        controller: _generalRemarks,
+                        label: 'General remarks',
+                        maxLines: 3,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: OutlinedButton.icon(
+                          onPressed: _pickDate,
+                          icon: const Icon(Icons.calendar_today_outlined),
+                          label: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(dateLabel),
+                          ),
+                        ),
+                      ),
+                      AppTextField(
+                        controller: _surveyorName,
+                        label: 'Surveyor name',
+                      ),
 
-                const FormSectionLabel('Photos / videos'),
-                MultiPhotoCaptureField(
-                  label: 'Site photos / videos',
-                  photos: [
-                    for (final p in _sitePhotos)
-                      if (p.localPath != null)
-                        PhotoView(p.localPath!, uploaded: p.uploaded),
-                  ],
-                  onAdded: _onPhotoAdded,
-                  onRemoved: _onPhotoRemoved,
-                  onEdit: _onPhotoEdit,
+                      const FormSectionLabel('Photos / videos'),
+                      MultiPhotoCaptureField(
+                        label: 'Site photos / videos',
+                        photos: [
+                          for (final p in _sitePhotos)
+                            if (p.localPath != null)
+                              PhotoView(p.localPath!, uploaded: p.uploaded),
+                        ],
+                        onAdded: _onPhotoAdded,
+                        onRemoved: _onPhotoRemoved,
+                        onEdit: _onPhotoEdit,
+                        onView: _onPhotoView,
+                        readOnly: _viewOnly,
+                      ),
+                    ],
+                  ),
                 ),
 
-                const SizedBox(height: 24),
-                FilledButton.icon(
-                  onPressed: _saving ? null : _save,
-                  icon: _saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save_outlined),
-                  label: const Text('Save footer'),
-                ),
+                if (!_viewOnly) ...[
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: _saving ? null : _save,
+                    icon: _saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save_outlined),
+                    label: const Text('Save footer'),
+                  ),
+                ],
               ],
             ),
     );

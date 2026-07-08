@@ -17,11 +17,13 @@ class GatewayFormScreen extends StatefulWidget {
     required this.repository,
     required this.site,
     this.existing,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
   final Site site;
   final Gateway? existing;
+  final bool readOnly;
 
   @override
   State<GatewayFormScreen> createState() => _GatewayFormScreenState();
@@ -45,6 +47,16 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
   final List<PhotoDraft> _locationPhotos = [];
 
   bool _saving = false;
+
+  /// Starts false; flips true when the Edit button is tapped. Irrelevant
+  /// unless [widget.readOnly] — see [_viewOnly].
+  bool _editing = false;
+
+  /// True while fields should be visible but non-interactive: opened
+  /// read-only (Approver review) and Edit hasn't been tapped yet. Gates an
+  /// [IgnorePointer], not each field's `enabled` — so the fields keep their
+  /// normal (not greyed-out) styling in view mode.
+  bool get _viewOnly => widget.readOnly && !_editing;
 
   bool get _usesRouter =>
       _uplinkType == UplinkType.router || _uplinkType == UplinkType.both;
@@ -129,6 +141,15 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
     });
   }
 
+  /// Read-only counterpart to [_onLocationEdit] — opens the photo
+  /// full-screen with no markup/edit capability. Used when the form is
+  /// view-only.
+  Future<void> _onLocationView(int index) async {
+    final path = _locationPhotos[index].localPath;
+    if (path == null) return;
+    await openPhotoViewer(context, path);
+  }
+
   List<SurveyPhoto> _photoListFor(String ownerId) {
     final list = <SurveyPhoto>[];
     for (var i = 0; i < _locationPhotos.length; i++) {
@@ -198,103 +219,132 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.existing == null ? 'Add gateway' : 'Edit gateway'),
+        title: Text(
+          _viewOnly
+              ? 'Gateway'
+              : widget.existing == null
+              ? 'Add gateway'
+              : 'Edit gateway',
+        ),
+        actions: [
+          if (_viewOnly)
+            IconButton(
+              tooltip: 'Edit',
+              onPressed: () => setState(() => _editing = true),
+              icon: const Icon(Icons.edit_outlined),
+            ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          AppDropdownField<GatewayPlacement>(
-            label: 'Indoor / outdoor',
-            value: _placement,
-            items: GatewayPlacement.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _placement = v),
-          ),
-          AppTextField(
-            controller: _locationDescription,
-            label: 'Location description',
-            maxLines: 2,
-          ),
-          MultiSelectChips<String>(
-            label: 'Blocks covered',
-            items: widget.site.blocks,
-            itemLabel: (b) => b,
-            selected: _blocksCovered,
-            emptyHint: 'No blocks on this site — add them via the site first.',
-            onChanged: (next) => setState(() {
-              _blocksCovered
-                ..clear()
-                ..addAll(next);
-            }),
-          ),
-          AppTextField(
-            controller: _quantity,
-            label: 'Quantity',
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          ),
-          AppDropdownField<UplinkType>(
-            label: 'Uplink type',
-            value: _uplinkType,
-            items: UplinkType.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _uplinkType = v),
-          ),
-          if (_usesRouter) ...[
-            YesNoField(
-              label: 'WiFi interference check',
-              value: _wifiInterferenceCheck,
-              onChanged: (v) => setState(() => _wifiInterferenceCheck = v),
+          IgnorePointer(
+            ignoring: _viewOnly,
+            child: Column(
+              children: [
+                AppDropdownField<GatewayPlacement>(
+                  label: 'Indoor / outdoor',
+                  value: _placement,
+                  items: GatewayPlacement.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _placement = v),
+                ),
+                AppTextField(
+                  controller: _locationDescription,
+                  label: 'Location description',
+                  maxLines: 2,
+                ),
+                MultiSelectChips<String>(
+                  label: 'Blocks covered',
+                  items: widget.site.blocks,
+                  itemLabel: (b) => b,
+                  selected: _blocksCovered,
+                  emptyHint:
+                      'No blocks on this site — add them via the site first.',
+                  onChanged: (next) => setState(() {
+                    _blocksCovered
+                      ..clear()
+                      ..addAll(next);
+                  }),
+                ),
+                AppTextField(
+                  controller: _quantity,
+                  label: 'Quantity',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                ),
+                AppDropdownField<UplinkType>(
+                  label: 'Uplink type',
+                  value: _uplinkType,
+                  items: UplinkType.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _uplinkType = v),
+                ),
+                if (_usesRouter) ...[
+                  YesNoField(
+                    label: 'WiFi interference check',
+                    value: _wifiInterferenceCheck,
+                    onChanged: (v) =>
+                        setState(() => _wifiInterferenceCheck = v),
+                  ),
+                  if (_wifiInterferenceCheck == true)
+                    AppTextField(
+                      controller: _wifiInterferenceDetails,
+                      label: 'WiFi interference details',
+                      maxLines: 2,
+                    ),
+                ],
+                AppDropdownField<SimCoverage>(
+                  label: 'SIM coverage',
+                  value: _simCoverage,
+                  items: SimCoverage.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _simCoverage = v),
+                ),
+                YesNoField(
+                  label: 'Uninterrupted power source',
+                  value: _uninterruptedPowerSource,
+                  onChanged: (v) =>
+                      setState(() => _uninterruptedPowerSource = v),
+                ),
+                AppTextField(
+                  controller: _mountingHardware,
+                  label: 'Mounting hardware needed',
+                  maxLines: 2,
+                ),
+
+                const FormSectionLabel('Photos'),
+                MultiPhotoCaptureField(
+                  label: 'Gateway location',
+                  photos: [
+                    for (final d in _locationPhotos)
+                      if (d.localPath != null)
+                        PhotoView(d.localPath!, uploaded: d.uploaded),
+                  ],
+                  onAdded: _onLocationAdded,
+                  onRemoved: _onLocationRemoved,
+                  onEdit: _onLocationEdit,
+                  onView: _onLocationView,
+                  readOnly: _viewOnly,
+                ),
+              ],
             ),
-            if (_wifiInterferenceCheck == true)
-              AppTextField(
-                controller: _wifiInterferenceDetails,
-                label: 'WiFi interference details',
-                maxLines: 2,
-              ),
+          ),
+
+          if (!_viewOnly) ...[
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: const Text('Save gateway'),
+            ),
           ],
-          AppDropdownField<SimCoverage>(
-            label: 'SIM coverage',
-            value: _simCoverage,
-            items: SimCoverage.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _simCoverage = v),
-          ),
-          YesNoField(
-            label: 'Uninterrupted power source',
-            value: _uninterruptedPowerSource,
-            onChanged: (v) => setState(() => _uninterruptedPowerSource = v),
-          ),
-          AppTextField(
-            controller: _mountingHardware,
-            label: 'Mounting hardware needed',
-            maxLines: 2,
-          ),
-
-          const FormSectionLabel('Photos'),
-          MultiPhotoCaptureField(
-            label: 'Gateway location',
-            photos: [
-              for (final d in _locationPhotos)
-                if (d.localPath != null) PhotoView(d.localPath!, uploaded: d.uploaded),
-            ],
-            onAdded: _onLocationAdded,
-            onRemoved: _onLocationRemoved,
-            onEdit: _onLocationEdit,
-          ),
-
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_outlined),
-            label: const Text('Save gateway'),
-          ),
         ],
       ),
     );

@@ -12,10 +12,12 @@ class InletPointsListScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.site,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
   final Site site;
+  final bool readOnly;
 
   @override
   State<InletPointsListScreen> createState() => _InletPointsListScreenState();
@@ -48,6 +50,7 @@ class _InletPointsListScreenState extends State<InletPointsListScreen> {
           repository: widget.repository,
           site: widget.site,
           existing: existing,
+          readOnly: widget.readOnly,
         ),
       ),
     );
@@ -128,11 +131,13 @@ class _InletPointsListScreenState extends State<InletPointsListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Inlet points')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addOrEdit(),
-        icon: const Icon(Icons.add),
-        label: const Text('Add inlet point'),
-      ),
+      floatingActionButton: widget.readOnly
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _addOrEdit(),
+              icon: const Icon(Icons.add),
+              label: const Text('Add inlet point'),
+            ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _points.isEmpty
@@ -163,41 +168,43 @@ class _InletPointsListScreenState extends State<InletPointsListScreen> {
                   ),
                   subtitle: Text(_subtitleFor(ip)),
                   onTap: () => _addOrEdit(ip),
-                  trailing: PopupMenuButton<_InletPointAction>(
-                    onSelected: (action) {
-                      switch (action) {
-                        case _InletPointAction.duplicate:
-                          _duplicate(ip);
-                        case _InletPointAction.duplicateMany:
-                          _duplicateMany(ip);
-                        case _InletPointAction.delete:
-                          _delete(ip);
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                        value: _InletPointAction.duplicate,
-                        child: ListTile(
-                          leading: Icon(Icons.copy_outlined),
-                          title: Text('Duplicate'),
+                  trailing: widget.readOnly
+                      ? null
+                      : PopupMenuButton<_InletPointAction>(
+                          onSelected: (action) {
+                            switch (action) {
+                              case _InletPointAction.duplicate:
+                                _duplicate(ip);
+                              case _InletPointAction.duplicateMany:
+                                _duplicateMany(ip);
+                              case _InletPointAction.delete:
+                                _delete(ip);
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: _InletPointAction.duplicate,
+                              child: ListTile(
+                                leading: Icon(Icons.copy_outlined),
+                                title: Text('Duplicate'),
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: _InletPointAction.duplicateMany,
+                              child: ListTile(
+                                leading: Icon(Icons.library_add_outlined),
+                                title: Text('Duplicate ×N'),
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: _InletPointAction.delete,
+                              child: ListTile(
+                                leading: Icon(Icons.delete_outline),
+                                title: Text('Delete'),
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                      PopupMenuItem(
-                        value: _InletPointAction.duplicateMany,
-                        child: ListTile(
-                          leading: Icon(Icons.library_add_outlined),
-                          title: Text('Duplicate ×N'),
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _InletPointAction.delete,
-                        child: ListTile(
-                          leading: Icon(Icons.delete_outline),
-                          title: Text('Delete'),
-                        ),
-                      ),
-                    ],
-                  ),
                 );
               },
             ),

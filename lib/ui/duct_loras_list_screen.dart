@@ -11,10 +11,12 @@ class DuctLorasListScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.site,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
   final Site site;
+  final bool readOnly;
 
   @override
   State<DuctLorasListScreen> createState() => _DuctLorasListScreenState();
@@ -59,6 +61,7 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
           site: widget.site,
           availableSeries: _availableSeries,
           existing: existing,
+          readOnly: widget.readOnly,
         ),
       ),
     );
@@ -108,11 +111,13 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Duct LoRa')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addOrEdit(),
-        icon: const Icon(Icons.add),
-        label: const Text('Add Duct LoRa'),
-      ),
+      floatingActionButton: widget.readOnly
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _addOrEdit(),
+              icon: const Icon(Icons.add),
+              label: const Text('Add Duct LoRa'),
+            ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _units.isEmpty
@@ -135,11 +140,13 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
                   title: Text(_titleFor(d)),
                   subtitle: Text(_subtitleFor(d)),
                   onTap: () => _addOrEdit(d),
-                  trailing: IconButton(
-                    tooltip: 'Delete',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => _delete(d),
-                  ),
+                  trailing: widget.readOnly
+                      ? null
+                      : IconButton(
+                          tooltip: 'Delete',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _delete(d),
+                        ),
                 );
               },
             ),

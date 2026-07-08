@@ -16,10 +16,12 @@ class ClientInputsScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.site,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
   final Site site;
+  final bool readOnly;
 
   @override
   State<ClientInputsScreen> createState() => _ClientInputsScreenState();
@@ -52,6 +54,16 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
   final List<PhotoDraft> _drawingPhotos = [];
 
   bool _saving = false;
+
+  /// Starts false; flips true when the Edit button is tapped. Irrelevant
+  /// unless [widget.readOnly] — see [_viewOnly].
+  bool _editing = false;
+
+  /// True while fields should be visible but non-interactive: opened
+  /// read-only (Approver review) and Edit hasn't been tapped yet. Gates an
+  /// [IgnorePointer], not each field's `enabled` — so the fields keep their
+  /// normal (not greyed-out) styling in view mode.
+  bool get _viewOnly => widget.readOnly && !_editing;
 
   @override
   void initState() {
@@ -152,6 +164,14 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     });
   }
 
+  /// Read-only counterpart to [_onDrawingEdit] — opens the photo full-screen
+  /// with no markup/edit capability. Used when the form is view-only.
+  Future<void> _onDrawingView(int index) async {
+    final path = _drawingPhotos[index].localPath;
+    if (path == null) return;
+    await openPhotoViewer(context, path, title: 'Drawing');
+  }
+
   List<SurveyPhoto> _drawingPhotoList() {
     final list = <SurveyPhoto>[];
     for (var i = 0; i < _drawingPhotos.length; i++) {
@@ -210,115 +230,137 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Client inputs')),
+      appBar: AppBar(
+        title: const Text('Client inputs'),
+        actions: [
+          if (_viewOnly)
+            IconButton(
+              tooltip: 'Edit',
+              onPressed: () => setState(() => _editing = true),
+              icon: const Icon(Icons.edit_outlined),
+            ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           const _Hint('All fields are optional — you can save a partial form.'),
           const SizedBox(height: 16),
 
-          _text(_siteName, 'Site name'),
-          _dropdown<InformationSource>(
-            label: 'Information source',
-            value: _informationSource,
-            items: InformationSource.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _informationSource = v),
-          ),
-          _text(_pocName, 'Client POC name'),
-          _text(_pocContact, 'Client POC phone/email'),
-          _text(_goal, 'Goal of installation', maxLines: 2),
-
-          _Label('Water sources present'),
-          Wrap(
-            spacing: 8,
-            children: [
-              for (final source in WaterSource.values)
-                FilterChip(
-                  label: Text(source.label),
-                  selected: _waterSources.contains(source),
-                  onSelected: (sel) => setState(() {
-                    if (sel) {
-                      _waterSources.add(source);
-                    } else {
-                      _waterSources.remove(source);
-                    }
-                  }),
+          IgnorePointer(
+            ignoring: _viewOnly,
+            child: Column(
+              children: [
+                _text(_siteName, 'Site name'),
+                _dropdown<InformationSource>(
+                  label: 'Information source',
+                  value: _informationSource,
+                  items: InformationSource.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _informationSource = v),
                 ),
-            ],
-          ),
-          const SizedBox(height: 16),
+                _text(_pocName, 'Client POC name'),
+                _text(_pocContact, 'Client POC phone/email'),
+                _text(_goal, 'Goal of installation', maxLines: 2),
 
-          _dropdown<OhtHns>(
-            label: 'OHT / HNS',
-            value: _ohtHns,
-            items: OhtHns.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _ohtHns = v),
+                _Label('Water sources present'),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final source in WaterSource.values)
+                      FilterChip(
+                        label: Text(source.label),
+                        selected: _waterSources.contains(source),
+                        onSelected: (sel) => setState(() {
+                          if (sel) {
+                            _waterSources.add(source);
+                          } else {
+                            _waterSources.remove(source);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                _dropdown<OhtHns>(
+                  label: 'OHT / HNS',
+                  value: _ohtHns,
+                  items: OhtHns.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _ohtHns = v),
+                ),
+
+                _yesNo(
+                  'Finalised plumbing drawings',
+                  _finalisedDrawings,
+                  (v) => setState(() => _finalisedDrawings = v),
+                ),
+                MultiPhotoCaptureField(
+                  label: 'Attach drawings (photo/scan)',
+                  photos: [
+                    for (final d in _drawingPhotos)
+                      if (d.localPath != null)
+                        PhotoView(d.localPath!, uploaded: d.uploaded),
+                  ],
+                  onAdded: _onDrawingAdded,
+                  onRemoved: _onDrawingRemoved,
+                  onEdit: _onDrawingEdit,
+                  onView: _onDrawingView,
+                  readOnly: _viewOnly,
+                ),
+
+                _text(
+                  _pointsIdentified,
+                  'No. of points identified by client (optional)',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                ),
+                _text(_pressure, 'Max & continuous pressure at all points'),
+
+                _yesNo(
+                  'Pressure boosters in system',
+                  _pressureBoosters,
+                  (v) => setState(() => _pressureBoosters = v),
+                ),
+
+                _text(_materials, 'Materials & brand guidelines', maxLines: 2),
+
+                _yesNo(
+                  'Rework requirements',
+                  _reworkRequired,
+                  (v) => setState(() => _reworkRequired = v),
+                ),
+                if (_reworkRequired == true)
+                  _text(_reworkDetails, 'Rework details', maxLines: 2),
+
+                _text(_ageOfLines, 'Age of plumbing lines'),
+
+                _yesNo(
+                  'Aesthetic guidelines',
+                  _aestheticGuidelines,
+                  (v) => setState(() => _aestheticGuidelines = v),
+                ),
+                if (_aestheticGuidelines == true)
+                  _text(_aestheticDetails, 'Aesthetic details', maxLines: 2),
+              ],
+            ),
           ),
 
-          _yesNo(
-            'Finalised plumbing drawings',
-            _finalisedDrawings,
-            (v) => setState(() => _finalisedDrawings = v),
-          ),
-          MultiPhotoCaptureField(
-            label: 'Attach drawings (photo/scan)',
-            photos: [
-              for (final d in _drawingPhotos)
-                if (d.localPath != null) PhotoView(d.localPath!, uploaded: d.uploaded),
-            ],
-            onAdded: _onDrawingAdded,
-            onRemoved: _onDrawingRemoved,
-            onEdit: _onDrawingEdit,
-          ),
-
-          _text(
-            _pointsIdentified,
-            'No. of points identified by client (optional)',
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          ),
-          _text(_pressure, 'Max & continuous pressure at all points'),
-
-          _yesNo(
-            'Pressure boosters in system',
-            _pressureBoosters,
-            (v) => setState(() => _pressureBoosters = v),
-          ),
-
-          _text(_materials, 'Materials & brand guidelines', maxLines: 2),
-
-          _yesNo(
-            'Rework requirements',
-            _reworkRequired,
-            (v) => setState(() => _reworkRequired = v),
-          ),
-          if (_reworkRequired == true)
-            _text(_reworkDetails, 'Rework details', maxLines: 2),
-
-          _text(_ageOfLines, 'Age of plumbing lines'),
-
-          _yesNo(
-            'Aesthetic guidelines',
-            _aestheticGuidelines,
-            (v) => setState(() => _aestheticGuidelines = v),
-          ),
-          if (_aestheticGuidelines == true)
-            _text(_aestheticDetails, 'Aesthetic details', maxLines: 2),
-
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_outlined),
-            label: const Text('Save client inputs'),
-          ),
+          if (!_viewOnly) ...[
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: const Text('Save client inputs'),
+            ),
+          ],
         ],
       ),
     );

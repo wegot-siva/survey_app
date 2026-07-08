@@ -6,12 +6,14 @@ import '../models/site.dart';
 import '../models/survey_status.dart';
 import 'client_inputs_screen.dart';
 
-/// Sales' "New survey" flow (Roles & Assignment — Slice B).
+/// Sales' "New survey" flow (Roles & Assignment — Slice B). Approver also
+/// uses this screen unmodified, for the same Sales-like create+assign
+/// capability (see home_screen.dart's FAB routing).
 ///
 /// Two phases in one screen: first create the site (name + blocks, same as
 /// [CreateSiteScreen] but kept separate so that screen's other callers are
 /// unaffected); once created, optionally fill Client inputs (pre-survey info
-/// Sales records from the customer — reuses [ClientInputsScreen] unmodified),
+/// recorded from the customer — reuses [ClientInputsScreen] unmodified),
 /// then assign an engineer and set status to [SurveyStatus.assigned].
 class AssignSurveyScreen extends StatefulWidget {
   const AssignSurveyScreen({super.key, required this.repository});

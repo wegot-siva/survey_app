@@ -20,12 +20,14 @@ class DuctLoraFormScreen extends StatefulWidget {
     required this.site,
     required this.availableSeries,
     this.existing,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
   final Site site;
   final List<String> availableSeries;
   final DuctLora? existing;
+  final bool readOnly;
 
   @override
   State<DuctLoraFormScreen> createState() => _DuctLoraFormScreenState();
@@ -48,6 +50,16 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
   final List<PhotoDraft> _placementPhotos = [];
 
   bool _saving = false;
+
+  /// Starts false; flips true when the Edit button is tapped. Irrelevant
+  /// unless [widget.readOnly] — see [_viewOnly].
+  bool _editing = false;
+
+  /// True while fields should be visible but non-interactive: opened
+  /// read-only (Approver review) and Edit hasn't been tapped yet. Gates an
+  /// [IgnorePointer], not each field's `enabled` — so the fields keep their
+  /// normal (not greyed-out) styling in view mode.
+  bool get _viewOnly => widget.readOnly && !_editing;
 
   @override
   void initState() {
@@ -122,6 +134,15 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
     });
   }
 
+  /// Read-only counterpart to [_onPlacementEdit] — opens the photo
+  /// full-screen with no markup/edit capability. Used when the form is
+  /// view-only.
+  Future<void> _onPlacementView(int index) async {
+    final path = _placementPhotos[index].localPath;
+    if (path == null) return;
+    await openPhotoViewer(context, path);
+  }
+
   List<SurveyPhoto> _photoListFor(String ownerId) {
     final list = <SurveyPhoto>[];
     for (var i = 0; i < _placementPhotos.length; i++) {
@@ -184,99 +205,126 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.existing == null ? 'Add Duct LoRa' : 'Edit Duct LoRa',
+          _viewOnly
+              ? 'Duct LoRa'
+              : widget.existing == null
+              ? 'Add Duct LoRa'
+              : 'Edit Duct LoRa',
         ),
+        actions: [
+          if (_viewOnly)
+            IconButton(
+              tooltip: 'Edit',
+              onPressed: () => setState(() => _editing = true),
+              icon: const Icon(Icons.edit_outlined),
+            ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          AppDropdownField<String>(
-            label: 'Block',
-            value: _block,
-            items: widget.site.blocks,
-            itemLabel: (b) => b,
-            emptyHint: 'No blocks on this site — add them via the site first.',
-            onChanged: (v) => setState(() => _block = v),
-          ),
-          MultiSelectChips<String>(
-            label: 'Series served',
-            items: widget.availableSeries,
-            itemLabel: (s) => s,
-            selected: _seriesServed,
-            emptyHint:
-                'No series found — add inlet points with a Series first.',
-            helperText: 'Max 20 sensors per unit.',
-            onChanged: (next) => setState(() {
-              _seriesServed
-                ..clear()
-                ..addAll(next);
-            }),
-          ),
-          YesNoField(
-            label: 'Accessible for service',
-            value: _accessibleForService,
-            onChanged: (v) => setState(() => _accessibleForService = v),
-          ),
-          AppTextField(
-            controller: _rssi,
-            label: 'RSSI value (if TCL)',
-            keyboardType: const TextInputType.numberWithOptions(
-              decimal: true,
-              signed: true,
+          IgnorePointer(
+            ignoring: _viewOnly,
+            child: Column(
+              children: [
+                AppDropdownField<String>(
+                  label: 'Block',
+                  value: _block,
+                  items: widget.site.blocks,
+                  itemLabel: (b) => b,
+                  emptyHint:
+                      'No blocks on this site — add them via the site first.',
+                  onChanged: (v) => setState(() => _block = v),
+                ),
+                MultiSelectChips<String>(
+                  label: 'Series served',
+                  items: widget.availableSeries,
+                  itemLabel: (s) => s,
+                  selected: _seriesServed,
+                  emptyHint:
+                      'No series found — add inlet points with a Series first.',
+                  helperText: 'Max 20 sensors per unit.',
+                  onChanged: (next) => setState(() {
+                    _seriesServed
+                      ..clear()
+                      ..addAll(next);
+                  }),
+                ),
+                YesNoField(
+                  label: 'Accessible for service',
+                  value: _accessibleForService,
+                  onChanged: (v) => setState(() => _accessibleForService = v),
+                ),
+                AppTextField(
+                  controller: _rssi,
+                  label: 'RSSI value (if TCL)',
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                    signed: true,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.-]')),
+                  ],
+                ),
+                YesNoField(
+                  label: 'Power point available / shielded',
+                  value: _powerPointAvailableShielded,
+                  onChanged: (v) =>
+                      setState(() => _powerPointAvailableShielded = v),
+                ),
+                YesNoField(
+                  label: 'Separate MCB for series (max 4)',
+                  value: _separateMcbForSeries,
+                  onChanged: (v) => setState(() => _separateMcbForSeries = v),
+                ),
+                YesNoField(
+                  label: 'UPS power supply',
+                  value: _upsPowerSupply,
+                  onChanged: (v) => setState(() => _upsPowerSupply = v),
+                ),
+                AppTextField(
+                  controller: _cableLength,
+                  label: 'Duct LoRa cable length (pending confirmation)',
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  ],
+                ),
+
+                const FormSectionLabel('Photos'),
+                MultiPhotoCaptureField(
+                  label: 'Duct LoRa location / placement',
+                  photos: [
+                    for (final d in _placementPhotos)
+                      if (d.localPath != null)
+                        PhotoView(d.localPath!, uploaded: d.uploaded),
+                  ],
+                  onAdded: _onPlacementAdded,
+                  onRemoved: _onPlacementRemoved,
+                  onEdit: _onPlacementEdit,
+                  onView: _onPlacementView,
+                  readOnly: _viewOnly,
+                ),
+              ],
             ),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[0-9.-]')),
-            ],
-          ),
-          YesNoField(
-            label: 'Power point available / shielded',
-            value: _powerPointAvailableShielded,
-            onChanged: (v) =>
-                setState(() => _powerPointAvailableShielded = v),
-          ),
-          YesNoField(
-            label: 'Separate MCB for series (max 4)',
-            value: _separateMcbForSeries,
-            onChanged: (v) => setState(() => _separateMcbForSeries = v),
-          ),
-          YesNoField(
-            label: 'UPS power supply',
-            value: _upsPowerSupply,
-            onChanged: (v) => setState(() => _upsPowerSupply = v),
-          ),
-          AppTextField(
-            controller: _cableLength,
-            label: 'Duct LoRa cable length (pending confirmation)',
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-            ],
           ),
 
-          const FormSectionLabel('Photos'),
-          MultiPhotoCaptureField(
-            label: 'Duct LoRa location / placement',
-            photos: [
-              for (final d in _placementPhotos)
-                if (d.localPath != null) PhotoView(d.localPath!, uploaded: d.uploaded),
-            ],
-            onAdded: _onPlacementAdded,
-            onRemoved: _onPlacementRemoved,
-            onEdit: _onPlacementEdit,
-          ),
-
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_outlined),
-            label: const Text('Save Duct LoRa unit'),
-          ),
+          if (!_viewOnly) ...[
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: const Text('Save Duct LoRa unit'),
+            ),
+          ],
         ],
       ),
     );

@@ -53,10 +53,13 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// Engineer sees only their own assigned surveys (Slice C); Approver sees
-  /// only those submitted and awaiting review (Slice D); Sales and Admin see
-  /// everything, unchanged from before (Admin has no survey-list filtering —
-  /// only the Material Master entry point is role-gated to them).
+  /// Engineer sees only their own assigned surveys (Slice C); Sales, Admin,
+  /// and Approver all see everything (Approver gained Sales-like create/
+  /// assign/reassign capability, so it needs the same full visibility to
+  /// find sites to manage — not just ones awaiting review; the row-tap logic
+  /// below still routes a submitted survey to the read-only review screen).
+  /// Admin has no survey-list filtering — only the Material Master entry
+  /// point is role-gated to them.
   List<Site> _visibleSites(List<Site> sites) {
     switch (widget.session.currentRole) {
       case UserRole.engineer:
@@ -66,9 +69,6 @@ class _HomeScreenState extends State<HomeScreen> {
             .where((s) => s.assignedTo == engineer)
             .toList(growable: false);
       case UserRole.approver:
-        return sites
-            .where((s) => s.status == SurveyStatus.submitted)
-            .toList(growable: false);
       case UserRole.sales:
       case UserRole.admin:
       case null:
@@ -433,11 +433,12 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      // Admin gets the same create+assign flow as Sales (this slice) — every
+      // Admin and Approver get the same create+assign flow as Sales — every
       // other role still gets the bare "New site" flow.
       floatingActionButton:
           widget.session.currentRole == UserRole.sales ||
-              widget.session.currentRole == UserRole.admin
+              widget.session.currentRole == UserRole.admin ||
+              widget.session.currentRole == UserRole.approver
           ? FloatingActionButton.extended(
               onPressed: _openAssignSurvey,
               icon: const Icon(Icons.add_task),
@@ -494,8 +495,15 @@ class _HomeScreenState extends State<HomeScreen> {
                           trailing: isSales && isReadyForSales
                               ? const Icon(Icons.check_circle, color: Colors.green)
                               : const Icon(Icons.chevron_right),
+                          // Approver only gets the read-only review screen
+                          // once a survey is actually submitted; for any
+                          // earlier status (e.g. one they just created and
+                          // assigned) they open the Site Hub, same as Sales,
+                          // which is where reassignment lives.
                           onTap: () =>
-                              isApprover ? _openReview(site) : _openSite(site),
+                              (isApprover && site.status == SurveyStatus.submitted)
+                              ? _openReview(site)
+                              : _openSite(site),
                         );
                       },
                     ),

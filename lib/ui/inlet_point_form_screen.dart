@@ -18,6 +18,7 @@ class InletPointFormScreen extends StatefulWidget {
     required this.site,
     this.existing,
     this.duplicateFrom,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
@@ -29,6 +30,8 @@ class InletPointFormScreen extends StatefulWidget {
   /// new record. Mutually exclusive with [existing]; ignored if both are set.
   /// Unlike [existing], never triggers a photo load.
   final InletPoint? duplicateFrom;
+
+  final bool readOnly;
 
   @override
   State<InletPointFormScreen> createState() => _InletPointFormScreenState();
@@ -66,6 +69,16 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
   final Map<String, List<PhotoDraft>> _photos = {};
 
   bool _saving = false;
+
+  /// Starts false; flips true when the Edit button is tapped. Irrelevant
+  /// unless [widget.readOnly] — see [_viewOnly].
+  bool _editing = false;
+
+  /// True while fields should be visible but non-interactive: opened
+  /// read-only (Approver review) and Edit hasn't been tapped yet. Gates an
+  /// [IgnorePointer], not each field's `enabled` — so the fields keep their
+  /// normal (not greyed-out) styling in view mode.
+  bool get _viewOnly => widget.readOnly && !_editing;
 
   // OHT/HNS shares the central enum; the inlet form offers only OHT and HNS.
   static const _ohtHnsOptions = [OhtHns.oht, OhtHns.hns];
@@ -165,6 +178,16 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
     });
   }
 
+  /// Read-only counterpart to [_onPhotoEdit] — opens the photo full-screen
+  /// with no markup/edit capability. Used when the form is view-only.
+  Future<void> _onPhotoView(String slot, int index) async {
+    final drafts = _photos[slot];
+    if (drafts == null || index >= drafts.length) return;
+    final path = drafts[index].localPath;
+    if (path == null) return;
+    await openPhotoViewer(context, path);
+  }
+
   List<SurveyPhoto> _photoListFor(String ownerId) {
     final list = <SurveyPhoto>[];
     for (final entry in _photos.entries) {
@@ -200,6 +223,8 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
       onAdded: (p) => _onPhotoAdded(slot, p),
       onRemoved: (i) => _onPhotoRemoved(slot, i),
       onEdit: (i) => _onPhotoEdit(slot, i),
+      onView: (i) => _onPhotoView(slot, i),
+      readOnly: _viewOnly,
     );
   }
 
@@ -260,170 +285,198 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.existing == null ? 'Add inlet point' : 'Edit inlet point',
+          _viewOnly
+              ? 'Inlet point'
+              : widget.existing == null
+              ? 'Add inlet point'
+              : 'Edit inlet point',
         ),
+        actions: [
+          if (_viewOnly)
+            IconButton(
+              tooltip: 'Edit',
+              onPressed: () => setState(() => _editing = true),
+              icon: const Icon(Icons.edit_outlined),
+            ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          AppDropdownField<String>(
-            label: 'Block',
-            value: _block,
-            items: widget.site.blocks,
-            itemLabel: (b) => b,
-            emptyHint: 'No blocks on this site — add them via the site first.',
-            onChanged: (v) => setState(() => _block = v),
-          ),
-          AppTextField(
-            controller: _apartmentBhk,
-            label: 'Apartment (BHK)',
-          ),
-          AppDropdownField<SensorSize>(
-            label: 'Sensor size',
-            value: _sensorSize,
-            items: SensorSize.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _sensorSize = v),
-          ),
-          AppTextField(controller: _series, label: 'Series'),
-          AppDropdownField<SensorOd>(
-            label: 'Sensor OD',
-            value: _sensorOd,
-            items: SensorOd.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _sensorOd = v),
-          ),
-          AppDropdownField<PipeSize>(
-            label: 'Pipe size',
-            value: _pipeSize,
-            items: PipeSize.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _pipeSize = v),
-          ),
-          AppDropdownField<PipeType>(
-            label: 'Pipe type',
-            value: _pipeType,
-            items: PipeType.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _pipeType = v),
-          ),
-          AppTextField(
-            controller: _qty,
-            label: 'Qty',
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          ),
-          AppDropdownField<SensorType>(
-            label: 'Sensor type',
-            value: _sensorType,
-            items: SensorType.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _sensorType = v),
-          ),
+          IgnorePointer(
+            ignoring: _viewOnly,
+            child: Column(
+              children: [
+                AppDropdownField<String>(
+                  label: 'Block',
+                  value: _block,
+                  items: widget.site.blocks,
+                  itemLabel: (b) => b,
+                  emptyHint:
+                      'No blocks on this site — add them via the site first.',
+                  onChanged: (v) => setState(() => _block = v),
+                ),
+                AppTextField(
+                  controller: _apartmentBhk,
+                  label: 'Apartment (BHK)',
+                ),
+                AppDropdownField<SensorSize>(
+                  label: 'Sensor size',
+                  value: _sensorSize,
+                  items: SensorSize.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _sensorSize = v),
+                ),
+                AppTextField(controller: _series, label: 'Series'),
+                AppDropdownField<SensorOd>(
+                  label: 'Sensor OD',
+                  value: _sensorOd,
+                  items: SensorOd.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _sensorOd = v),
+                ),
+                AppDropdownField<PipeSize>(
+                  label: 'Pipe size',
+                  value: _pipeSize,
+                  items: PipeSize.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _pipeSize = v),
+                ),
+                AppDropdownField<PipeType>(
+                  label: 'Pipe type',
+                  value: _pipeType,
+                  items: PipeType.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _pipeType = v),
+                ),
+                AppTextField(
+                  controller: _qty,
+                  label: 'Qty',
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                ),
+                AppDropdownField<SensorType>(
+                  label: 'Sensor type',
+                  value: _sensorType,
+                  items: SensorType.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _sensorType = v),
+                ),
 
-          YesNoField(
-            label: 'Rework',
-            value: _rework,
-            onChanged: (v) => setState(() => _rework = v),
-          ),
-          if (_rework == true)
-            AppTextField(
-              controller: _reworkDetails,
-              label: 'Rework details',
-              maxLines: 2,
+                YesNoField(
+                  label: 'Rework',
+                  value: _rework,
+                  onChanged: (v) => setState(() => _rework = v),
+                ),
+                if (_rework == true)
+                  AppTextField(
+                    controller: _reworkDetails,
+                    label: 'Rework details',
+                    maxLines: 2,
+                  ),
+
+                YesNoField(
+                  label: 'Linear distance & clearance 10X',
+                  value: _linearDistanceClearance10x,
+                  onChanged: (v) =>
+                      setState(() => _linearDistanceClearance10x = v),
+                ),
+                YesNoField(
+                  label: 'Reverse flow',
+                  value: _reverseFlow,
+                  onChanged: (v) => setState(() => _reverseFlow = v),
+                ),
+                AppDropdownField<OhtHns>(
+                  label: 'OHT / HNS',
+                  value: _ohtHns,
+                  items: _ohtHnsOptions,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _ohtHns = v),
+                ),
+                YesNoField(
+                  label: 'Distance from motor/pump',
+                  value: _distanceFromMotorPump,
+                  onChanged: (v) => setState(() => _distanceFromMotorPump = v),
+                ),
+                AppTextField(
+                  controller: _pressure,
+                  label: 'Max & continuous pressure (bar)',
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  ],
+                ),
+                YesNoField(
+                  label: 'Strainer / screen filter',
+                  value: _strainerScreenFilter,
+                  onChanged: (v) => setState(() => _strainerScreenFilter = v),
+                ),
+                AppDropdownField<FlowDirection>(
+                  label: 'Flow direction',
+                  value: _flowDirection,
+                  items: FlowDirection.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _flowDirection = v),
+                ),
+                AppDropdownField<AccessMode>(
+                  label: 'Access mode',
+                  value: _accessMode,
+                  items: AccessMode.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _accessMode = v),
+                ),
+                AppDropdownField<CableRunLength>(
+                  label: 'Cable run length',
+                  value: _cableRunLength,
+                  items: CableRunLength.values,
+                  itemLabel: (v) => v.label,
+                  onChanged: (v) => setState(() => _cableRunLength = v),
+                ),
+                YesNoField(
+                  label: 'Conduit clamping',
+                  value: _conduitClamping,
+                  onChanged: (v) => setState(() => _conduitClamping = v),
+                ),
+                YesNoField(
+                  label: 'Civil work needed',
+                  value: _civilWorkNeeded,
+                  onChanged: (v) => setState(() => _civilWorkNeeded = v),
+                ),
+                if (_civilWorkNeeded == true)
+                  AppTextField(
+                    controller: _civilWorkDetails,
+                    label: 'Civil work details',
+                    maxLines: 2,
+                  ),
+
+                const FormSectionLabel('Photos'),
+                _photoField(
+                  PhotoSlot.shaftLocationMarked,
+                  'Shaft / location marked',
+                ),
+                _photoField(PhotoSlot.cableRouting, 'Cable routing'),
+                _photoField(PhotoSlot.shaftAccess, 'Shaft access'),
+                _photoField(PhotoSlot.shaftInternal, 'Shaft internal'),
+              ],
             ),
+          ),
 
-          YesNoField(
-            label: 'Linear distance & clearance 10X',
-            value: _linearDistanceClearance10x,
-            onChanged: (v) => setState(() => _linearDistanceClearance10x = v),
-          ),
-          YesNoField(
-            label: 'Reverse flow',
-            value: _reverseFlow,
-            onChanged: (v) => setState(() => _reverseFlow = v),
-          ),
-          AppDropdownField<OhtHns>(
-            label: 'OHT / HNS',
-            value: _ohtHns,
-            items: _ohtHnsOptions,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _ohtHns = v),
-          ),
-          YesNoField(
-            label: 'Distance from motor/pump',
-            value: _distanceFromMotorPump,
-            onChanged: (v) => setState(() => _distanceFromMotorPump = v),
-          ),
-          AppTextField(
-            controller: _pressure,
-            label: 'Max & continuous pressure (bar)',
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-            ],
-          ),
-          YesNoField(
-            label: 'Strainer / screen filter',
-            value: _strainerScreenFilter,
-            onChanged: (v) => setState(() => _strainerScreenFilter = v),
-          ),
-          AppDropdownField<FlowDirection>(
-            label: 'Flow direction',
-            value: _flowDirection,
-            items: FlowDirection.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _flowDirection = v),
-          ),
-          AppDropdownField<AccessMode>(
-            label: 'Access mode',
-            value: _accessMode,
-            items: AccessMode.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _accessMode = v),
-          ),
-          AppDropdownField<CableRunLength>(
-            label: 'Cable run length',
-            value: _cableRunLength,
-            items: CableRunLength.values,
-            itemLabel: (v) => v.label,
-            onChanged: (v) => setState(() => _cableRunLength = v),
-          ),
-          YesNoField(
-            label: 'Conduit clamping',
-            value: _conduitClamping,
-            onChanged: (v) => setState(() => _conduitClamping = v),
-          ),
-          YesNoField(
-            label: 'Civil work needed',
-            value: _civilWorkNeeded,
-            onChanged: (v) => setState(() => _civilWorkNeeded = v),
-          ),
-          if (_civilWorkNeeded == true)
-            AppTextField(
-              controller: _civilWorkDetails,
-              label: 'Civil work details',
-              maxLines: 2,
+          if (!_viewOnly) ...[
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: const Text('Save inlet point'),
             ),
-
-          const FormSectionLabel('Photos'),
-          _photoField(PhotoSlot.shaftLocationMarked, 'Shaft / location marked'),
-          _photoField(PhotoSlot.cableRouting, 'Cable routing'),
-          _photoField(PhotoSlot.shaftAccess, 'Shaft access'),
-          _photoField(PhotoSlot.shaftInternal, 'Shaft internal'),
-
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_outlined),
-            label: const Text('Save inlet point'),
-          ),
+          ],
         ],
       ),
     );

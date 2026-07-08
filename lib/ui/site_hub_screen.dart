@@ -263,10 +263,12 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     final isEngineer = widget.session.currentRole == UserRole.engineer;
     final isSales = widget.session.currentRole == UserRole.sales;
     final isAdmin = widget.session.currentRole == UserRole.admin;
-    // Admin gets the same reassignment/config capabilities as Sales (this
-    // slice) — deliberately NOT Submit (Engineer-only) or Approve, which
-    // Admin never routes to at all (see home_screen.dart's row-tap logic).
-    final canReassignRole = isSales || isAdmin;
+    final isApprover = widget.session.currentRole == UserRole.approver;
+    // Admin and Approver get the same reassignment/config capabilities as
+    // Sales — deliberately NOT Submit (Engineer-only). Approve never routes
+    // through this screen at all (submitted surveys go to the Approver's
+    // read-only review screen instead — see home_screen.dart's row-tap logic).
+    final canReassignRole = isSales || isAdmin || isApprover;
     final canSubmit =
         site?.status == SurveyStatus.assigned ||
         site?.status == SurveyStatus.inProgress;
