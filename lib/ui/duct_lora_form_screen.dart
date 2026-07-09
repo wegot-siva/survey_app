@@ -9,7 +9,9 @@ import 'photo_markup_screen.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
-/// Add or edit a single Duct LoRa unit. All fields optional (partial saves).
+/// Add or edit a single Duct LoRa unit. Series served (at least one) and
+/// cable length are mandatory (see `_save`); every other field is optional
+/// (partial saves).
 ///
 /// [availableSeries] are the distinct Series values entered on this site's
 /// inlet points — the unit's "series served" is chosen from those.
@@ -50,6 +52,11 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
   final List<PhotoDraft> _placementPhotos = [];
 
   bool _saving = false;
+
+  // Mandatory-field errors, set on a failed save attempt and cleared on the
+  // next one — see _save().
+  String? _seriesServedError;
+  String? _cableLengthError;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -164,6 +171,23 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
   }
 
   Future<void> _save() async {
+    final cableLength = double.tryParse(_cableLength.text.trim());
+
+    setState(() {
+      _seriesServedError = _seriesServed.isEmpty
+          ? 'Select at least one series.'
+          : null;
+      _cableLengthError = (cableLength == null || cableLength <= 0)
+          ? 'Required'
+          : null;
+    });
+    if (_seriesServedError != null || _cableLengthError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill in the required fields.')),
+      );
+      return;
+    }
+
     setState(() => _saving = true);
 
     final draft = DuctLora(
@@ -176,7 +200,7 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
       powerPointAvailableShielded: _powerPointAvailableShielded,
       separateMcbForSeries: _separateMcbForSeries,
       upsPowerSupply: _upsPowerSupply,
-      cableLength: double.tryParse(_cableLength.text.trim()),
+      cableLength: cableLength,
     );
 
     final String ownerId;
@@ -237,7 +261,7 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
                   onChanged: (v) => setState(() => _block = v),
                 ),
                 MultiSelectChips<String>(
-                  label: 'Series served',
+                  label: 'Series served *',
                   items: widget.availableSeries,
                   itemLabel: (s) => s,
                   selected: _seriesServed,
@@ -249,6 +273,7 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
                       ..clear()
                       ..addAll(next);
                   }),
+                  errorText: _seriesServedError,
                 ),
                 YesNoField(
                   label: 'Accessible for service',
@@ -284,13 +309,14 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
                 ),
                 AppTextField(
                   controller: _cableLength,
-                  label: 'Duct LoRa cable length (pending confirmation)',
+                  label: 'Duct LoRa cable length (pending confirmation) *',
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                   ],
+                  errorText: _cableLengthError,
                 ),
 
                 const FormSectionLabel('Photos'),

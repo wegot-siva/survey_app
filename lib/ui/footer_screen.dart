@@ -10,7 +10,8 @@ import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
 /// The per-site "Footer" form — closing, site-wide details. One per site (like
-/// Client inputs). All fields optional; partial saves allowed.
+/// Client inputs). Surveyor name and survey date are mandatory (see
+/// `_save`); every other field is optional (partial saves).
 class FooterScreen extends StatefulWidget {
   const FooterScreen({
     super.key,
@@ -43,6 +44,11 @@ class _FooterScreenState extends State<FooterScreen> {
 
   bool _loading = true;
   bool _saving = false;
+
+  // Mandatory-field errors, set on a failed save attempt and cleared on the
+  // next one — see _save().
+  String? _surveyorNameError;
+  bool _surveyDateError = false;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -169,6 +175,19 @@ class _FooterScreenState extends State<FooterScreen> {
   }
 
   Future<void> _save() async {
+    final surveyorName = _surveyorName.text.trim();
+
+    setState(() {
+      _surveyorNameError = surveyorName.isEmpty ? 'Required' : null;
+      _surveyDateError = _surveyDate == null;
+    });
+    if (_surveyorNameError != null || _surveyDateError) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill in the required fields.')),
+      );
+      return;
+    }
+
     setState(() => _saving = true);
 
     final footer = Footer(
@@ -180,7 +199,7 @@ class _FooterScreenState extends State<FooterScreen> {
           : '',
       generalRemarks: _generalRemarks.text.trim(),
       surveyDate: _surveyDate,
-      surveyorName: _surveyorName.text.trim(),
+      surveyorName: surveyorName,
     );
 
     await widget.repository.saveFooter(widget.site.id, footer);
@@ -260,19 +279,43 @@ class _FooterScreenState extends State<FooterScreen> {
                         maxLines: 3,
                       ),
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 16),
+                        padding: const EdgeInsets.only(bottom: 4),
                         child: OutlinedButton.icon(
                           onPressed: _pickDate,
+                          style: _surveyDateError
+                              ? OutlinedButton.styleFrom(
+                                  foregroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.error,
+                                  side: BorderSide(
+                                    color: Theme.of(context).colorScheme.error,
+                                  ),
+                                )
+                              : null,
                           icon: const Icon(Icons.calendar_today_outlined),
                           label: Align(
                             alignment: Alignment.centerLeft,
-                            child: Text(dateLabel),
+                            child: Text('$dateLabel *'),
                           ),
                         ),
                       ),
+                      if (_surveyDateError)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text(
+                            'Required',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(context).colorScheme.error,
+                                ),
+                          ),
+                        )
+                      else
+                        const SizedBox(height: 12),
                       AppTextField(
                         controller: _surveyorName,
-                        label: 'Surveyor name',
+                        label: 'Surveyor name *',
+                        errorText: _surveyorNameError,
                       ),
 
                       const FormSectionLabel('Photos / videos'),

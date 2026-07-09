@@ -10,7 +10,9 @@ import 'photo_markup_screen.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
-/// Add or edit a single inlet point. All fields optional (partial saves).
+/// Add or edit a single inlet point. Apartment (BHK), sensor size, sensor
+/// type, qty, and series are mandatory (see `_save`); every other field is
+/// optional (partial saves).
 class InletPointFormScreen extends StatefulWidget {
   const InletPointFormScreen({
     super.key,
@@ -69,6 +71,14 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
   final Map<String, List<PhotoDraft>> _photos = {};
 
   bool _saving = false;
+
+  // Mandatory-field errors, set on a failed save attempt and cleared on the
+  // next one — see _save().
+  String? _apartmentBhkError;
+  String? _sensorSizeError;
+  String? _sensorTypeError;
+  String? _qtyError;
+  String? _seriesError;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -229,19 +239,41 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
   }
 
   Future<void> _save() async {
+    final apartmentBhk = _apartmentBhk.text.trim();
+    final series = _series.text.trim();
+    final qty = int.tryParse(_qty.text.trim());
+
+    setState(() {
+      _apartmentBhkError = apartmentBhk.isEmpty ? 'Required' : null;
+      _sensorSizeError = _sensorSize == null ? 'Required' : null;
+      _sensorTypeError = _sensorType == null ? 'Required' : null;
+      _qtyError = (qty == null || qty <= 0) ? 'Required' : null;
+      _seriesError = series.isEmpty ? 'Required' : null;
+    });
+    if (_apartmentBhkError != null ||
+        _sensorSizeError != null ||
+        _sensorTypeError != null ||
+        _qtyError != null ||
+        _seriesError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill in the required fields.')),
+      );
+      return;
+    }
+
     setState(() => _saving = true);
 
     final draft = InletPoint(
       id: widget.existing?.id ?? '',
       siteId: widget.site.id,
       block: _block,
-      apartmentBhk: _apartmentBhk.text.trim(),
+      apartmentBhk: apartmentBhk,
       sensorSize: _sensorSize,
-      series: _series.text.trim(),
+      series: series,
       sensorOd: _sensorOd,
       pipeSize: _pipeSize,
       pipeType: _pipeType,
-      qty: int.tryParse(_qty.text.trim()),
+      qty: qty,
       sensorType: _sensorType,
       rework: _rework,
       reworkDetails: _reworkDetails.text.trim(),
@@ -318,16 +350,22 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
                 ),
                 AppTextField(
                   controller: _apartmentBhk,
-                  label: 'Apartment (BHK)',
+                  label: 'Apartment (BHK) *',
+                  errorText: _apartmentBhkError,
                 ),
                 AppDropdownField<SensorSize>(
-                  label: 'Sensor size',
+                  label: 'Sensor size *',
                   value: _sensorSize,
                   items: SensorSize.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _sensorSize = v),
+                  errorText: _sensorSizeError,
                 ),
-                AppTextField(controller: _series, label: 'Series'),
+                AppTextField(
+                  controller: _series,
+                  label: 'Series *',
+                  errorText: _seriesError,
+                ),
                 AppDropdownField<SensorOd>(
                   label: 'Sensor OD',
                   value: _sensorOd,
@@ -351,16 +389,18 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
                 ),
                 AppTextField(
                   controller: _qty,
-                  label: 'Qty',
+                  label: 'Qty *',
                   keyboardType: TextInputType.number,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  errorText: _qtyError,
                 ),
                 AppDropdownField<SensorType>(
-                  label: 'Sensor type',
+                  label: 'Sensor type *',
                   value: _sensorType,
                   items: SensorType.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _sensorType = v),
+                  errorText: _sensorTypeError,
                 ),
 
                 YesNoField(

@@ -55,6 +55,13 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
 
   bool _saving = false;
 
+  // Mandatory-field errors, set on a failed save attempt and cleared on the
+  // next one — see _save().
+  String? _siteNameError;
+  String? _pocNameError;
+  String? _pocContactError;
+  String? _goalError;
+
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
   bool _editing = false;
@@ -193,13 +200,34 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
   }
 
   Future<void> _save() async {
+    final siteName = _siteName.text.trim();
+    final pocName = _pocName.text.trim();
+    final pocContact = _pocContact.text.trim();
+    final goal = _goal.text.trim();
+
+    setState(() {
+      _siteNameError = siteName.isEmpty ? 'Required' : null;
+      _pocNameError = pocName.isEmpty ? 'Required' : null;
+      _pocContactError = pocContact.isEmpty ? 'Required' : null;
+      _goalError = goal.isEmpty ? 'Required' : null;
+    });
+    if (_siteNameError != null ||
+        _pocNameError != null ||
+        _pocContactError != null ||
+        _goalError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill in the required fields.')),
+      );
+      return;
+    }
+
     setState(() => _saving = true);
     final inputs = ClientInputs(
-      siteName: _siteName.text.trim(),
+      siteName: siteName,
       informationSource: _informationSource,
-      clientPocName: _pocName.text.trim(),
-      clientPocContact: _pocContact.text.trim(),
-      goalOfInstallation: _goal.text.trim(),
+      clientPocName: pocName,
+      clientPocContact: pocContact,
+      goalOfInstallation: goal,
       waterSources: Set.unmodifiable(_waterSources),
       ohtHns: _ohtHns,
       finalisedPlumbingDrawings: _finalisedDrawings,
@@ -244,14 +272,16 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const _Hint('All fields are optional — you can save a partial form.'),
+          const _Hint(
+            'Fields marked * are required — everything else is optional.',
+          ),
           const SizedBox(height: 16),
 
           IgnorePointer(
             ignoring: _viewOnly,
             child: Column(
               children: [
-                _text(_siteName, 'Site name'),
+                _text(_siteName, 'Site name *', errorText: _siteNameError),
                 _dropdown<InformationSource>(
                   label: 'Information source',
                   value: _informationSource,
@@ -259,9 +289,22 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _informationSource = v),
                 ),
-                _text(_pocName, 'Client POC name'),
-                _text(_pocContact, 'Client POC phone/email'),
-                _text(_goal, 'Goal of installation', maxLines: 2),
+                _text(
+                  _pocName,
+                  'Client POC name *',
+                  errorText: _pocNameError,
+                ),
+                _text(
+                  _pocContact,
+                  'Client POC phone/email *',
+                  errorText: _pocContactError,
+                ),
+                _text(
+                  _goal,
+                  'Goal of installation *',
+                  maxLines: 2,
+                  errorText: _goalError,
+                ),
 
                 _Label('Water sources present'),
                 Wrap(
@@ -374,6 +417,7 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     int maxLines = 1,
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
+    String? errorText,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -385,6 +429,7 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
+          errorText: errorText,
         ),
       ),
     );

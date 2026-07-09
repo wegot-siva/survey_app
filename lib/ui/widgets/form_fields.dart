@@ -12,6 +12,7 @@ class AppTextField extends StatelessWidget {
     this.maxLines = 1,
     this.keyboardType,
     this.inputFormatters,
+    this.errorText,
   });
 
   final TextEditingController controller;
@@ -19,6 +20,10 @@ class AppTextField extends StatelessWidget {
   final int maxLines;
   final TextInputType? keyboardType;
   final List<TextInputFormatter>? inputFormatters;
+
+  /// Shown below the field in the error color, e.g. "Required" — set by the
+  /// caller after a failed save attempt on a mandatory field.
+  final String? errorText;
 
   @override
   Widget build(BuildContext context) {
@@ -32,6 +37,7 @@ class AppTextField extends StatelessWidget {
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
+          errorText: errorText,
         ),
       ),
     );
@@ -47,6 +53,7 @@ class AppDropdownField<T> extends StatelessWidget {
     required this.itemLabel,
     required this.onChanged,
     this.emptyHint,
+    this.errorText,
   });
 
   final String label;
@@ -58,6 +65,10 @@ class AppDropdownField<T> extends StatelessWidget {
   /// Shown (disabled) when [items] is empty, e.g. "Add blocks first".
   final String? emptyHint;
 
+  /// Shown below the field in the error color, e.g. "Required" — set by the
+  /// caller after a failed save attempt on a mandatory field.
+  final String? errorText;
+
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty && emptyHint != null) {
@@ -67,6 +78,7 @@ class AppDropdownField<T> extends StatelessWidget {
           decoration: InputDecoration(
             labelText: label,
             border: const OutlineInputBorder(),
+            errorText: errorText,
           ),
           child: Text(
             emptyHint!,
@@ -84,6 +96,7 @@ class AppDropdownField<T> extends StatelessWidget {
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
+          errorText: errorText,
         ),
         items: [
           for (final item in items)
@@ -107,6 +120,7 @@ class MultiSelectChips<T> extends StatelessWidget {
     required this.onChanged,
     this.emptyHint,
     this.helperText,
+    this.errorText,
   });
 
   final String label;
@@ -120,6 +134,10 @@ class MultiSelectChips<T> extends StatelessWidget {
 
   /// Optional advisory text under the chips, e.g. "Max 20 sensors per unit".
   final String? helperText;
+
+  /// Shown below the chips in the error color, e.g. "Select at least one" —
+  /// set by the caller after a failed save attempt on a mandatory field.
+  final String? errorText;
 
   @override
   Widget build(BuildContext context) {
@@ -160,6 +178,15 @@ class MultiSelectChips<T> extends StatelessWidget {
             Text(
               helperText!,
               style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          if (errorText != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              errorText!,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
             ),
           ],
         ],

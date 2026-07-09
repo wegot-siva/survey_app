@@ -10,7 +10,9 @@ import 'photo_markup_screen.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
-/// Add or edit a single gateway. All fields optional (partial saves).
+/// Add or edit a single gateway. Placement, blocks covered (at least one),
+/// quantity, uplink type, and SIM coverage are mandatory (see `_save`);
+/// every other field is optional (partial saves).
 class GatewayFormScreen extends StatefulWidget {
   const GatewayFormScreen({
     super.key,
@@ -47,6 +49,14 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
   final List<PhotoDraft> _locationPhotos = [];
 
   bool _saving = false;
+
+  // Mandatory-field errors, set on a failed save attempt and cleared on the
+  // next one — see _save().
+  String? _placementError;
+  String? _blocksCoveredError;
+  String? _quantityError;
+  String? _uplinkTypeError;
+  String? _simCoverageError;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -171,6 +181,28 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
   }
 
   Future<void> _save() async {
+    final quantity = int.tryParse(_quantity.text.trim());
+
+    setState(() {
+      _placementError = _placement == null ? 'Required' : null;
+      _blocksCoveredError = _blocksCovered.isEmpty
+          ? 'Select at least one block.'
+          : null;
+      _quantityError = (quantity == null || quantity <= 0) ? 'Required' : null;
+      _uplinkTypeError = _uplinkType == null ? 'Required' : null;
+      _simCoverageError = _simCoverage == null ? 'Required' : null;
+    });
+    if (_placementError != null ||
+        _blocksCoveredError != null ||
+        _quantityError != null ||
+        _uplinkTypeError != null ||
+        _simCoverageError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill in the required fields.')),
+      );
+      return;
+    }
+
     setState(() => _saving = true);
 
     // Drop the WiFi answer if the uplink no longer involves a router.
@@ -185,7 +217,7 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
       placement: _placement,
       locationDescription: _locationDescription.text.trim(),
       blocksCovered: Set.unmodifiable(_blocksCovered),
-      quantity: int.tryParse(_quantity.text.trim()),
+      quantity: quantity,
       uplinkType: _uplinkType,
       wifiInterferenceCheck: wifiCheck,
       wifiInterferenceDetails: wifiDetails,
@@ -243,11 +275,12 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
             child: Column(
               children: [
                 AppDropdownField<GatewayPlacement>(
-                  label: 'Indoor / outdoor',
+                  label: 'Indoor / outdoor *',
                   value: _placement,
                   items: GatewayPlacement.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _placement = v),
+                  errorText: _placementError,
                 ),
                 AppTextField(
                   controller: _locationDescription,
@@ -255,7 +288,7 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
                   maxLines: 2,
                 ),
                 MultiSelectChips<String>(
-                  label: 'Blocks covered',
+                  label: 'Blocks covered *',
                   items: widget.site.blocks,
                   itemLabel: (b) => b,
                   selected: _blocksCovered,
@@ -266,19 +299,22 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
                       ..clear()
                       ..addAll(next);
                   }),
+                  errorText: _blocksCoveredError,
                 ),
                 AppTextField(
                   controller: _quantity,
-                  label: 'Quantity',
+                  label: 'Quantity *',
                   keyboardType: TextInputType.number,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  errorText: _quantityError,
                 ),
                 AppDropdownField<UplinkType>(
-                  label: 'Uplink type',
+                  label: 'Uplink type *',
                   value: _uplinkType,
                   items: UplinkType.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _uplinkType = v),
+                  errorText: _uplinkTypeError,
                 ),
                 if (_usesRouter) ...[
                   YesNoField(
@@ -295,11 +331,12 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
                     ),
                 ],
                 AppDropdownField<SimCoverage>(
-                  label: 'SIM coverage',
+                  label: 'SIM coverage *',
                   value: _simCoverage,
                   items: SimCoverage.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _simCoverage = v),
+                  errorText: _simCoverageError,
                 ),
                 YesNoField(
                   label: 'Uninterrupted power source',
