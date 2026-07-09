@@ -468,7 +468,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 widget.session.currentRole == UserRole.approver
           ? FloatingActionButton.extended(
               onPressed: _openAssignSurvey,
-              icon: const Icon(Icons.add_task),
+              icon: const Icon(Icons.post_add),
               label: const Text('New survey'),
             )
           : FloatingActionButton.extended(

@@ -31,7 +31,7 @@ class SunBomExporter {
 
   /// Builds the workbook from [lines] and writes it to a temp file (suitable
   /// for the share sheet). Returns the file path. Named
-  /// `<site name>-Sun_BOM-v<version>.xlsx` — deterministic, so re-exporting
+  /// `<site name>-ZohoImport-v<version>.xlsx` — deterministic, so re-exporting
   /// the same site/version simply overwrites the prior temp file (harmless;
   /// it's consumed immediately by the share sheet).
   Future<String> export({
@@ -43,7 +43,7 @@ class SunBomExporter {
     final dir = await getTemporaryDirectory();
     final filePath = p.join(
       dir.path,
-      '${_safeFileName(siteName)}-Sun_BOM-v$version.xlsx',
+      '${_safeFileName(siteName)}-ZohoImport-v$version.xlsx',
     );
     await File(filePath).writeAsBytes(bytes);
     return filePath;

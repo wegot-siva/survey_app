@@ -306,8 +306,8 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Future<void> _exportBom() async {
     setState(() => _exporting = true);
     final formatName = _selectedExportFormat == _ExportFormat.lumax
-        ? 'Lumax'
-        : 'Sun_BOM';
+        ? 'Standard'
+        : 'Zoho Import';
     try {
       final lines = _cumulativeTotalForVersion(_selectedExportVersion);
       final path = switch (_selectedExportFormat) {
@@ -379,11 +379,11 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                   items: const [
                     DropdownMenuItem(
                       value: _ExportFormat.sunBom,
-                      child: Text('Sun_BOM format'),
+                      child: Text('Zoho Import format'),
                     ),
                     DropdownMenuItem(
                       value: _ExportFormat.lumax,
-                      child: Text('Lumax format'),
+                      child: Text('Standard format'),
                     ),
                   ],
                 ),
@@ -410,7 +410,8 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                   },
                   // Compact "vN" while closed; full "Export vN" in the menu.
                   selectedItemBuilder: (context) => [
-                    for (var v = 1; v <= _latestVersion; v++) Text('v$v'),
+                    for (var v = 1; v <= _latestVersion; v++)
+                      Text('v$v', style: labelStyle),
                   ],
                   items: [
                     for (var v = 1; v <= _latestVersion; v++)
