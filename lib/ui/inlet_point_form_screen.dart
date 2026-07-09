@@ -338,6 +338,7 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
           IgnorePointer(
             ignoring: _viewOnly,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 AppDropdownField<String>(
                   label: 'Block',

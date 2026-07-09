@@ -250,6 +250,7 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
           IgnorePointer(
             ignoring: _viewOnly,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 AppDropdownField<String>(
                   label: 'Block',

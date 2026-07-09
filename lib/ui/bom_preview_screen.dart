@@ -351,6 +351,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   /// clipped off-screen. A [Wrap] here can drop to a second line on narrow
   /// screens instead of overflowing.
   Widget _exportOptionsRow() {
+    // DropdownButton defaults to textTheme.titleMedium, which doesn't match
+    // the plain "Format: "/"Version: " Text labels beside it (ambient
+    // bodyMedium) — pinning both to the same style fixes the baseline
+    // mismatch, including the closed-state selectedItemBuilder text (which
+    // inherits DropdownButton.style via its DefaultTextStyle wrapper).
+    final labelStyle = Theme.of(context).textTheme.bodyMedium;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: Wrap(
@@ -361,10 +367,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Format: '),
+              Text('Format: ', style: labelStyle),
               DropdownButtonHideUnderline(
                 child: DropdownButton<_ExportFormat>(
                   value: _selectedExportFormat,
+                  style: labelStyle,
+                  isDense: true,
                   onChanged: (f) {
                     if (f != null) setState(() => _selectedExportFormat = f);
                   },
@@ -385,10 +393,18 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Version: '),
+              Text('Version: ', style: labelStyle),
               DropdownButtonHideUnderline(
                 child: DropdownButton<int>(
                   value: _selectedExportVersion,
+                  style: labelStyle,
+                  // isDense skips DropdownButton's default itemHeight-based
+                  // SizedBox wrapper around each selectedItemBuilder widget.
+                  // That wrapper doesn't vertically center its child (unlike
+                  // DropdownMenuItem, which self-centers) — without isDense,
+                  // the closed-state "vN" text paints at the top of an
+                  // oversized box instead of level with the label/arrow.
+                  isDense: true,
                   onChanged: (v) {
                     if (v != null) setState(() => _selectedExportVersion = v);
                   },

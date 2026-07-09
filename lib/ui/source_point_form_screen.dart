@@ -352,6 +352,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
           IgnorePointer(
             ignoring: _viewOnly,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 AppDropdownField<String>(
                   label: 'Block',

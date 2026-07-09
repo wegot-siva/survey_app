@@ -273,6 +273,7 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
           IgnorePointer(
             ignoring: _viewOnly,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 AppDropdownField<GatewayPlacement>(
                   label: 'Indoor / outdoor *',
