@@ -41,6 +41,31 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _load();
+    // Catches the recurring "built without --dart-define-from-file=.env"
+    // mistake at launch instead of a confusing sync-time error later — see
+    // scripts/build_debug.ps1 / scripts/run_debug.ps1.
+    if (!widget.supabaseService.isConfigured) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _showMissingCredentialsDialog(),
+      );
+    }
+  }
+
+  Future<void> _showMissingCredentialsDialog() async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Built without credentials.'),
+        content: const Text('Rebuild using scripts/build_debug.ps1.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _load() async {

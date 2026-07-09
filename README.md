@@ -2,6 +2,8 @@
 
 A new Flutter project.
 
+Never run `flutter build`/`flutter run` directly — always use `scripts/build_debug.ps1` or `scripts/run_debug.ps1` (they supply the `--dart-define-from-file=.env` flag Supabase credentials require).
+
 ## Getting Started
 
 This project is a starting point for a Flutter application.
