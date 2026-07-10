@@ -13,6 +13,11 @@ import 'assign_survey_screen.dart';
 import 'create_site_screen.dart';
 import 'material_master_screen.dart';
 import 'site_hub_screen.dart';
+import 'theme/app_theme.dart';
+
+/// State of the AppBar's Sync control — drives its icon/label/color. Session
+/// only: resets to [idle] on app restart (see [_HomeScreenState._syncStatus]).
+enum _SyncStatus { idle, syncing, success, failure }
 
 /// Lists all sites and offers a button to create a new one.
 class HomeScreen extends StatefulWidget {
@@ -36,6 +41,11 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   List<Site> _sites = const [];
   bool _loading = true;
+
+  _SyncStatus _syncStatus = _SyncStatus.idle;
+
+  /// Session-only — resets on app restart, not persisted.
+  DateTime? _lastSyncedAt;
 
   @override
   void initState() {
@@ -222,83 +232,42 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _syncNow() async {
-    final messenger = ScaffoldMessenger.of(context)
-      ..showSnackBar(
-        const SnackBar(content: Text('Syncing to Supabase…')),
-      );
+    setState(() => _syncStatus = _SyncStatus.syncing);
 
     final result = await widget.syncService.pushAll();
     if (!mounted) return;
-    messenger.hideCurrentSnackBar();
 
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        icon: Icon(
-          result.success ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
-        ),
-        title: Text(result.success ? 'Sync complete' : 'Sync failed'),
-        content: SingleChildScrollView(
-          child: result.success
-              ? Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Synced ${_syncItemTotal(result)} item(s) to Supabase.',
-                    ),
-                    Theme(
-                      // ExpansionTile paints its own divider lines; hide them
-                      // so it sits flush inside the dialog.
-                      data: Theme.of(context).copyWith(
-                        dividerColor: Colors.transparent,
-                      ),
-                      child: ExpansionTile(
-                        tilePadding: EdgeInsets.zero,
-                        childrenPadding: EdgeInsets.zero,
-                        expandedCrossAxisAlignment: CrossAxisAlignment.start,
-                        title: const Text('Show details'),
-                        children: [
-                          Text(
-                            '• ${result.sites} site(s)\n'
-                            '• ${result.blocks} block(s)\n'
-                            '• ${result.clientInputs} client input form(s)\n'
-                            '• ${result.sourcePoints} source point(s)\n'
-                            '• ${result.inletPoints} inlet point(s)\n'
-                            '• ${result.ductLoras} Duct LoRa unit(s)\n'
-                            '• ${result.gateways} gateway(s)\n'
-                            '• ${result.footers} footer form(s)\n'
-                            '• ${result.materialMasterItems} material master item(s)\n'
-                            '• ${result.materialMasterAuditEntries} change log entr'
-                            '${result.materialMasterAuditEntries == 1 ? 'y' : 'ies'}\n'
-                            '• ${result.photos} photo(s)\n'
-                            '• ${result.bomManualEntries} manual BoM entr'
-                            '${result.bomManualEntries == 1 ? 'y' : 'ies'}\n'
-                            '• ${result.bomSnapshots} finalized BoM snapshot'
-                            '${result.bomSnapshots == 1 ? '' : 's'}\n'
-                            '• ${result.bomRevisions} BoM revision'
-                            '${result.bomRevisions == 1 ? '' : 's'}',
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                )
-              : SelectableText(result.message ?? 'Unknown error.'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
+    if (result.success) {
+      setState(() {
+        _syncStatus = _SyncStatus.success;
+        _lastSyncedAt = DateTime.now();
+      });
+      final records = _syncRecordTotal(result);
+      final photos = result.photos;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'All synced — $records record${records == 1 ? '' : 's'} and '
+            '$photos photo${photos == 1 ? '' : 's'} backed up.',
           ),
-        ],
-      ),
-    );
+        ),
+      );
+    } else {
+      setState(() => _syncStatus = _SyncStatus.failure);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            "Couldn't sync. Check your connection and try again.",
+          ),
+          action: SnackBarAction(label: 'Retry', onPressed: _syncNow),
+        ),
+      );
+    }
   }
 
-  /// Sum of every per-table push count in [result] — the single number the
-  /// sync dialog leads with, before the itemized "Show details" breakdown.
-  static int _syncItemTotal(SyncResult result) =>
+  /// Every per-table push count in [result] except photos, which the sync
+  /// SnackBar reports as its own separate figure (see [_syncNow]).
+  static int _syncRecordTotal(SyncResult result) =>
       result.sites +
       result.blocks +
       result.clientInputs +
@@ -309,10 +278,62 @@ class _HomeScreenState extends State<HomeScreen> {
       result.footers +
       result.materialMasterItems +
       result.materialMasterAuditEntries +
-      result.photos +
       result.bomManualEntries +
       result.bomSnapshots +
-      result.bomRevisions;
+      result.bomRevisions +
+      result.bomManualEditSnapshots;
+
+  /// Whole-minute relative time since [_lastSyncedAt] — no new package,
+  /// simple Duration math is enough at this granularity.
+  String _lastSyncedLabel() {
+    final at = _lastSyncedAt;
+    if (at == null) return 'Synced';
+    final minutes = DateTime.now().difference(at).inMinutes;
+    return minutes < 1 ? 'Synced just now' : 'Synced ${minutes}m ago';
+  }
+
+  /// AppBar sync control — a single tappable status widget (replacing a
+  /// plain "Sync now" icon button) that reflects [_syncStatus] and retriggers
+  /// [_syncNow] on tap in every state.
+  Widget _syncStatusButton() {
+    final scheme = Theme.of(context).colorScheme;
+    switch (_syncStatus) {
+      case _SyncStatus.idle:
+        return TextButton.icon(
+          onPressed: _syncNow,
+          icon: const Icon(Icons.cloud_upload_outlined),
+          label: const Text('Sync'),
+        );
+      case _SyncStatus.syncing:
+        return TextButton.icon(
+          onPressed: null,
+          icon: const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          label: const Text('Syncing…'),
+        );
+      case _SyncStatus.success:
+        return TextButton.icon(
+          onPressed: _syncNow,
+          icon: Icon(Icons.cloud_done, color: AppStatusColors.complete),
+          label: Text(
+            _lastSyncedLabel(),
+            style: const TextStyle(color: AppStatusColors.complete),
+          ),
+        );
+      case _SyncStatus.failure:
+        return TextButton.icon(
+          onPressed: _syncNow,
+          icon: Icon(Icons.cloud_off, color: scheme.error),
+          label: Text(
+            'Sync failed — tap to retry',
+            style: TextStyle(color: scheme.error),
+          ),
+        );
+    }
+  }
 
   /// Groups the Engineer's assigned surveys into three tabs by status —
   /// display only, no status transitions happen here. "Not started" is
@@ -446,11 +467,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: _testSupabase,
               icon: const Icon(Icons.cloud_outlined),
             ),
-          IconButton(
-            tooltip: 'Sync now (push to Supabase)',
-            onPressed: _syncNow,
-            icon: const Icon(Icons.cloud_upload_outlined),
-          ),
+          _syncStatusButton(),
           IconButton(
             tooltip: 'Log out',
             onPressed: _logout,
