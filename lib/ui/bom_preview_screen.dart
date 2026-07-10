@@ -500,14 +500,13 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                   onChanged: (v) {
                     if (v != null) setState(() => _selectedExportVersion = v);
                   },
-                  // Compact "vN" while closed; full "Export vN" in the menu.
                   selectedItemBuilder: (context) => [
                     for (var v = 1; v <= _latestVersion; v++)
                       Text('v$v', style: labelStyle),
                   ],
                   items: [
                     for (var v = 1; v <= _latestVersion; v++)
-                      DropdownMenuItem(value: v, child: Text('Export v$v')),
+                      DropdownMenuItem(value: v, child: Text('v$v')),
                   ],
                 ),
               ),
@@ -624,7 +623,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
             IconButton(
               tooltip: 'Edit BoM',
               onPressed: _openEditBom,
-              icon: const Icon(Icons.edit_note_outlined),
+              icon: const Icon(Icons.edit),
             ),
           if (!widget.readOnly)
             IconButton(
