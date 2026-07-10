@@ -11,7 +11,7 @@ import 'material_master_seed.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 17;
+const int _dbVersion = 18;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -205,6 +205,24 @@ Future<Database> openAppDatabase() async {
         await _createBomManualEditSnapshotsTable(db);
         await _createBomManualEditSnapshotLinesTable(db);
       }
+      // v17 -> v18: Source/Inlet Point delete now propagates to Supabase
+      // instead of only removing the local row. `pending_delete` is a
+      // tombstone: deleteSourcePoint/deleteInletPoint set it (instead of a
+      // hard delete) so the row survives long enough for sync to push a
+      // remote delete for it; every normal read excludes pending_delete
+      // rows unconditionally, so deletion is still immediate from the UI's
+      // and BomEngine's point of view. Once sync's remote delete succeeds,
+      // the local row is hard-deleted for real — see sync_service.dart.
+      if (oldVersion < 18) {
+        await db.execute(
+          'ALTER TABLE source_points ADD COLUMN pending_delete '
+          'INTEGER NOT NULL DEFAULT 0',
+        );
+        await db.execute(
+          'ALTER TABLE inlet_points ADD COLUMN pending_delete '
+          'INTEGER NOT NULL DEFAULT 0',
+        );
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -318,6 +336,7 @@ Future<void> _createSourcePointsTable(Database db) async {
       transmitting_part_open_to_air     INTEGER,
       nrv_feasibility                   INTEGER,
       dirty                             INTEGER NOT NULL DEFAULT 1,
+      pending_delete                    INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -355,6 +374,7 @@ Future<void> _createInletPointsTable(Database db) async {
       civil_work_needed             INTEGER,
       civil_work_details            TEXT,
       dirty                         INTEGER NOT NULL DEFAULT 1,
+      pending_delete                INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');

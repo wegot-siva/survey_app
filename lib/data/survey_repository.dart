@@ -66,7 +66,9 @@ abstract class SurveyRepository {
   // ---- Source points (a site has many) ------------------------------------
 
   /// [dirtyOnly] limits to points not yet pushed since their last local
-  /// change — sync-only, see [markSourcePointSynced].
+  /// change — sync-only, see [markSourcePointSynced]. Never includes a
+  /// point pending deletion (see [deleteSourcePoint]) — deletion is
+  /// immediate from every normal read's point of view.
   Future<List<SourcePoint>> getSourcePoints(String siteId, {bool dirtyOnly = false});
 
   /// Persists a new source point, assigning it an id, and returns it.
@@ -74,7 +76,19 @@ abstract class SurveyRepository {
 
   Future<void> updateSourcePoint(SourcePoint sourcePoint);
 
+  /// Marks [id] for deletion (a tombstone, not a hard delete) so sync can
+  /// still push a remote delete for it — the row disappears from every
+  /// normal read immediately, but survives in storage until
+  /// [hardDeleteSourcePoint] is called once that remote delete succeeds.
   Future<void> deleteSourcePoint(String id);
+
+  /// Every source point id currently pending deletion for [siteId] —
+  /// sync-only, see [deleteSourcePoint] / [hardDeleteSourcePoint].
+  Future<List<String>> getPendingDeleteSourcePointIds(String siteId);
+
+  /// Physically removes a pending-delete row. Call only after that id's
+  /// remote delete has actually succeeded — see [getPendingDeleteSourcePointIds].
+  Future<void> hardDeleteSourcePoint(String id);
 
   /// Clears the sync-pending flag for source point [id]. Call once that
   /// row's push to Supabase has succeeded.
@@ -83,7 +97,9 @@ abstract class SurveyRepository {
   // ---- Inlet points (a site has many) -------------------------------------
 
   /// [dirtyOnly] limits to points not yet pushed since their last local
-  /// change — sync-only, see [markInletPointSynced].
+  /// change — sync-only, see [markInletPointSynced]. Never includes a point
+  /// pending deletion (see [deleteInletPoint]) — deletion is immediate from
+  /// every normal read's point of view.
   Future<List<InletPoint>> getInletPoints(String siteId, {bool dirtyOnly = false});
 
   /// Persists a new inlet point, assigning it an id, and returns it.
@@ -91,7 +107,19 @@ abstract class SurveyRepository {
 
   Future<void> updateInletPoint(InletPoint inletPoint);
 
+  /// Marks [id] for deletion (a tombstone, not a hard delete) so sync can
+  /// still push a remote delete for it — the row disappears from every
+  /// normal read immediately, but survives in storage until
+  /// [hardDeleteInletPoint] is called once that remote delete succeeds.
   Future<void> deleteInletPoint(String id);
+
+  /// Every inlet point id currently pending deletion for [siteId] —
+  /// sync-only, see [deleteInletPoint] / [hardDeleteInletPoint].
+  Future<List<String>> getPendingDeleteInletPointIds(String siteId);
+
+  /// Physically removes a pending-delete row. Call only after that id's
+  /// remote delete has actually succeeded — see [getPendingDeleteInletPointIds].
+  Future<void> hardDeleteInletPoint(String id);
 
   /// Clears the sync-pending flag for inlet point [id]. Call once that row's
   /// push to Supabase has succeeded.

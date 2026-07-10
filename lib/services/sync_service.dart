@@ -48,7 +48,7 @@ class SyncResult {
   final String? message;
 }
 
-/// Push-only sync (Phase 3): reads local data via [SurveyRepository] and
+/// Mostly-push sync (Phase 3): reads local data via [SurveyRepository] and
 /// upserts it to Supabase via [SupabaseSurveyDataSource].
 ///
 /// Dirty-tracking: every synced table carries a local `dirty` flag (see
@@ -59,6 +59,12 @@ class SyncResult {
 /// row starting dirty, so the very first sync still pushes everything once;
 /// every sync after that only pushes what actually changed. The UI never
 /// touches storage directly; it only calls [pushAll].
+///
+/// Deletions (Source/Inlet Points only, so far) are the one exception to
+/// "push-only": a locally-deleted row is a tombstone (see
+/// [SurveyRepository.deleteSourcePoint]) until its remote row is actually
+/// deleted too — see `getPendingDeleteSourcePointIds`/`hardDeleteSourcePoint`
+/// below — so a delete never leaves an orphaned row in Supabase.
 class SyncService {
   SyncService(this._repository, this._supabase, this._remote);
 
@@ -130,6 +136,18 @@ class SyncService {
           clientInputs++;
         }
 
+        // Deletions are pushed before normal upserts: a source/inlet point
+        // marked for deletion (see SurveyRepository.deleteSourcePoint) stays
+        // in local storage as a tombstone until its remote row is actually
+        // gone, so a delete that fails partway (offline, etc.) is retried
+        // on the next sync exactly like any other unsynced change.
+        for (final id in await _repository.getPendingDeleteSourcePointIds(
+          site.id,
+        )) {
+          await _remote.deleteSourcePoint(id);
+          await _repository.hardDeleteSourcePoint(id);
+          sourcePoints++;
+        }
         final sps = await _repository.getSourcePoints(site.id, dirtyOnly: true);
         for (final sp in sps) {
           await _remote.pushSourcePoint(sp);
@@ -137,6 +155,13 @@ class SyncService {
         }
         sourcePoints += sps.length;
 
+        for (final id in await _repository.getPendingDeleteInletPointIds(
+          site.id,
+        )) {
+          await _remote.deleteInletPoint(id);
+          await _repository.hardDeleteInletPoint(id);
+          inletPoints++;
+        }
         final ips = await _repository.getInletPoints(site.id, dirtyOnly: true);
         for (final ip in ips) {
           await _remote.pushInletPoint(ip);

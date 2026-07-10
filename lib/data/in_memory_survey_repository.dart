@@ -64,6 +64,8 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Set<String> _dirtyClientInputsSiteIds = {};
   final Set<String> _dirtySourcePointIds = {};
   final Set<String> _dirtyInletPointIds = {};
+  final Set<String> _pendingDeleteSourcePointIds = {};
+  final Set<String> _pendingDeleteInletPointIds = {};
   final Set<String> _dirtyDuctLoraIds = {};
   final Set<String> _dirtyGatewayIds = {};
   final Set<String> _dirtyFooterSiteIds = {};
@@ -159,6 +161,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       .where(
         (sp) =>
             sp.siteId == siteId &&
+            !_pendingDeleteSourcePointIds.contains(sp.id) &&
             (!dirtyOnly || _dirtySourcePointIds.contains(sp.id)),
       )
       .toList(growable: false);
@@ -179,7 +182,28 @@ class InMemorySurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteSourcePoint(String id) async {
+    _pendingDeleteSourcePointIds.add(id);
+    _dirtySourcePointIds.add(id);
+    _photos.removeWhere(
+      (_, p) => p.ownerType == PhotoOwner.sourcePoint && p.ownerId == id,
+    );
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteSourcePointIds(String siteId) async =>
+      _sourcePoints.values
+          .where(
+            (sp) =>
+                sp.siteId == siteId &&
+                _pendingDeleteSourcePointIds.contains(sp.id),
+          )
+          .map((sp) => sp.id)
+          .toList(growable: false);
+
+  @override
+  Future<void> hardDeleteSourcePoint(String id) async {
     _sourcePoints.remove(id);
+    _pendingDeleteSourcePointIds.remove(id);
     _dirtySourcePointIds.remove(id);
   }
 
@@ -196,6 +220,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       .where(
         (ip) =>
             ip.siteId == siteId &&
+            !_pendingDeleteInletPointIds.contains(ip.id) &&
             (!dirtyOnly || _dirtyInletPointIds.contains(ip.id)),
       )
       .toList(growable: false);
@@ -216,7 +241,28 @@ class InMemorySurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteInletPoint(String id) async {
+    _pendingDeleteInletPointIds.add(id);
+    _dirtyInletPointIds.add(id);
+    _photos.removeWhere(
+      (_, p) => p.ownerType == PhotoOwner.inletPoint && p.ownerId == id,
+    );
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteInletPointIds(String siteId) async =>
+      _inletPoints.values
+          .where(
+            (ip) =>
+                ip.siteId == siteId &&
+                _pendingDeleteInletPointIds.contains(ip.id),
+          )
+          .map((ip) => ip.id)
+          .toList(growable: false);
+
+  @override
+  Future<void> hardDeleteInletPoint(String id) async {
     _inletPoints.remove(id);
+    _pendingDeleteInletPointIds.remove(id);
     _dirtyInletPointIds.remove(id);
   }
 

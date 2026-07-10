@@ -233,9 +233,14 @@ class SqfliteSurveyRepository implements SurveyRepository {
     String siteId, {
     bool dirtyOnly = false,
   }) async {
+    final conditions = <String>[
+      'site_id = ?',
+      'pending_delete = 0',
+      if (dirtyOnly) 'dirty = 1',
+    ];
     final rows = await _db.query(
       'source_points',
-      where: dirtyOnly ? 'site_id = ? AND dirty = 1' : 'site_id = ?',
+      where: conditions.join(' AND '),
       whereArgs: [siteId],
       orderBy: 'rowid',
     );
@@ -261,6 +266,34 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteSourcePoint(String id) async {
+    await _db.transaction((txn) async {
+      await txn.update(
+        'source_points',
+        {'pending_delete': 1, 'dirty': 1},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await txn.delete(
+        'photos',
+        where: 'owner_type = ? AND owner_id = ?',
+        whereArgs: [PhotoOwner.sourcePoint, id],
+      );
+    });
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteSourcePointIds(String siteId) async {
+    final rows = await _db.query(
+      'source_points',
+      columns: ['id'],
+      where: 'site_id = ? AND pending_delete = 1',
+      whereArgs: [siteId],
+    );
+    return rows.map((r) => r['id']! as String).toList(growable: false);
+  }
+
+  @override
+  Future<void> hardDeleteSourcePoint(String id) async {
     await _db.delete('source_points', where: 'id = ?', whereArgs: [id]);
   }
 
@@ -281,9 +314,14 @@ class SqfliteSurveyRepository implements SurveyRepository {
     String siteId, {
     bool dirtyOnly = false,
   }) async {
+    final conditions = <String>[
+      'site_id = ?',
+      'pending_delete = 0',
+      if (dirtyOnly) 'dirty = 1',
+    ];
     final rows = await _db.query(
       'inlet_points',
-      where: dirtyOnly ? 'site_id = ? AND dirty = 1' : 'site_id = ?',
+      where: conditions.join(' AND '),
       whereArgs: [siteId],
       orderBy: 'rowid',
     );
@@ -309,6 +347,34 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteInletPoint(String id) async {
+    await _db.transaction((txn) async {
+      await txn.update(
+        'inlet_points',
+        {'pending_delete': 1, 'dirty': 1},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await txn.delete(
+        'photos',
+        where: 'owner_type = ? AND owner_id = ?',
+        whereArgs: [PhotoOwner.inletPoint, id],
+      );
+    });
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteInletPointIds(String siteId) async {
+    final rows = await _db.query(
+      'inlet_points',
+      columns: ['id'],
+      where: 'site_id = ? AND pending_delete = 1',
+      whereArgs: [siteId],
+    );
+    return rows.map((r) => r['id']! as String).toList(growable: false);
+  }
+
+  @override
+  Future<void> hardDeleteInletPoint(String id) async {
     await _db.delete('inlet_points', where: 'id = ?', whereArgs: [id]);
   }
 

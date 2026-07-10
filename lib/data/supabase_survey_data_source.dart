@@ -68,10 +68,22 @@ class SupabaseSurveyDataSource {
     await _client.from('source_points').upsert(_sourcePointToRemoteRow(sp));
   }
 
+  /// Deletes a source point by id (idempotent — a no-op if it was never
+  /// pushed, or already deleted remotely).
+  Future<void> deleteSourcePoint(String id) async {
+    await _client.from('source_points').delete().eq('id', id);
+  }
+
   /// Upserts an inlet point by its id (idempotent). The parent site must
   /// already have been pushed (FK).
   Future<void> pushInletPoint(InletPoint ip) async {
     await _client.from('inlet_points').upsert(_inletPointToRemoteRow(ip));
+  }
+
+  /// Deletes an inlet point by id (idempotent — a no-op if it was never
+  /// pushed, or already deleted remotely).
+  Future<void> deleteInletPoint(String id) async {
+    await _client.from('inlet_points').delete().eq('id', id);
   }
 
   /// Upserts a Duct LoRa unit by its id (idempotent). Parent site must exist.
