@@ -10,11 +10,11 @@ import 'client_inputs_screen.dart';
 /// uses this screen unmodified, for the same Sales-like create+assign
 /// capability (see home_screen.dart's FAB routing).
 ///
-/// Two phases in one screen: first create the site (name + blocks, same as
-/// [CreateSiteScreen] but kept separate so that screen's other callers are
-/// unaffected); once created, optionally fill Client inputs (pre-survey info
-/// recorded from the customer — reuses [ClientInputsScreen] unmodified),
-/// then assign an engineer and set status to [SurveyStatus.assigned].
+/// Two phases in one screen: first create the site (name only — blocks are
+/// added later, during the survey, via Site Hub's "Blocks" section), then
+/// optionally fill Client inputs (pre-survey info recorded from the
+/// customer — reuses [ClientInputsScreen] unmodified), then assign an
+/// engineer and set status to [SurveyStatus.assigned].
 class AssignSurveyScreen extends StatefulWidget {
   const AssignSurveyScreen({super.key, required this.repository});
 
@@ -26,8 +26,6 @@ class AssignSurveyScreen extends StatefulWidget {
 
 class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
   final _nameController = TextEditingController();
-  final _scrollController = ScrollController();
-  final List<TextEditingController> _blockControllers = [];
 
   Site? _createdSite;
   String? _engineer;
@@ -36,31 +34,7 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
   @override
   void dispose() {
     _nameController.dispose();
-    _scrollController.dispose();
-    for (final c in _blockControllers) {
-      c.dispose();
-    }
     super.dispose();
-  }
-
-  void _addBlock() {
-    setState(() => _blockControllers.add(TextEditingController()));
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  void _removeBlock(int index) {
-    setState(() {
-      _blockControllers[index].dispose();
-      _blockControllers.removeAt(index);
-    });
   }
 
   Future<void> _createSite() async {
@@ -73,11 +47,7 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
     }
 
     setState(() => _saving = true);
-    final blocks = _blockControllers
-        .map((c) => c.text.trim())
-        .where((t) => t.isNotEmpty)
-        .toList();
-    final site = await widget.repository.createSite(name: name, blocks: blocks);
+    final site = await widget.repository.createSite(name: name);
     if (!mounted) return;
     setState(() {
       _createdSite = site;
@@ -132,7 +102,6 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
 
   Widget _buildCreateForm() {
     return ListView(
-      controller: _scrollController,
       padding: const EdgeInsets.all(16),
       children: [
         const _Hint(
@@ -147,45 +116,6 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
             border: OutlineInputBorder(),
           ),
         ),
-        const SizedBox(height: 24),
-        Row(
-          children: [
-            Text('Blocks', style: Theme.of(context).textTheme.titleMedium),
-            const Spacer(),
-            TextButton.icon(
-              onPressed: _addBlock,
-              icon: const Icon(Icons.add),
-              label: const Text('Add block'),
-            ),
-          ],
-        ),
-        if (_blockControllers.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Text('No blocks added.'),
-          ),
-        for (var i = 0; i < _blockControllers.length; i++)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _blockControllers[i],
-                    decoration: InputDecoration(
-                      labelText: 'Block ${i + 1}',
-                      border: const OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Remove block',
-                  onPressed: () => _removeBlock(i),
-                  icon: const Icon(Icons.close),
-                ),
-              ],
-            ),
-          ),
         const SizedBox(height: 24),
         FilledButton.icon(
           onPressed: _saving ? null : _createSite,
@@ -213,7 +143,6 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
           child: ListTile(
             leading: const Icon(Icons.location_city_outlined),
             title: Text(site.name),
-            subtitle: Text('${site.blocks.length} block(s)'),
           ),
         ),
         const SizedBox(height: 8),

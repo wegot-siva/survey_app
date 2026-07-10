@@ -320,6 +320,10 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     // through this screen at all (submitted surveys go to the Approver's
     // read-only review screen instead — see home_screen.dart's row-tap logic).
     final canReassignRole = isSales || isAdmin || isApprover;
+    // Blocks are created during the survey, not at site creation (Sales
+    // never enters them) — so block *management* follows the same roles
+    // that touch surveyed content, not the create/assign role.
+    final canManageBlocks = isEngineer || isAdmin || isApprover;
     final canSubmit =
         site?.status == SurveyStatus.assigned ||
         site?.status == SurveyStatus.inProgress;
@@ -379,17 +383,18 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
               padding: const EdgeInsets.all(16),
               children: [
                 if (site.status != null) _StatusBanner(status: site.status!),
-                _SectionTile(
-                  icon: Icons.grid_view_outlined,
-                  title: 'Blocks',
-                  subtitle: site.blocks.isEmpty
-                      ? 'No blocks — tap to add'
-                      : site.blocks.join(', '),
-                  status: site.blocks.isEmpty
-                      ? _SectionStatus.empty
-                      : _SectionStatus.complete,
-                  onTap: () => _openManageBlocks(site),
-                ),
+                if (canManageBlocks)
+                  _SectionTile(
+                    icon: Icons.grid_view_outlined,
+                    title: 'Blocks',
+                    subtitle: site.blocks.isEmpty
+                        ? 'No blocks — tap to add'
+                        : site.blocks.join(', '),
+                    status: site.blocks.isEmpty
+                        ? _SectionStatus.empty
+                        : _SectionStatus.complete,
+                    onTap: () => _openManageBlocks(site),
+                  ),
                 _SectionTile(
                   icon: Icons.assignment_outlined,
                   title: 'Client inputs',
