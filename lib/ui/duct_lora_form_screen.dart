@@ -319,23 +319,23 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
                   ],
                   errorText: _cableLengthError,
                 ),
-
-                const FormSectionLabel('Photos'),
-                MultiPhotoCaptureField(
-                  label: 'Duct LoRa location / placement',
-                  photos: [
-                    for (final d in _placementPhotos)
-                      if (d.localPath != null)
-                        PhotoView(d.localPath!, uploaded: d.uploaded),
-                  ],
-                  onAdded: _onPlacementAdded,
-                  onRemoved: _onPlacementRemoved,
-                  onEdit: _onPlacementEdit,
-                  onView: _onPlacementView,
-                  readOnly: _viewOnly,
-                ),
               ],
             ),
+          ),
+
+          const FormSectionLabel('Photos'),
+          MultiPhotoCaptureField(
+            label: 'Duct LoRa location / placement',
+            photos: [
+              for (final d in _placementPhotos)
+                if (d.localPath != null)
+                  PhotoView(d.localPath!, uploaded: d.uploaded),
+            ],
+            onAdded: _onPlacementAdded,
+            onRemoved: _onPlacementRemoved,
+            onEdit: _viewOnly ? null : _onPlacementEdit,
+            onView: _onPlacementView,
+            readOnly: _viewOnly,
           ),
 
           if (!_viewOnly) ...[

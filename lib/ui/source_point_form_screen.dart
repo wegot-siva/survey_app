@@ -241,7 +241,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
       ],
       onAdded: (p) => _onPhotoAdded(slot, p),
       onRemoved: (i) => _onPhotoRemoved(slot, i),
-      onEdit: (i) => _onPhotoEdit(slot, i),
+      onEdit: _viewOnly ? null : (i) => _onPhotoEdit(slot, i),
       onView: (i) => _onPhotoView(slot, i),
       readOnly: _viewOnly,
     );
@@ -550,17 +550,16 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
                     onChanged: (v) => setState(() => _nrvFeasibility = v),
                   ),
                 ],
-
-                const FormSectionLabel('Photos'),
-                _photoField(PhotoSlot.inletMarked, 'Inlet marked'),
-                _photoField(PhotoSlot.powerSource, 'Power source'),
-                if (isWired)
-                  _photoField(PhotoSlot.wiringRouting, 'Wiring routing'),
-                if (isWireless)
-                  _photoField(PhotoSlot.antennaRouting, 'Antenna routing'),
               ],
             ),
           ),
+
+          const FormSectionLabel('Photos'),
+          _photoField(PhotoSlot.inletMarked, 'Inlet marked'),
+          _photoField(PhotoSlot.powerSource, 'Power source'),
+          if (isWired) _photoField(PhotoSlot.wiringRouting, 'Wiring routing'),
+          if (isWireless)
+            _photoField(PhotoSlot.antennaRouting, 'Antenna routing'),
 
           if (!_viewOnly) ...[
             const SizedBox(height: 24),

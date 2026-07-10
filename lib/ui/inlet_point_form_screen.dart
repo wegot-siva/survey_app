@@ -232,7 +232,7 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
       ],
       onAdded: (p) => _onPhotoAdded(slot, p),
       onRemoved: (i) => _onPhotoRemoved(slot, i),
-      onEdit: (i) => _onPhotoEdit(slot, i),
+      onEdit: _viewOnly ? null : (i) => _onPhotoEdit(slot, i),
       onView: (i) => _onPhotoView(slot, i),
       readOnly: _viewOnly,
     );
@@ -491,18 +491,18 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
                     label: 'Civil work details',
                     maxLines: 2,
                   ),
-
-                const FormSectionLabel('Photos'),
-                _photoField(
-                  PhotoSlot.shaftLocationMarked,
-                  'Shaft / location marked',
-                ),
-                _photoField(PhotoSlot.cableRouting, 'Cable routing'),
-                _photoField(PhotoSlot.shaftAccess, 'Shaft access'),
-                _photoField(PhotoSlot.shaftInternal, 'Shaft internal'),
               ],
             ),
           ),
+
+          const FormSectionLabel('Photos'),
+          _photoField(
+            PhotoSlot.shaftLocationMarked,
+            'Shaft / location marked',
+          ),
+          _photoField(PhotoSlot.cableRouting, 'Cable routing'),
+          _photoField(PhotoSlot.shaftAccess, 'Shaft access'),
+          _photoField(PhotoSlot.shaftInternal, 'Shaft internal'),
 
           if (!_viewOnly) ...[
             const SizedBox(height: 24),

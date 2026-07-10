@@ -317,23 +317,23 @@ class _FooterScreenState extends State<FooterScreen> {
                         label: 'Surveyor name *',
                         errorText: _surveyorNameError,
                       ),
-
-                      const FormSectionLabel('Photos / videos'),
-                      MultiPhotoCaptureField(
-                        label: 'Site photos / videos',
-                        photos: [
-                          for (final p in _sitePhotos)
-                            if (p.localPath != null)
-                              PhotoView(p.localPath!, uploaded: p.uploaded),
-                        ],
-                        onAdded: _onPhotoAdded,
-                        onRemoved: _onPhotoRemoved,
-                        onEdit: _onPhotoEdit,
-                        onView: _onPhotoView,
-                        readOnly: _viewOnly,
-                      ),
                     ],
                   ),
+                ),
+
+                const FormSectionLabel('Photos / videos'),
+                MultiPhotoCaptureField(
+                  label: 'Site photos / videos',
+                  photos: [
+                    for (final p in _sitePhotos)
+                      if (p.localPath != null)
+                        PhotoView(p.localPath!, uploaded: p.uploaded),
+                  ],
+                  onAdded: _onPhotoAdded,
+                  onRemoved: _onPhotoRemoved,
+                  onEdit: _viewOnly ? null : _onPhotoEdit,
+                  onView: _onPhotoView,
+                  readOnly: _viewOnly,
                 ),
 
                 if (!_viewOnly) ...[

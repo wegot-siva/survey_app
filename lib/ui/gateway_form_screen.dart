@@ -350,23 +350,23 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
                   label: 'Mounting hardware needed',
                   maxLines: 2,
                 ),
-
-                const FormSectionLabel('Photos'),
-                MultiPhotoCaptureField(
-                  label: 'Gateway location',
-                  photos: [
-                    for (final d in _locationPhotos)
-                      if (d.localPath != null)
-                        PhotoView(d.localPath!, uploaded: d.uploaded),
-                  ],
-                  onAdded: _onLocationAdded,
-                  onRemoved: _onLocationRemoved,
-                  onEdit: _onLocationEdit,
-                  onView: _onLocationView,
-                  readOnly: _viewOnly,
-                ),
               ],
             ),
+          ),
+
+          const FormSectionLabel('Photos'),
+          MultiPhotoCaptureField(
+            label: 'Gateway location',
+            photos: [
+              for (final d in _locationPhotos)
+                if (d.localPath != null)
+                  PhotoView(d.localPath!, uploaded: d.uploaded),
+            ],
+            onAdded: _onLocationAdded,
+            onRemoved: _onLocationRemoved,
+            onEdit: _viewOnly ? null : _onLocationEdit,
+            onView: _onLocationView,
+            readOnly: _viewOnly,
           ),
 
           if (!_viewOnly) ...[
