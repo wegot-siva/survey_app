@@ -95,16 +95,16 @@ class InletPoint {
   );
 
   /// Returns a duplicate-ready draft: every technical/spec field copied
-  /// (including [series]), but unpersisted (empty [id]) and with the
-  /// identity field — [apartmentBhk] — cleared, since it describes this
-  /// specific physical point and shouldn't silently carry onto a new one.
-  /// Never copies photos (photos are looked up by id in a separate table,
-  /// and a fresh id never matches an existing photo row).
+  /// (including [series]), but unpersisted (empty [id]). [apartmentBhk] is
+  /// copied too (pre-filled, not cleared) — the form auto-focuses it so the
+  /// user reviews/edits it before saving, rather than being forced to type
+  /// it from scratch. Never copies photos (photos are looked up by id in a
+  /// separate table, and a fresh id never matches an existing photo row).
   InletPoint copyAsDuplicate() => InletPoint(
     id: '',
     siteId: siteId,
     block: block,
-    apartmentBhk: '',
+    apartmentBhk: apartmentBhk,
     sensorSize: sensorSize,
     series: series,
     sensorOd: sensorOd,

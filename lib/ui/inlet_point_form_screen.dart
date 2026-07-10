@@ -27,10 +27,10 @@ class InletPointFormScreen extends StatefulWidget {
   final Site site;
   final InletPoint? existing;
 
-  /// Pre-fills the form from this record — via [InletPoint.copyAsDuplicate],
-  /// so the identity field is already blank — while still saving as a brand
-  /// new record. Mutually exclusive with [existing]; ignored if both are set.
-  /// Unlike [existing], never triggers a photo load.
+  /// Pre-fills the form from this record — via [InletPoint.copyAsDuplicate]
+  /// — while still saving as a brand new record. Mutually exclusive with
+  /// [existing]; ignored if both are set. Unlike [existing], never triggers
+  /// a photo load.
   final InletPoint? duplicateFrom;
 
   final bool readOnly;
@@ -41,6 +41,7 @@ class InletPointFormScreen extends StatefulWidget {
 
 class _InletPointFormScreenState extends State<InletPointFormScreen> {
   late final TextEditingController _apartmentBhk;
+  final _apartmentBhkFocusNode = FocusNode();
   late final TextEditingController _series;
   late final TextEditingController _qty;
   late final TextEditingController _reworkDetails;
@@ -96,9 +97,10 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
   @override
   void initState() {
     super.initState();
-    // duplicateFrom only supplies prefill values (already identity-cleared
-    // via copyAsDuplicate) — existing is what drives photo loading and the
-    // save-path decision (add vs update) further down.
+    // duplicateFrom only supplies prefill values (see InletPoint.
+    // copyAsDuplicate for exactly what carries over) — existing is what
+    // drives photo loading and the save-path decision (add vs update)
+    // further down.
     final e = widget.existing ?? widget.duplicateFrom;
     if (widget.existing != null) _loadPhotos(widget.existing!.id);
 
@@ -131,11 +133,26 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
     _strainerScreenFilter = e?.strainerScreenFilter;
     _conduitClamping = e?.conduitClamping;
     _civilWorkNeeded = e?.civilWorkNeeded;
+
+    // Duplicating pre-fills Apartment (BHK) (see InletPoint.copyAsDuplicate)
+    // — auto-focus and select it so the pre-filled value is the first thing
+    // the user reviews, a nudge to check/edit it rather than a block.
+    if (widget.duplicateFrom != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _apartmentBhkFocusNode.requestFocus();
+        _apartmentBhk.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _apartmentBhk.text.length,
+        );
+      });
+    }
   }
 
   @override
   void dispose() {
     _apartmentBhk.dispose();
+    _apartmentBhkFocusNode.dispose();
     _series.dispose();
     _qty.dispose();
     _reworkDetails.dispose();
@@ -351,6 +368,7 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
                 ),
                 AppTextField(
                   controller: _apartmentBhk,
+                  focusNode: _apartmentBhkFocusNode,
                   label: 'Apartment (BHK) *',
                   errorText: _apartmentBhkError,
                 ),

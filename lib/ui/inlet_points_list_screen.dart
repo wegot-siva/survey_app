@@ -240,7 +240,7 @@ class _IncompleteBadge extends StatelessWidget {
   }
 }
 
-/// Prompts for a positive integer count (capped at 100 as a sanity limit).
+/// Prompts for a positive integer count (capped at 1000 as a sanity limit).
 /// Returns null if cancelled or the input never validates.
 Future<int?> _promptForCount(BuildContext context) {
   final controller = TextEditingController(text: '2');
@@ -263,9 +263,11 @@ Future<int?> _promptForCount(BuildContext context) {
         FilledButton(
           onPressed: () {
             final n = int.tryParse(controller.text.trim());
-            if (n == null || n < 1 || n > 100) {
+            if (n == null || n < 1 || n > 1000) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Enter a number from 1 to 100.')),
+                const SnackBar(
+                  content: Text('Enter a number from 1 to 1000.'),
+                ),
               );
               return;
             }

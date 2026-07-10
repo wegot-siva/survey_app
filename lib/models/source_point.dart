@@ -116,16 +116,18 @@ class SourcePoint {
   );
 
   /// Returns a duplicate-ready draft: every technical/spec field copied, but
-  /// unpersisted (empty [id]) and with the identity fields — [apartment] and
-  /// [inletDescription] — cleared, since those describe this specific
-  /// physical point and shouldn't silently carry onto a new one. Never
-  /// copies photos (photos are looked up by id in a separate table, and a
-  /// fresh id never matches an existing photo row).
+  /// unpersisted (empty [id]). [apartment] is copied too (pre-filled, not
+  /// cleared) — the form auto-focuses it so the user reviews/edits it before
+  /// saving, rather than being forced to type it from scratch. [inletDescription]
+  /// still clears, since it's free-text detail specific to this physical
+  /// point and shouldn't silently carry onto a new one. Never copies photos
+  /// (photos are looked up by id in a separate table, and a fresh id never
+  /// matches an existing photo row).
   SourcePoint copyAsDuplicate() => SourcePoint(
     id: '',
     siteId: siteId,
     block: block,
-    apartment: '',
+    apartment: apartment,
     inletDescription: '',
     sensorSize: sensorSize,
     sensorOd: sensorOd,

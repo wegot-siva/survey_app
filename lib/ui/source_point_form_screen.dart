@@ -27,10 +27,10 @@ class SourcePointFormScreen extends StatefulWidget {
   final Site site;
   final SourcePoint? existing;
 
-  /// Pre-fills the form from this record — via [SourcePoint.copyAsDuplicate],
-  /// so identity fields are already blank — while still saving as a brand
-  /// new record. Mutually exclusive with [existing]; ignored if both are set.
-  /// Unlike [existing], never triggers a photo load.
+  /// Pre-fills the form from this record — via [SourcePoint.copyAsDuplicate]
+  /// — while still saving as a brand new record. Mutually exclusive with
+  /// [existing]; ignored if both are set. Unlike [existing], never triggers
+  /// a photo load.
   final SourcePoint? duplicateFrom;
 
   final bool readOnly;
@@ -41,6 +41,7 @@ class SourcePointFormScreen extends StatefulWidget {
 
 class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
   late final TextEditingController _apartment;
+  final _apartmentFocusNode = FocusNode();
   late final TextEditingController _inletDescription;
   late final TextEditingController _qty;
   late final TextEditingController _reworkDetails;
@@ -97,9 +98,10 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
   @override
   void initState() {
     super.initState();
-    // duplicateFrom only supplies prefill values (already identity-cleared
-    // via copyAsDuplicate) — existing is what drives photo loading and the
-    // save-path decision (add vs update) further down.
+    // duplicateFrom only supplies prefill values (see SourcePoint.
+    // copyAsDuplicate for exactly what carries over) — existing is what
+    // drives photo loading and the save-path decision (add vs update)
+    // further down.
     final e = widget.existing ?? widget.duplicateFrom;
     if (widget.existing != null) _loadPhotos(widget.existing!.id);
 
@@ -140,11 +142,26 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
     _antennaRequired = e?.antennaRequired;
     _transmittingPartOpenToAir = e?.transmittingPartOpenToAir;
     _nrvFeasibility = e?.nrvFeasibility;
+
+    // Duplicating pre-fills Apartment (see SourcePoint.copyAsDuplicate) —
+    // auto-focus and select it so the pre-filled value is the first thing
+    // the user reviews, a nudge to check/edit it rather than a block.
+    if (widget.duplicateFrom != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _apartmentFocusNode.requestFocus();
+        _apartment.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _apartment.text.length,
+        );
+      });
+    }
   }
 
   @override
   void dispose() {
     _apartment.dispose();
+    _apartmentFocusNode.dispose();
     _inletDescription.dispose();
     _qty.dispose();
     _reworkDetails.dispose();
@@ -365,6 +382,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
                 ),
                 AppTextField(
                   controller: _apartment,
+                  focusNode: _apartmentFocusNode,
                   label: 'Apartment *',
                   errorText: _apartmentError,
                 ),

@@ -13,6 +13,7 @@ class AppTextField extends StatelessWidget {
     this.keyboardType,
     this.inputFormatters,
     this.errorText,
+    this.focusNode,
   });
 
   final TextEditingController controller;
@@ -25,12 +26,17 @@ class AppTextField extends StatelessWidget {
   /// caller after a failed save attempt on a mandatory field.
   final String? errorText;
 
+  /// Lets a caller drive focus (e.g. auto-focusing a pre-filled field for
+  /// review right after it opens) — optional, unused unless supplied.
+  final FocusNode? focusNode;
+
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: TextField(
         controller: controller,
+        focusNode: focusNode,
         maxLines: maxLines,
         keyboardType: keyboardType,
         inputFormatters: inputFormatters,
