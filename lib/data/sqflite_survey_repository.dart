@@ -1,5 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
+import '../models/bom_manual_edit_snapshot.dart';
+import '../models/bom_manual_edit_snapshot_line.dart';
 import '../models/bom_manual_entry.dart';
 import '../models/bom_revision.dart';
 import '../models/bom_revision_line.dart';
@@ -904,10 +906,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
     required List<BomRevisionLine> lines,
     required String createdBy,
   }) async {
-    final existingVersions = await getBomRevisions(surveyId);
-    final nextVersion = existingVersions.isEmpty
-        ? 2
-        : existingVersions.map((r) => r.version).reduce((a, b) => a > b ? a : b) + 1;
+    final nextVersion = await _nextBomVersion(surveyId);
 
     final revision = BomRevision(
       id: _idService.newId(),
@@ -930,6 +929,114 @@ class SqfliteSurveyRepository implements SurveyRepository {
     });
 
     return revision;
+  }
+
+  // ---- BoM manual-edit snapshots -----------------------------------------
+
+  @override
+  Future<List<BomManualEditSnapshot>> getBomManualEditSnapshots(
+    String surveyId, {
+    bool dirtyOnly = false,
+  }) async {
+    final rows = await _db.query(
+      'bom_manual_edit_snapshots',
+      where: dirtyOnly ? 'survey_id = ? AND dirty = 1' : 'survey_id = ?',
+      whereArgs: [surveyId],
+      orderBy: 'version',
+    );
+    return rows.map(_bomManualEditSnapshotFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<void> markBomManualEditSnapshotSynced(String id) async {
+    await _db.update(
+      'bom_manual_edit_snapshots',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<List<BomManualEditSnapshotLine>> getBomManualEditSnapshotLines(
+    String snapshotId, {
+    bool dirtyOnly = false,
+  }) async {
+    final rows = await _db.query(
+      'bom_manual_edit_snapshot_lines',
+      where: dirtyOnly
+          ? 'snapshot_id = ? AND dirty = 1'
+          : 'snapshot_id = ?',
+      whereArgs: [snapshotId],
+      orderBy: 'group_code, rowid',
+    );
+    return rows.map(_bomManualEditSnapshotLineFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<void> markBomManualEditSnapshotLineSynced(String id) async {
+    await _db.update(
+      'bom_manual_edit_snapshot_lines',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<BomManualEditSnapshot> addBomManualEditSnapshot({
+    required String surveyId,
+    required int basedOnVersion,
+    required String reason,
+    required List<BomManualEditSnapshotLine> lines,
+    required String editedBy,
+  }) async {
+    final nextVersion = await _nextBomVersion(surveyId);
+
+    final snapshot = BomManualEditSnapshot(
+      id: _idService.newId(),
+      surveyId: surveyId,
+      version: nextVersion,
+      basedOnVersion: basedOnVersion,
+      editedBy: editedBy,
+      editedAt: DateTime.now(),
+      reason: reason,
+    );
+
+    await _db.transaction((txn) async {
+      await txn.insert(
+        'bom_manual_edit_snapshots',
+        _bomManualEditSnapshotToRow(snapshot),
+      );
+      for (final line in lines) {
+        final stored = line.copyWithIds(
+          id: _idService.newId(),
+          snapshotId: snapshot.id,
+        );
+        await txn.insert(
+          'bom_manual_edit_snapshot_lines',
+          _bomManualEditSnapshotLineToRow(stored),
+        );
+      }
+    });
+
+    return snapshot;
+  }
+
+  /// Next version number for either a new [BomRevision] or a new
+  /// [BomManualEditSnapshot] — both draw from the same counter (the survey's
+  /// highest existing version across both tables, or 1 if neither has any
+  /// rows yet, since v1 is always the original [BomSnapshot]), so a version
+  /// number is never reused regardless of which table creates it.
+  Future<int> _nextBomVersion(String surveyId) async {
+    final revisions = await getBomRevisions(surveyId);
+    final manualEdits = await getBomManualEditSnapshots(surveyId);
+    final versions = [
+      1,
+      for (final r in revisions) r.version,
+      for (final m in manualEdits) m.version,
+    ];
+    return versions.reduce((a, b) => a > b ? a : b) + 1;
   }
 
   // ---- Engineer roster + survey reassignment -------------------------------
@@ -1628,6 +1735,64 @@ BomRevisionLine _bomRevisionLineFromRow(Map<String, Object?> r) {
     sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
     unit: (r['unit'] as String?) ?? '',
     qtyDelta: (r['qty_delta'] as num?)?.toDouble() ?? 0,
+    group: _materialGroupFromAnyCode(r['group_code'] as String?),
+  );
+}
+
+Map<String, Object?> _bomManualEditSnapshotToRow(BomManualEditSnapshot s) {
+  return {
+    'id': s.id,
+    'survey_id': s.surveyId,
+    'version': s.version,
+    'based_on_version': s.basedOnVersion,
+    'edited_by': s.editedBy,
+    'edited_at': s.editedAt.toIso8601String(),
+    'reason': s.reason,
+    'dirty': 1,
+  };
+}
+
+BomManualEditSnapshot _bomManualEditSnapshotFromRow(Map<String, Object?> r) {
+  return BomManualEditSnapshot(
+    id: r['id']! as String,
+    surveyId: r['survey_id']! as String,
+    version: (r['version'] as int?) ?? 2,
+    basedOnVersion: (r['based_on_version'] as int?) ?? 1,
+    editedBy: (r['edited_by'] as String?) ?? '',
+    editedAt:
+        DateTime.tryParse((r['edited_at'] as String?) ?? '') ?? DateTime(1970),
+    reason: (r['reason'] as String?) ?? '',
+  );
+}
+
+Map<String, Object?> _bomManualEditSnapshotLineToRow(
+  BomManualEditSnapshotLine l,
+) {
+  return {
+    'id': l.id,
+    'snapshot_id': l.snapshotId,
+    'sku': l.sku,
+    'item_name': l.itemName,
+    'description': l.description,
+    'unit': l.unit,
+    'qty': l.qty,
+    // Literal 'A'..'G' — mirrors bom_snapshot_lines.group_code.
+    'group_code': l.group.code,
+    'dirty': 1,
+  };
+}
+
+BomManualEditSnapshotLine _bomManualEditSnapshotLineFromRow(
+  Map<String, Object?> r,
+) {
+  return BomManualEditSnapshotLine(
+    id: r['id']! as String,
+    snapshotId: r['snapshot_id']! as String,
+    sku: (r['sku'] as String?) ?? '',
+    itemName: (r['item_name'] as String?) ?? '',
+    description: (r['description'] as String?) ?? '',
+    unit: (r['unit'] as String?) ?? '',
+    qty: (r['qty'] as num?)?.toDouble() ?? 0,
     group: _materialGroupFromAnyCode(r['group_code'] as String?),
   );
 }

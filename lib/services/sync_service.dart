@@ -25,6 +25,7 @@ class SyncResult {
     this.bomManualEntries = 0,
     this.bomSnapshots = 0,
     this.bomRevisions = 0,
+    this.bomManualEditSnapshots = 0,
     this.message,
   });
 
@@ -43,6 +44,7 @@ class SyncResult {
   final int bomManualEntries;
   final int bomSnapshots;
   final int bomRevisions;
+  final int bomManualEditSnapshots;
   final String? message;
 }
 
@@ -108,6 +110,7 @@ class SyncService {
       var bomManualEntries = 0;
       var bomSnapshots = 0;
       var bomRevisions = 0;
+      var bomManualEditSnapshots = 0;
       for (final site in sites) {
         // Site row + blocks — bundled (see SupabaseSurveyDataSource.pushSite),
         // so both share the site's own dirty flag.
@@ -212,6 +215,24 @@ class SyncService {
           }
         }
         bomRevisions += revisions.length;
+
+        final manualEdits = await _repository.getBomManualEditSnapshots(
+          site.id,
+          dirtyOnly: true,
+        );
+        for (final edit in manualEdits) {
+          await _remote.pushBomManualEditSnapshot(edit);
+          await _repository.markBomManualEditSnapshotSynced(edit.id);
+          final lines = await _repository.getBomManualEditSnapshotLines(
+            edit.id,
+            dirtyOnly: true,
+          );
+          for (final line in lines) {
+            await _remote.pushBomManualEditSnapshotLine(line);
+            await _repository.markBomManualEditSnapshotLineSynced(line.id);
+          }
+        }
+        bomManualEditSnapshots += manualEdits.length;
       }
 
       // Material Master is global reference data, not site-scoped — push
@@ -260,6 +281,7 @@ class SyncService {
         bomManualEntries: bomManualEntries,
         bomSnapshots: bomSnapshots,
         bomRevisions: bomRevisions,
+        bomManualEditSnapshots: bomManualEditSnapshots,
       );
     } on PostgrestException catch (e) {
       return SyncResult(

@@ -156,12 +156,14 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   }
 
   Future<void> _openBomPreview(Site site) async {
+    final role = widget.session.currentRole;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => BomPreviewScreen(
           repository: widget.repository,
           site: site,
-          addedByRole: widget.session.currentRole?.label ?? 'Unknown',
+          addedByRole: role?.label ?? 'Unknown',
+          canEditBom: role == UserRole.admin || role == UserRole.approver,
         ),
       ),
     );

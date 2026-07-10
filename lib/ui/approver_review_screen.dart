@@ -165,6 +165,7 @@ class _ApproverReviewScreenState extends State<ApproverReviewScreen> {
           site: site,
           addedByRole: 'Approver',
           readOnly: true,
+          canEditBom: true,
         ),
       ),
     );

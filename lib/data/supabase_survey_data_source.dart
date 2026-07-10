@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/bom_manual_edit_snapshot.dart';
+import '../models/bom_manual_edit_snapshot_line.dart';
 import '../models/bom_manual_entry.dart';
 import '../models/bom_revision.dart';
 import '../models/bom_revision_line.dart';
@@ -171,6 +173,24 @@ class SupabaseSurveyDataSource {
     await _client
         .from('bom_revision_lines')
         .upsert(_bomRevisionLineToRemoteRow(line));
+  }
+
+  /// Upserts a BoM manual-edit snapshot by its id (idempotent). The parent
+  /// site must already have been pushed (FK).
+  Future<void> pushBomManualEditSnapshot(BomManualEditSnapshot s) async {
+    await _client
+        .from('bom_manual_edit_snapshots')
+        .upsert(_bomManualEditSnapshotToRemoteRow(s));
+  }
+
+  /// Upserts a BoM manual-edit snapshot line by its id (idempotent). The
+  /// parent snapshot must already have been pushed (FK).
+  Future<void> pushBomManualEditSnapshotLine(
+    BomManualEditSnapshotLine line,
+  ) async {
+    await _client
+        .from('bom_manual_edit_snapshot_lines')
+        .upsert(_bomManualEditSnapshotLineToRemoteRow(line));
   }
 }
 
@@ -441,6 +461,35 @@ Map<String, Object?> _bomRevisionLineToRemoteRow(BomRevisionLine l) {
     'qty_delta': l.qtyDelta,
     // Literal 'A'..'G' — see the matching comment in
     // sqflite_survey_repository.dart's _bomRevisionLineToRow.
+    'group_code': l.group.code,
+  };
+}
+
+Map<String, Object?> _bomManualEditSnapshotToRemoteRow(
+  BomManualEditSnapshot s,
+) {
+  return {
+    'id': s.id,
+    'survey_id': s.surveyId,
+    'version': s.version,
+    'based_on_version': s.basedOnVersion,
+    'edited_by': s.editedBy,
+    'edited_at': s.editedAt.toIso8601String(),
+    'reason': s.reason,
+  };
+}
+
+Map<String, Object?> _bomManualEditSnapshotLineToRemoteRow(
+  BomManualEditSnapshotLine l,
+) {
+  return {
+    'id': l.id,
+    'snapshot_id': l.snapshotId,
+    'sku': l.sku,
+    'item_name': l.itemName,
+    'description': l.description,
+    'unit': l.unit,
+    'qty': l.qty,
     'group_code': l.group.code,
   };
 }

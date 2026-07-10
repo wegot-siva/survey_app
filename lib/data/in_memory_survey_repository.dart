@@ -1,3 +1,5 @@
+import '../models/bom_manual_edit_snapshot.dart';
+import '../models/bom_manual_edit_snapshot_line.dart';
 import '../models/bom_manual_entry.dart';
 import '../models/bom_revision.dart';
 import '../models/bom_revision_line.dart';
@@ -47,6 +49,8 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, List<BomSnapshotLine>> _bomSnapshotLines = {}; // keyed by snapshotId
   final Map<String, BomRevision> _bomRevisions = {}; // keyed by id
   final Map<String, List<BomRevisionLine>> _bomRevisionLines = {}; // keyed by revisionId
+  final Map<String, BomManualEditSnapshot> _bomManualEditSnapshots = {}; // keyed by id
+  final Map<String, List<BomManualEditSnapshotLine>> _bomManualEditSnapshotLines = {}; // keyed by snapshotId
   late final List<Engineer> _engineers;
   final Map<String, SurveyAssignmentAuditEntry> _assignmentAudit = {};
 
@@ -71,6 +75,8 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Set<String> _dirtyBomSnapshotLineIds = {};
   final Set<String> _dirtyBomRevisionIds = {};
   final Set<String> _dirtyBomRevisionLineIds = {};
+  final Set<String> _dirtyBomManualEditSnapshotIds = {};
+  final Set<String> _dirtyBomManualEditSnapshotLineIds = {};
 
   @override
   Future<List<Site>> getSites({
@@ -637,10 +643,7 @@ class InMemorySurveyRepository implements SurveyRepository {
     required List<BomRevisionLine> lines,
     required String createdBy,
   }) async {
-    final existingVersions = await getBomRevisions(surveyId);
-    final nextVersion = existingVersions.isEmpty
-        ? 2
-        : existingVersions.map((r) => r.version).reduce((a, b) => a > b ? a : b) + 1;
+    final nextVersion = await _nextBomVersion(surveyId);
 
     final revision = BomRevision(
       id: _idService.newId(),
@@ -661,6 +664,94 @@ class InMemorySurveyRepository implements SurveyRepository {
     }
 
     return revision;
+  }
+
+  // ---- BoM manual-edit snapshots ------------------------------------------
+
+  @override
+  Future<List<BomManualEditSnapshot>> getBomManualEditSnapshots(
+    String surveyId, {
+    bool dirtyOnly = false,
+  }) async {
+    final list =
+        _bomManualEditSnapshots.values
+            .where(
+              (s) =>
+                  s.surveyId == surveyId &&
+                  (!dirtyOnly || _dirtyBomManualEditSnapshotIds.contains(s.id)),
+            )
+            .toList()
+          ..sort((a, b) => a.version.compareTo(b.version));
+    return List.unmodifiable(list);
+  }
+
+  @override
+  Future<void> markBomManualEditSnapshotSynced(String id) async {
+    _dirtyBomManualEditSnapshotIds.remove(id);
+  }
+
+  @override
+  Future<List<BomManualEditSnapshotLine>> getBomManualEditSnapshotLines(
+    String snapshotId, {
+    bool dirtyOnly = false,
+  }) async {
+    final lines = _bomManualEditSnapshotLines[snapshotId] ?? const [];
+    return List.unmodifiable(
+      dirtyOnly
+          ? lines.where((l) => _dirtyBomManualEditSnapshotLineIds.contains(l.id))
+          : lines,
+    );
+  }
+
+  @override
+  Future<void> markBomManualEditSnapshotLineSynced(String id) async {
+    _dirtyBomManualEditSnapshotLineIds.remove(id);
+  }
+
+  @override
+  Future<BomManualEditSnapshot> addBomManualEditSnapshot({
+    required String surveyId,
+    required int basedOnVersion,
+    required String reason,
+    required List<BomManualEditSnapshotLine> lines,
+    required String editedBy,
+  }) async {
+    final nextVersion = await _nextBomVersion(surveyId);
+
+    final snapshot = BomManualEditSnapshot(
+      id: _idService.newId(),
+      surveyId: surveyId,
+      version: nextVersion,
+      basedOnVersion: basedOnVersion,
+      editedBy: editedBy,
+      editedAt: DateTime.now(),
+      reason: reason,
+    );
+    _bomManualEditSnapshots[snapshot.id] = snapshot;
+    _dirtyBomManualEditSnapshotIds.add(snapshot.id);
+    _bomManualEditSnapshotLines[snapshot.id] = [
+      for (final line in lines)
+        line.copyWithIds(id: _idService.newId(), snapshotId: snapshot.id),
+    ];
+    for (final line in _bomManualEditSnapshotLines[snapshot.id]!) {
+      _dirtyBomManualEditSnapshotLineIds.add(line.id);
+    }
+
+    return snapshot;
+  }
+
+  /// Next version number for either a new [BomRevision] or a new
+  /// [BomManualEditSnapshot] — both draw from the same counter. Mirrors
+  /// SqfliteSurveyRepository's `_nextBomVersion`.
+  Future<int> _nextBomVersion(String surveyId) async {
+    final revisions = await getBomRevisions(surveyId);
+    final manualEdits = await getBomManualEditSnapshots(surveyId);
+    final versions = [
+      1,
+      for (final r in revisions) r.version,
+      for (final m in manualEdits) m.version,
+    ];
+    return versions.reduce((a, b) => a > b ? a : b) + 1;
   }
 
   @override

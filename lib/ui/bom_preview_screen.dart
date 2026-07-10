@@ -3,6 +3,8 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/survey_repository.dart';
 import '../models/bom_line.dart';
+import '../models/bom_manual_edit_snapshot.dart';
+import '../models/bom_manual_edit_snapshot_line.dart';
 import '../models/bom_revision.dart';
 import '../models/bom_revision_line.dart';
 import '../models/bom_snapshot.dart';
@@ -13,6 +15,7 @@ import '../services/bom_engine.dart';
 import '../services/bom_revision_engine.dart';
 import '../services/lumax_exporter.dart';
 import '../services/sun_bom_exporter.dart';
+import 'bom_manual_edit_screen.dart';
 import 'bom_manual_entries_screen.dart';
 import 'bom_revisions_screen.dart';
 
@@ -36,6 +39,7 @@ class BomPreviewScreen extends StatefulWidget {
     required this.site,
     required this.addedByRole,
     this.readOnly = false,
+    this.canEditBom = false,
   });
 
   final SurveyRepository repository;
@@ -49,6 +53,12 @@ class BomPreviewScreen extends StatefulWidget {
   /// can inspect the computed BoM (and Export/version history once locked)
   /// without being able to change it.
   final bool readOnly;
+
+  /// Whether the signed-in role (Admin/Approver only) may open "Edit BoM" —
+  /// independent of [readOnly], since a manual BoM edit is an Admin/Approver
+  /// action available even on an otherwise read-only review (e.g. Approver's
+  /// review of a submitted survey).
+  final bool canEditBom;
 
   @override
   State<BomPreviewScreen> createState() => _BomPreviewScreenState();
@@ -72,6 +82,14 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   // the latest. See _cumulativeTotalForVersion.
   List<BomRevision> _revisions = const [];
   Map<String, List<BomRevisionLine>> _revisionLinesByRevision = const {};
+
+  // Every manual-edit snapshot (Admin/Approver full-version edit) for this
+  // survey, oldest first, plus its full line list keyed by snapshot id.
+  // Each one is a possible *base* for version resolution — see
+  // _resolveBaseForVersion.
+  List<BomManualEditSnapshot> _manualEditSnapshots = const [];
+  Map<String, List<BomManualEditSnapshotLine>> _manualEditLinesBySnapshot =
+      const {};
 
   // Toggles the locked view between the running total (default — the
   // operationally relevant number) and the v1 frozen snapshot.
@@ -131,6 +149,8 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
 
     var revisions = const <BomRevision>[];
     var revisionLinesByRevision = const <String, List<BomRevisionLine>>{};
+    var manualEditSnapshots = const <BomManualEditSnapshot>[];
+    var manualEditLinesBySnapshot = const <String, List<BomManualEditSnapshotLine>>{};
     if (snapshot != null) {
       revisions = await widget.repository.getBomRevisions(widget.site.id);
       final byRevision = <String, List<BomRevisionLine>>{};
@@ -140,6 +160,16 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
         );
       }
       revisionLinesByRevision = byRevision;
+
+      manualEditSnapshots = await widget.repository.getBomManualEditSnapshots(
+        widget.site.id,
+      );
+      final byManualEdit = <String, List<BomManualEditSnapshotLine>>{};
+      for (final edit in manualEditSnapshots) {
+        byManualEdit[edit.id] = await widget.repository
+            .getBomManualEditSnapshotLines(edit.id);
+      }
+      manualEditLinesBySnapshot = byManualEdit;
     }
 
     if (!mounted) return;
@@ -149,25 +179,64 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       _snapshotLines = snapshotLines;
       _revisions = revisions;
       _revisionLinesByRevision = revisionLinesByRevision;
+      _manualEditSnapshots = manualEditSnapshots;
+      _manualEditLinesBySnapshot = manualEditLinesBySnapshot;
       // Reset to the latest version on every (re)load — see the field doc.
-      _selectedExportVersion = revisions.isEmpty ? 1 : revisions.last.version;
+      _selectedExportVersion = _latestVersionOf(revisions, manualEditSnapshots);
       _loading = false;
     });
   }
 
-  int get _latestVersion => _revisions.isEmpty ? 1 : _revisions.last.version;
+  static int _latestVersionOf(
+    List<BomRevision> revisions,
+    List<BomManualEditSnapshot> manualEdits,
+  ) {
+    final versions = [
+      1,
+      for (final r in revisions) r.version,
+      for (final m in manualEdits) m.version,
+    ];
+    return versions.reduce((a, b) => a > b ? a : b);
+  }
 
-  /// The cumulative total *as of* [version]: v1 snapshot lines plus every
-  /// revision up through (and including) [version] — not just that
-  /// version's own delta. [version] 1 yields the v1 snapshot alone.
+  int get _latestVersion => _latestVersionOf(_revisions, _manualEditSnapshots);
+
+  /// The full [BomRunningTotalLine] base at [version], normalized from
+  /// whichever snapshot (the original v1, or a later manual-edit snapshot)
+  /// has the highest version at or before [version] — the "nearest full
+  /// snapshot at or before N" step of version resolution.
+  ({int version, List<BomRunningTotalLine> lines}) _resolveBaseForVersion(
+    int version,
+  ) {
+    const engine = BomRevisionEngine();
+    var bestVersion = 1;
+    var bestLines = engine.baseFromSnapshotLines(_snapshotLines);
+    for (final edit in _manualEditSnapshots) {
+      if (edit.version <= version && edit.version > bestVersion) {
+        bestVersion = edit.version;
+        bestLines = engine.baseFromManualEditLines(
+          _manualEditLinesBySnapshot[edit.id] ?? const [],
+        );
+      }
+    }
+    return (version: bestVersion, lines: bestLines);
+  }
+
+  /// The cumulative total *as of* [version]: the nearest full base (v1, or a
+  /// later manual-edit snapshot) at or before [version], plus every revision
+  /// strictly after that base up through (and including) [version] — not
+  /// just that revision's own delta. [version] 1 yields the v1 snapshot
+  /// alone (there's nothing to layer, since no revision or manual edit can
+  /// have version 1).
   List<BomRunningTotalLine> _cumulativeTotalForVersion(int version) {
+    final base = _resolveBaseForVersion(version);
     final lines = <BomRevisionLine>[
       for (final revision in _revisions)
-        if (revision.version <= version)
+        if (revision.version > base.version && revision.version <= version)
           ...(_revisionLinesByRevision[revision.id] ?? const []),
     ];
     return const BomRevisionEngine().computeRunningTotal(
-      snapshotLines: _snapshotLines,
+      baseLines: base.lines,
       revisionLines: lines,
     );
   }
@@ -190,8 +259,9 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     // (mechanics only this slice) — no need to regenerate on return.
   }
 
-  /// Opens the version history (v1 + every revision), each viewable, with
-  /// its own "Add revision" action. Only reachable once the survey is locked.
+  /// Opens the version history (v1 + every revision + every manual edit),
+  /// each viewable, with its own "Add revision" action. Only reachable once
+  /// the survey is locked.
   Future<void> _openRevisions() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -203,7 +273,29 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
         ),
       ),
     );
-    // A revision may have been added — refresh the running total.
+    // A revision or manual edit may have been added — refresh the running
+    // total.
+    await _generate();
+  }
+
+  /// Opens "Edit BoM": an editable table of the *current* (latest) version's
+  /// full line items. Saving creates a new [BomManualEditSnapshot] — the new
+  /// latest version — never touching any existing snapshot/revision row.
+  /// Admin/Approver only — see [widget.canEditBom].
+  Future<void> _openEditBom() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BomManualEditScreen(
+          repository: widget.repository,
+          surveyId: widget.site.id,
+          surveyName: widget.site.name,
+          basedOnVersion: _latestVersion,
+          currentLines: _cumulativeTotalForVersion(_latestVersion),
+          editedByRole: widget.addedByRole,
+        ),
+      ),
+    );
+    // A new version may have been created — refresh the running total.
     await _generate();
   }
 
@@ -527,6 +619,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.file_download_outlined),
+            ),
+          if (locked && widget.canEditBom)
+            IconButton(
+              tooltip: 'Edit BoM',
+              onPressed: _openEditBom,
+              icon: const Icon(Icons.edit_note_outlined),
             ),
           if (!widget.readOnly)
             IconButton(

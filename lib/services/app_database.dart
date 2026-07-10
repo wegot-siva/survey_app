@@ -11,7 +11,7 @@ import 'material_master_seed.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 16;
+const int _dbVersion = 17;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -197,6 +197,14 @@ Future<Database> openAppDatabase() async {
           );
         }
       }
+      // v16 -> v17: manual BoM edit (Admin/Approver) — a full-replacement
+      // version, unlike a revision's additive delta, since editing SKU/name
+      // can change a line's identity. Each save is a brand-new immutable
+      // snapshot version; nothing existing is ever touched.
+      if (oldVersion < 17) {
+        await _createBomManualEditSnapshotsTable(db);
+        await _createBomManualEditSnapshotLinesTable(db);
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -265,6 +273,8 @@ Future<Database> openAppDatabase() async {
       await _createBomSnapshotLinesTable(db);
       await _createBomRevisionsTable(db);
       await _createBomRevisionLinesTable(db);
+      await _createBomManualEditSnapshotsTable(db);
+      await _createBomManualEditSnapshotLinesTable(db);
       await _createEngineersTable(db);
       await _seedEngineers(db);
       await _createSurveyAssignmentAuditTable(db);
@@ -660,6 +670,62 @@ Future<void> _createBomRevisionLinesTable(Database db) async {
   await db.execute(
     'CREATE INDEX bom_revision_lines_revision_idx '
     'ON bom_revision_lines (revision_id)',
+  );
+}
+
+/// BoM manual-edit snapshots table (v17) — a full-replacement version created
+/// by Admin/Approver hand-editing any field of a resolved version's lines.
+/// Shares its `version` numbering with bom_revisions (both draw from the same
+/// counter — see SqfliteSurveyRepository's version-assignment helpers), so
+/// versions never collide regardless of which table created them. FK'd to
+/// sites (cascade delete), like bom_revisions. A row here never changes after
+/// creation; a later correction is a new manual edit, not an edit to this one.
+Future<void> _createBomManualEditSnapshotsTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE bom_manual_edit_snapshots (
+      id                TEXT PRIMARY KEY,
+      survey_id         TEXT NOT NULL,
+      version           INTEGER NOT NULL,
+      based_on_version  INTEGER NOT NULL,
+      edited_by         TEXT NOT NULL,
+      edited_at         TEXT NOT NULL,
+      reason            TEXT,
+      dirty             INTEGER NOT NULL DEFAULT 1,
+      FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX bom_manual_edit_snapshots_survey_idx '
+    'ON bom_manual_edit_snapshots (survey_id)',
+  );
+}
+
+/// BoM manual-edit snapshot lines table (v17) — the full line list of one
+/// [bom_manual_edit_snapshots] row. Unlike bom_snapshot_lines/
+/// bom_revision_lines, there's no material_name/item_label/sensor_size/
+/// sensor_type split — every field here is directly hand-editable (SKU, item
+/// name, description, unit, qty), so there's no separate "Lumax vs Sun_BOM"
+/// distinction to preserve. `group_code` is copied over unchanged from
+/// whatever line this replaces (not itself editable). FK'd to
+/// bom_manual_edit_snapshots (cascade delete).
+Future<void> _createBomManualEditSnapshotLinesTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE bom_manual_edit_snapshot_lines (
+      id            TEXT PRIMARY KEY,
+      snapshot_id   TEXT NOT NULL,
+      sku           TEXT,
+      item_name     TEXT NOT NULL,
+      description   TEXT,
+      unit          TEXT NOT NULL,
+      qty           REAL NOT NULL,
+      group_code    TEXT NOT NULL,
+      dirty         INTEGER NOT NULL DEFAULT 1,
+      FOREIGN KEY (snapshot_id) REFERENCES bom_manual_edit_snapshots (id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX bom_manual_edit_snapshot_lines_snapshot_idx '
+    'ON bom_manual_edit_snapshot_lines (snapshot_id)',
   );
 }
 

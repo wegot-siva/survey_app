@@ -1,6 +1,7 @@
-// Unit tests for BomRevisionEngine's running-total math: v1 snapshot lines
-// plus every revision's deltas, summed per (sku, item); floored display at 0
-// with a below-zero flag when a delta would otherwise push it negative.
+// Unit tests for BomRevisionEngine's running-total math: a base version's
+// lines (v1 snapshot or a manual-edit snapshot) plus every revision's deltas
+// on top, summed per (sku, item); floored display at 0 with a below-zero
+// flag when a delta would otherwise push it negative.
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -63,7 +64,7 @@ void main() {
 
   test('with no revisions, running total equals v1 exactly', () {
     final result = engine.computeRunningTotal(
-      snapshotLines: [snapshotLine(qty: 10)],
+      baseLines: engine.baseFromSnapshotLines([snapshotLine(qty: 10)]),
       revisionLines: const [],
     );
     expect(result, hasLength(1));
@@ -74,7 +75,7 @@ void main() {
 
   test('a positive delta on the same sku/item adds to the v1 quantity', () {
     final result = engine.computeRunningTotal(
-      snapshotLines: [snapshotLine(qty: 10)],
+      baseLines: engine.baseFromSnapshotLines([snapshotLine(qty: 10)]),
       revisionLines: [revisionLine(qtyDelta: 5)],
     );
     expect(result.single.rawQty, 15);
@@ -83,7 +84,7 @@ void main() {
 
   test('a negative delta subtracts from the v1 quantity', () {
     final result = engine.computeRunningTotal(
-      snapshotLines: [snapshotLine(qty: 10)],
+      baseLines: engine.baseFromSnapshotLines([snapshotLine(qty: 10)]),
       revisionLines: [revisionLine(qtyDelta: -4)],
     );
     expect(result.single.rawQty, 6);
@@ -94,7 +95,7 @@ void main() {
   test('a delta that pushes the total below zero floors the display at 0 '
       'and sets the below-zero flag', () {
     final result = engine.computeRunningTotal(
-      snapshotLines: [snapshotLine(qty: 3)],
+      baseLines: engine.baseFromSnapshotLines([snapshotLine(qty: 3)]),
       revisionLines: [revisionLine(qtyDelta: -10)],
     );
     expect(result.single.rawQty, -7);
@@ -104,7 +105,7 @@ void main() {
 
   test('multiple revisions on the same sku/item all accumulate', () {
     final result = engine.computeRunningTotal(
-      snapshotLines: [snapshotLine(qty: 10)],
+      baseLines: engine.baseFromSnapshotLines([snapshotLine(qty: 10)]),
       revisionLines: [
         revisionLine(qtyDelta: 5),
         revisionLine(qtyDelta: -2),
@@ -117,7 +118,9 @@ void main() {
   test('a delta for a brand-new sku/item (no matching v1 line) becomes its '
       'own running-total line', () {
     final result = engine.computeRunningTotal(
-      snapshotLines: [snapshotLine(sku: 'SEN-1', item: 'Sensor', qty: 10)],
+      baseLines: engine.baseFromSnapshotLines([
+        snapshotLine(sku: 'SEN-1', item: 'Sensor', qty: 10),
+      ]),
       revisionLines: [
         revisionLine(sku: 'NEW-1', item: 'Extra elbow', qtyDelta: 3),
       ],
@@ -130,10 +133,10 @@ void main() {
 
   test('different sku/item pairs never collide', () {
     final result = engine.computeRunningTotal(
-      snapshotLines: [
+      baseLines: engine.baseFromSnapshotLines([
         snapshotLine(sku: 'A', item: 'One', qty: 5),
         snapshotLine(sku: 'B', item: 'Two', qty: 7),
-      ],
+      ]),
       revisionLines: const [],
     );
     expect(result, hasLength(2));
@@ -143,7 +146,9 @@ void main() {
 
   test('every MaterialGroup value is usable as a running-total group', () {
     final result = engine.computeRunningTotal(
-      snapshotLines: [snapshotLine(group: MaterialGroup.g, qty: 1)],
+      baseLines: engine.baseFromSnapshotLines([
+        snapshotLine(group: MaterialGroup.g, qty: 1),
+      ]),
       revisionLines: const [],
     );
     expect(result.single.group, MaterialGroup.g);
@@ -154,14 +159,14 @@ void main() {
     'snapshot line (Lumax export fields)',
     () {
       final result = engine.computeRunningTotal(
-        snapshotLines: [
+        baseLines: engine.baseFromSnapshotLines([
           snapshotLine(
             materialName: 'Sensor Alpha',
             itemLabel: 'SEN-A',
             sensorSize: SensorSize.dn25,
             sensorType: SensorType.wired,
           ),
-        ],
+        ]),
         revisionLines: const [],
       );
       expect(result.single.materialName, 'Sensor Alpha');
@@ -177,7 +182,7 @@ void main() {
     'inherit from)',
     () {
       final result = engine.computeRunningTotal(
-        snapshotLines: const [],
+        baseLines: const [],
         revisionLines: [
           revisionLine(
             sku: 'NEW-1',
@@ -201,14 +206,14 @@ void main() {
     'revision delta on the same sku/item',
     () {
       final result = engine.computeRunningTotal(
-        snapshotLines: [
+        baseLines: engine.baseFromSnapshotLines([
           snapshotLine(
             materialName: 'Sensor Alpha',
             itemLabel: 'SEN-A',
             sensorSize: SensorSize.dn25,
             sensorType: SensorType.wired,
           ),
-        ],
+        ]),
         revisionLines: [
           revisionLine(
             materialName: 'Should not win',

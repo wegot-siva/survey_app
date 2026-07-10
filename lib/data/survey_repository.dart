@@ -1,3 +1,5 @@
+import '../models/bom_manual_edit_snapshot.dart';
+import '../models/bom_manual_edit_snapshot_line.dart';
 import '../models/bom_manual_entry.dart';
 import '../models/bom_revision.dart';
 import '../models/bom_revision_line.dart';
@@ -314,14 +316,62 @@ abstract class SurveyRepository {
   Future<void> markBomRevisionLineSynced(String id);
 
   /// Creates a new revision — version is (the survey's highest existing
-  /// revision version, or 1 if it has none) + 1 — plus its delta lines, in
-  /// one atomic write. [lines]' `id` / `revisionId` are ignored (assigned
-  /// fresh).
+  /// version across both bom_revisions and bom_manual_edit_snapshots, or 1
+  /// if neither exists) + 1 — plus its delta lines, in one atomic write.
+  /// [lines]' `id` / `revisionId` are ignored (assigned fresh). Sharing the
+  /// version counter with bom_manual_edit_snapshots keeps every version
+  /// number unique regardless of which table created it.
   Future<BomRevision> addBomRevision({
     required String surveyId,
     required String reason,
     required List<BomRevisionLine> lines,
     required String createdBy,
+  });
+
+  // ---- BoM manual-edit snapshots (Admin/Approver full-version edits) -------
+  //
+  // Version 2+, sharing the same version counter as bom_revisions (see
+  // addBomManualEditSnapshot) — a manual edit can change a line's identity
+  // fields (SKU, name), so unlike a revision it can't be expressed as a
+  // delta; each save is instead a brand-new, complete, immutable line list.
+  // A row here never changes after creation; a later correction is a new
+  // manual edit, not an edit to this one.
+
+  /// All manual-edit snapshots for a survey, oldest first. [dirtyOnly] limits
+  /// to snapshots not yet pushed — sync-only, see
+  /// [markBomManualEditSnapshotSynced].
+  Future<List<BomManualEditSnapshot>> getBomManualEditSnapshots(
+    String surveyId, {
+    bool dirtyOnly = false,
+  });
+
+  /// Clears the sync-pending flag for manual-edit snapshot [id]. Call once
+  /// that row's push to Supabase has succeeded.
+  Future<void> markBomManualEditSnapshotSynced(String id);
+
+  /// One manual-edit snapshot's full line list, in the order they were
+  /// written. [dirtyOnly] limits to lines not yet pushed — sync-only, see
+  /// [markBomManualEditSnapshotLineSynced].
+  Future<List<BomManualEditSnapshotLine>> getBomManualEditSnapshotLines(
+    String snapshotId, {
+    bool dirtyOnly = false,
+  });
+
+  /// Clears the sync-pending flag for manual-edit snapshot line [id]. Call
+  /// once that row's push to Supabase has succeeded.
+  Future<void> markBomManualEditSnapshotLineSynced(String id);
+
+  /// Creates a new manual-edit snapshot — version is (the survey's highest
+  /// existing version across both bom_revisions and
+  /// bom_manual_edit_snapshots, or 1 if neither exists) + 1 — plus its full
+  /// line list, in one atomic write. [lines]' `id` / `snapshotId` are ignored
+  /// (assigned fresh). [basedOnVersion] is recorded for traceability only.
+  Future<BomManualEditSnapshot> addBomManualEditSnapshot({
+    required String surveyId,
+    required int basedOnVersion,
+    required String reason,
+    required List<BomManualEditSnapshotLine> lines,
+    required String editedBy,
   });
 
   // ---- Engineer roster + survey reassignment -------------------------------
