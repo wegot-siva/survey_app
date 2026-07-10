@@ -182,28 +182,9 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   /// what the Approver will act on in a later slice. Available any time before
   /// submission (covers re-opening a survey that's still "assigned" too, in
   /// case the auto in-progress transition didn't fire for some reason).
+  /// Submits directly — no confirmation dialog (it only ever asked yes/no,
+  /// it never validated anything, so there's nothing to preserve).
   Future<void> _markSubmitted(Site site) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Submit survey?'),
-        content: const Text(
-          'This marks the survey as submitted and ready for approval.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Submit'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
     await widget.repository.updateSite(
       site.copyWith(status: SurveyStatus.submitted),
     );
@@ -461,7 +442,7 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
                     child: FilledButton.icon(
                       onPressed: () => _markSubmitted(site),
                       icon: const Icon(Icons.check_circle_outline),
-                      label: const Text('Submit'),
+                      label: const Text('Submit for Approval'),
                     ),
                   ),
                 ],
