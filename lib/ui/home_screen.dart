@@ -47,9 +47,32 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Session-only — resets on app restart, not persisted.
   DateTime? _lastSyncedAt;
 
+  final _searchController = TextEditingController();
+
+  /// Lowercased, trimmed live from [_searchController] — see [_filteredSites].
+  String _query = '';
+
+  /// Whether the AppBar search field is showing in place of the "Sites"
+  /// title — collapsed by default so it never takes up screen space until
+  /// the user actually taps the search icon (see [_openSearch]).
+  bool _searchOpen = false;
+
+  /// [_sites] (the role-scoped list — unchanged) narrowed by [_query],
+  /// case-insensitive substring match on site name only. Never bypasses
+  /// role-based visibility: it only ever filters what [_visibleSites]
+  /// already returned.
+  List<Site> get _filteredSites => _query.isEmpty
+      ? _sites
+      : _sites
+            .where((s) => s.name.toLowerCase().contains(_query))
+            .toList(growable: false);
+
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(() {
+      setState(() => _query = _searchController.text.trim().toLowerCase());
+    });
     _load();
     // Catches the recurring "built without --dart-define-from-file=.env"
     // mistake at launch instead of a confusing sync-time error later — see
@@ -59,6 +82,12 @@ class _HomeScreenState extends State<HomeScreen> {
         (_) => _showMissingCredentialsDialog(),
       );
     }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _showMissingCredentialsDialog() async {
@@ -344,14 +373,14 @@ class _HomeScreenState extends State<HomeScreen> {
   /// [SurveyStatus.released] included, since submitting is the engineer's
   /// last action on a survey — later Approver/Sales stages don't need their
   /// own engineer-facing tab).
-  Widget _buildEngineerGroupedList() {
-    final notStarted = _sites
+  Widget _buildEngineerGroupedList(List<Site> sites) {
+    final notStarted = sites
         .where((s) => s.status == SurveyStatus.assigned || s.status == null)
         .toList(growable: false);
-    final inProgress = _sites
+    final inProgress = sites
         .where((s) => s.status == SurveyStatus.inProgress)
         .toList(growable: false);
-    final completed = _sites
+    final completed = sites
         .where(
           (s) =>
               s.status == SurveyStatus.submitted ||
@@ -418,10 +447,16 @@ class _HomeScreenState extends State<HomeScreen> {
           // Still wrapped in a scrollable, so pull-to-refresh works even on
           // an empty tab.
           ? ListView(
-              children: const [
+              children: [
                 Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(child: Text('No surveys in this group yet.')),
+                  padding: const EdgeInsets.all(24),
+                  child: Center(
+                    child: Text(
+                      _query.isEmpty
+                          ? 'No surveys in this group yet.'
+                          : 'No sites found.',
+                    ),
+                  ),
                 ),
               ],
             )
@@ -446,34 +481,73 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openSearch() {
+    setState(() => _searchOpen = true);
+  }
+
+  /// Closes the AppBar search field and clears whatever was typed, restoring
+  /// the full role-scoped list — collapsing back to the icon is also how the
+  /// user "clears" the search, not just the field's own clear button.
+  void _closeSearch() {
+    _searchController.clear();
+    setState(() => _searchOpen = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sites'),
-        actions: [
-          if (widget.session.currentRole == UserRole.admin)
-            IconButton(
-              tooltip: 'Material Master',
-              onPressed: _openMaterialMaster,
-              icon: const Icon(Icons.inventory_2_outlined),
-            ),
-          // Developer diagnostic — compiled out of release builds entirely.
-          // This is a build-type concern (dev vs field), not a role/permission
-          // one, so kDebugMode is the right gate, not an admin-role check.
-          if (kDebugMode)
-            IconButton(
-              tooltip: 'Test Supabase connection',
-              onPressed: _testSupabase,
-              icon: const Icon(Icons.cloud_outlined),
-            ),
-          _syncStatusButton(),
-          IconButton(
-            tooltip: 'Log out',
-            onPressed: _logout,
-            icon: const Icon(Icons.logout),
-          ),
-        ],
+        title: _searchOpen
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                style: TextStyle(
+                  color: Theme.of(context).appBarTheme.foregroundColor ??
+                      Theme.of(context).colorScheme.onSurface,
+                ),
+                decoration: const InputDecoration(
+                  hintText: 'Search sites by name',
+                  border: InputBorder.none,
+                ),
+              )
+            : const Text('Sites'),
+        actions: _searchOpen
+            ? [
+                IconButton(
+                  tooltip: 'Close search',
+                  onPressed: _closeSearch,
+                  icon: const Icon(Icons.close),
+                ),
+              ]
+            : [
+                IconButton(
+                  tooltip: 'Search sites',
+                  onPressed: _openSearch,
+                  icon: const Icon(Icons.search),
+                ),
+                if (widget.session.currentRole == UserRole.admin)
+                  IconButton(
+                    tooltip: 'Material Master',
+                    onPressed: _openMaterialMaster,
+                    icon: const Icon(Icons.inventory_2_outlined),
+                  ),
+                // Developer diagnostic — compiled out of release builds
+                // entirely. This is a build-type concern (dev vs field), not
+                // a role/permission one, so kDebugMode is the right gate,
+                // not an admin-role check.
+                if (kDebugMode)
+                  IconButton(
+                    tooltip: 'Test Supabase connection',
+                    onPressed: _testSupabase,
+                    icon: const Icon(Icons.cloud_outlined),
+                  ),
+                _syncStatusButton(),
+                IconButton(
+                  tooltip: 'Log out',
+                  onPressed: _logout,
+                  icon: const Icon(Icons.logout),
+                ),
+              ],
       ),
       // Admin and Approver get the same create+assign flow as Sales. Engineer
       // creates nothing — sites/surveys reach them already assigned — so no
@@ -501,15 +575,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? const Center(child: CircularProgressIndicator())
                 : _sites.isEmpty
                 ? _EmptyState(role: widget.session.currentRole)
+                : _filteredSites.isEmpty
+                ? const Center(child: Text('No sites found.'))
                 : widget.session.currentRole == UserRole.engineer
-                ? _buildEngineerGroupedList()
+                ? _buildEngineerGroupedList(_filteredSites)
                 : RefreshIndicator(
                     onRefresh: _load,
                     child: ListView.separated(
-                      itemCount: _sites.length,
+                      itemCount: _filteredSites.length,
                       separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (context, i) {
-                        final site = _sites[i];
+                        final site = _filteredSites[i];
                         final hasInputs = site.clientInputs != null;
                         final role = widget.session.currentRole;
                         final isSales = role == UserRole.sales;
