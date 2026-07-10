@@ -11,7 +11,7 @@ import 'material_master_seed.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 15;
+const int _dbVersion = 16;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -163,6 +163,40 @@ Future<Database> openAppDatabase() async {
         await db.execute('ALTER TABLE sites ADD COLUMN client_name TEXT');
         await db.execute('ALTER TABLE sites ADD COLUMN client_contact TEXT');
       }
+      // v15 -> v16: dirty-tracking for sync — every synced table gets a
+      // `dirty` flag (1 = needs pushing), set by every local write and
+      // cleared once that row's push succeeds, so a sync only pushes what
+      // actually changed instead of every row every time. DEFAULT 1 means
+      // every existing row (on a fresh migration or a fresh install alike)
+      // starts dirty, so the very next sync still pushes everything once —
+      // no separate "first sync" logic needed anywhere. `blocks` has no
+      // column of its own — it has no stable per-row id (full delete+
+      // reinsert already), so its dirtiness rides on `sites.dirty`.
+      // `engineers` / `survey_assignment_audit` are untouched — sync never
+      // pushes them today.
+      if (oldVersion < 16) {
+        for (final table in [
+          'sites',
+          'client_inputs',
+          'source_points',
+          'inlet_points',
+          'duct_loras',
+          'gateways',
+          'footers',
+          'material_master_items',
+          'material_master_audit',
+          'bom_manual_entries',
+          'bom_snapshots',
+          'bom_snapshot_lines',
+          'bom_revisions',
+          'bom_revision_lines',
+          'photos',
+        ]) {
+          await db.execute(
+            'ALTER TABLE $table ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1',
+          );
+        }
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -175,7 +209,8 @@ Future<Database> openAppDatabase() async {
           archived       INTEGER NOT NULL DEFAULT 0,
           address        TEXT,
           client_name    TEXT,
-          client_contact TEXT
+          client_contact TEXT,
+          dirty          INTEGER NOT NULL DEFAULT 1
         )
       ''');
 
@@ -209,6 +244,7 @@ Future<Database> openAppDatabase() async {
           age_of_plumbing_lines         TEXT,
           aesthetic_guidelines          INTEGER,
           aesthetic_details             TEXT,
+          dirty                         INTEGER NOT NULL DEFAULT 1,
           FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
         )
       ''');
@@ -271,6 +307,7 @@ Future<void> _createSourcePointsTable(Database db) async {
       antenna_required                  INTEGER,
       transmitting_part_open_to_air     INTEGER,
       nrv_feasibility                   INTEGER,
+      dirty                             INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -307,6 +344,7 @@ Future<void> _createInletPointsTable(Database db) async {
       conduit_clamping              INTEGER,
       civil_work_needed             INTEGER,
       civil_work_details            TEXT,
+      dirty                         INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -333,6 +371,7 @@ Future<void> _createDuctLorasTable(Database db) async {
       separate_mcb_for_series        INTEGER,
       ups_power_supply               INTEGER,
       cable_length                   REAL,
+      dirty                          INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -355,6 +394,7 @@ Future<void> _createGatewaysTable(Database db) async {
       sim_coverage               TEXT,
       uninterrupted_power_source INTEGER,
       mounting_hardware_needed   TEXT,
+      dirty                      INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -372,6 +412,7 @@ Future<void> _createFootersTable(Database db) async {
       general_remarks     TEXT,
       survey_date         TEXT,
       surveyor_name       TEXT,
+      dirty               INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -389,7 +430,8 @@ Future<void> _createPhotosTable(Database db) async {
       slot        TEXT NOT NULL,
       position    INTEGER NOT NULL DEFAULT 0,
       local_path  TEXT,
-      remote_path TEXT
+      remote_path TEXT,
+      dirty       INTEGER NOT NULL DEFAULT 1
     )
   ''');
   await db.execute(
@@ -444,7 +486,8 @@ Future<void> _createMaterialMasterItemsTable(Database db) async {
       derived_formula      TEXT,
       formula_divisor      REAL,
       variable_source      TEXT,
-      notes                TEXT
+      notes                TEXT,
+      dirty                INTEGER NOT NULL DEFAULT 1
     )
   ''');
 }
@@ -462,7 +505,8 @@ Future<void> _createMaterialMasterAuditTable(Database db) async {
       old_value         TEXT,
       new_value         TEXT,
       changed_by_role   TEXT NOT NULL,
-      changed_at        TEXT NOT NULL
+      changed_at        TEXT NOT NULL,
+      dirty             INTEGER NOT NULL DEFAULT 1
     )
   ''');
   await db.execute(
@@ -496,6 +540,7 @@ Future<void> _createBomManualEntriesTable(Database db) async {
       group_code    TEXT NOT NULL,
       added_by      TEXT NOT NULL,
       added_at      TEXT NOT NULL,
+      dirty         INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -517,6 +562,7 @@ Future<void> _createBomSnapshotsTable(Database db) async {
       status        TEXT NOT NULL,
       finalized_by  TEXT NOT NULL,
       finalized_at  TEXT NOT NULL,
+      dirty         INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -552,6 +598,7 @@ Future<void> _createBomSnapshotLinesTable(Database db) async {
       qty           REAL NOT NULL,
       group_code    TEXT NOT NULL,
       source        TEXT NOT NULL,
+      dirty         INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (snapshot_id) REFERENCES bom_snapshots (id) ON DELETE CASCADE
     )
   ''');
@@ -574,6 +621,7 @@ Future<void> _createBomRevisionsTable(Database db) async {
       reason      TEXT NOT NULL,
       created_by  TEXT NOT NULL,
       created_at  TEXT NOT NULL,
+      dirty       INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -605,6 +653,7 @@ Future<void> _createBomRevisionLinesTable(Database db) async {
       unit          TEXT NOT NULL,
       qty_delta     REAL NOT NULL,
       group_code    TEXT NOT NULL,
+      dirty         INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (revision_id) REFERENCES bom_revisions (id) ON DELETE CASCADE
     )
   ''');

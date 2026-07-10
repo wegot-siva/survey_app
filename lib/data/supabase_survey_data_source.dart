@@ -26,8 +26,11 @@ import '../models/survey_photo.dart';
 class SupabaseSurveyDataSource {
   SupabaseClient get _client => Supabase.instance.client;
 
-  /// Pushes one site and its children. Order matters: the site row must exist
-  /// before blocks / client_inputs (which reference it via FK).
+  /// Pushes one site's row and its blocks. Order matters: the site row must
+  /// exist before blocks (which reference it via FK). Client inputs are
+  /// pushed separately (see [pushClientInputs]) — they're dirty-tracked
+  /// independently of the site row, so a site-only edit shouldn't force a
+  /// redundant client_inputs push and vice versa.
   Future<void> pushSite(Site site) async {
     await _client.from('sites').upsert({
       'id': site.id,
@@ -47,13 +50,14 @@ class SupabaseSurveyDataSource {
           {'site_id': site.id, 'position': i, 'label': site.blocks[i]},
       ]);
     }
+  }
 
-    final inputs = site.clientInputs;
-    if (inputs != null) {
-      await _client
-          .from('client_inputs')
-          .upsert(_inputsToRemoteRow(site.id, inputs));
-    }
+  /// Upserts the Client inputs form for [siteId] (idempotent). The parent
+  /// site must already have been pushed (FK).
+  Future<void> pushClientInputs(String siteId, ClientInputs inputs) async {
+    await _client
+        .from('client_inputs')
+        .upsert(_inputsToRemoteRow(siteId, inputs));
   }
 
   /// Upserts a source point by its id (idempotent). The parent site must

@@ -46,11 +46,17 @@ class SyncResult {
   final String? message;
 }
 
-/// Push-only sync (Phase 3): reads all local data via [SurveyRepository] and
+/// Push-only sync (Phase 3): reads local data via [SurveyRepository] and
 /// upserts it to Supabase via [SupabaseSurveyDataSource].
 ///
-/// "Push everything" each run — data volume is tiny and upserts are idempotent.
-/// The UI never touches storage directly; it only calls [pushAll].
+/// Dirty-tracking: every synced table carries a local `dirty` flag (see
+/// [SurveyRepository]'s `dirtyOnly` params / `isXxxDirty` / `markXxxSynced`
+/// methods), so each run only pushes rows that changed locally since they
+/// last synced successfully — not the whole table every time. A fresh
+/// install (or a device upgrading onto this dirty-tracking schema) has every
+/// row starting dirty, so the very first sync still pushes everything once;
+/// every sync after that only pushes what actually changed. The UI never
+/// touches storage directly; it only calls [pushAll].
 class SyncService {
   SyncService(this._repository, this._supabase, this._remote);
 
@@ -79,7 +85,19 @@ class SyncService {
       // Archived sites are excluded from every UI list, but their already-
       // recorded survey/BoM/photo data must keep syncing — nothing archived
       // is ever deleted, so nothing archived should stop syncing either.
+      //
+      // Every site is visited (not just dirty ones) because a site's
+      // children (source points, footer, client inputs, ...) are each
+      // dirty-tracked independently of the site row itself — a site whose
+      // own row hasn't changed can still have a newly-added source point.
+      // dirtySiteIds narrows which sites actually get their *row* re-pushed.
+      final dirtySiteIds = (await _repository.getSites(
+        includeArchived: true,
+        dirtyOnly: true,
+      )).map((s) => s.id).toSet();
       final sites = await _repository.getSites(includeArchived: true);
+
+      var pushedSites = 0;
       var blocks = 0;
       var clientInputs = 0;
       var sourcePoints = 0;
@@ -91,93 +109,144 @@ class SyncService {
       var bomSnapshots = 0;
       var bomRevisions = 0;
       for (final site in sites) {
-        // Site (and its blocks/client inputs) first — children FK to it.
-        await _remote.pushSite(site);
-        blocks += site.blocks.length;
-        if (site.clientInputs != null) clientInputs++;
+        // Site row + blocks — bundled (see SupabaseSurveyDataSource.pushSite),
+        // so both share the site's own dirty flag.
+        if (dirtySiteIds.contains(site.id)) {
+          await _remote.pushSite(site);
+          await _repository.markSiteSynced(site.id);
+          pushedSites++;
+          blocks += site.blocks.length;
+        }
 
-        final sps = await _repository.getSourcePoints(site.id);
+        // Client inputs — tracked independently, so a site-only edit never
+        // forces a redundant push here (and vice versa).
+        final inputs = site.clientInputs;
+        if (inputs != null && await _repository.isClientInputsDirty(site.id)) {
+          await _remote.pushClientInputs(site.id, inputs);
+          await _repository.markClientInputsSynced(site.id);
+          clientInputs++;
+        }
+
+        final sps = await _repository.getSourcePoints(site.id, dirtyOnly: true);
         for (final sp in sps) {
           await _remote.pushSourcePoint(sp);
+          await _repository.markSourcePointSynced(sp.id);
         }
         sourcePoints += sps.length;
 
-        final ips = await _repository.getInletPoints(site.id);
+        final ips = await _repository.getInletPoints(site.id, dirtyOnly: true);
         for (final ip in ips) {
           await _remote.pushInletPoint(ip);
+          await _repository.markInletPointSynced(ip.id);
         }
         inletPoints += ips.length;
 
-        final dls = await _repository.getDuctLoras(site.id);
+        final dls = await _repository.getDuctLoras(site.id, dirtyOnly: true);
         for (final dl in dls) {
           await _remote.pushDuctLora(dl);
+          await _repository.markDuctLoraSynced(dl.id);
         }
         ductLoras += dls.length;
 
-        final gws = await _repository.getGateways(site.id);
+        final gws = await _repository.getGateways(site.id, dirtyOnly: true);
         for (final gw in gws) {
           await _remote.pushGateway(gw);
+          await _repository.markGatewaySynced(gw.id);
         }
         gateways += gws.length;
 
-        final footer = await _repository.getFooter(site.id);
-        if (footer != null) {
-          await _remote.pushFooter(site.id, footer);
-          footers++;
+        if (await _repository.isFooterDirty(site.id)) {
+          final footer = await _repository.getFooter(site.id);
+          if (footer != null) {
+            await _remote.pushFooter(site.id, footer);
+            await _repository.markFooterSynced(site.id);
+            footers++;
+          }
         }
 
-        final manualEntries = await _repository.getBomManualEntries(site.id);
+        final manualEntries = await _repository.getBomManualEntries(
+          site.id,
+          dirtyOnly: true,
+        );
         for (final entry in manualEntries) {
           await _remote.pushBomManualEntry(entry);
+          await _repository.markBomManualEntrySynced(entry.id);
         }
         bomManualEntries += manualEntries.length;
 
+        // The snapshot row and its lines are each dirty-tracked separately —
+        // lines never change after finalize, so once pushed they never
+        // become dirty again, but the row and lines can still finish syncing
+        // on different runs if an earlier sync was interrupted partway.
         final snapshot = await _repository.getBomSnapshot(site.id);
         if (snapshot != null) {
-          await _remote.pushBomSnapshot(snapshot);
-          final lines = await _repository.getBomSnapshotLines(snapshot.id);
+          if (await _repository.isBomSnapshotDirty(site.id)) {
+            await _remote.pushBomSnapshot(snapshot);
+            await _repository.markBomSnapshotSynced(snapshot.id);
+            bomSnapshots++;
+          }
+          final lines = await _repository.getBomSnapshotLines(
+            snapshot.id,
+            dirtyOnly: true,
+          );
           for (final line in lines) {
             await _remote.pushBomSnapshotLine(line);
+            await _repository.markBomSnapshotLineSynced(line.id);
           }
-          bomSnapshots++;
         }
 
-        final revisions = await _repository.getBomRevisions(site.id);
+        final revisions = await _repository.getBomRevisions(
+          site.id,
+          dirtyOnly: true,
+        );
         for (final revision in revisions) {
           await _remote.pushBomRevision(revision);
-          final lines = await _repository.getBomRevisionLines(revision.id);
+          await _repository.markBomRevisionSynced(revision.id);
+          final lines = await _repository.getBomRevisionLines(
+            revision.id,
+            dirtyOnly: true,
+          );
           for (final line in lines) {
             await _remote.pushBomRevisionLine(line);
+            await _repository.markBomRevisionLineSynced(line.id);
           }
         }
         bomRevisions += revisions.length;
       }
 
-      // Material Master is global reference data, not site-scoped — push the
-      // whole table once, outside the per-site loop.
-      final materials = await _repository.getMaterialMasterItems();
+      // Material Master is global reference data, not site-scoped — push
+      // just the dirty rows once, outside the per-site loop.
+      final materials = await _repository.getMaterialMasterItems(
+        dirtyOnly: true,
+      );
       for (final material in materials) {
         await _remote.pushMaterialMasterItem(material);
+        await _repository.markMaterialMasterItemSynced(material.id);
       }
 
-      final auditEntries = await _repository.getMaterialMasterAuditLog();
+      final auditEntries = await _repository.getMaterialMasterAuditLog(
+        dirtyOnly: true,
+      );
       for (final entry in auditEntries) {
         await _remote.pushMaterialMasterAuditEntry(entry);
+        await _repository.markMaterialMasterAuditEntrySynced(entry.id);
       }
 
-      // Generic photos (slice 2): upload any pending files, then push metadata.
+      // Generic photos (slice 2): upload any pending files, then push
+      // metadata for whichever photo rows are dirty.
       var photos = 0;
-      for (final photo in await _repository.getAllPhotos()) {
+      for (final photo in await _repository.getAllPhotos(dirtyOnly: true)) {
         final pushed = await _withUploadedGenericPhoto(photo);
         if (pushed.remotePath != null) {
           await _remote.pushPhoto(pushed);
+          await _repository.markPhotoSynced(pushed.id);
           photos++;
         }
       }
 
       return SyncResult(
         success: true,
-        sites: sites.length,
+        sites: pushedSites,
         blocks: blocks,
         clientInputs: clientInputs,
         sourcePoints: sourcePoints,

@@ -36,10 +36,17 @@ class SqfliteSurveyRepository implements SurveyRepository {
   final IdService _idService;
 
   @override
-  Future<List<Site>> getSites({bool includeArchived = false}) async {
+  Future<List<Site>> getSites({
+    bool includeArchived = false,
+    bool dirtyOnly = false,
+  }) async {
+    final conditions = <String>[
+      if (!includeArchived) 'archived = 0',
+      if (dirtyOnly) 'dirty = 1',
+    ];
     final rows = await _db.query(
       'sites',
-      where: includeArchived ? null : 'archived = 0',
+      where: conditions.isEmpty ? null : conditions.join(' AND '),
       orderBy: 'name COLLATE NOCASE',
     );
     final sites = <Site>[];
@@ -68,7 +75,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
   }) async {
     final id = _idService.newId();
     await _db.transaction((txn) async {
-      await txn.insert('sites', {'id': id, 'name': name});
+      await txn.insert('sites', {'id': id, 'name': name, 'dirty': 1});
       await _writeBlocks(txn, id, blocks);
     });
     return Site(id: id, name: name, blocks: List.unmodifiable(blocks));
@@ -87,6 +94,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
           'address': site.address,
           'client_name': site.clientName,
           'client_contact': site.clientContact,
+          'dirty': 1,
         },
         where: 'id = ?',
         whereArgs: [site.id],
@@ -126,6 +134,38 @@ class SqfliteSurveyRepository implements SurveyRepository {
       'client_inputs',
       _inputsToRow(siteId, inputs),
       conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<bool> isClientInputsDirty(String siteId) async {
+    final rows = await _db.query(
+      'client_inputs',
+      columns: ['site_id'],
+      where: 'site_id = ? AND dirty = 1',
+      whereArgs: [siteId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  @override
+  Future<void> markSiteSynced(String siteId) async {
+    await _db.update(
+      'sites',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [siteId],
+    );
+  }
+
+  @override
+  Future<void> markClientInputsSynced(String siteId) async {
+    await _db.update(
+      'client_inputs',
+      {'dirty': 0},
+      where: 'site_id = ?',
+      whereArgs: [siteId],
     );
   }
 
@@ -187,10 +227,13 @@ class SqfliteSurveyRepository implements SurveyRepository {
   // ---- Source points --------------------------------------------------------
 
   @override
-  Future<List<SourcePoint>> getSourcePoints(String siteId) async {
+  Future<List<SourcePoint>> getSourcePoints(
+    String siteId, {
+    bool dirtyOnly = false,
+  }) async {
     final rows = await _db.query(
       'source_points',
-      where: 'site_id = ?',
+      where: dirtyOnly ? 'site_id = ? AND dirty = 1' : 'site_id = ?',
       whereArgs: [siteId],
       orderBy: 'rowid',
     );
@@ -219,13 +262,26 @@ class SqfliteSurveyRepository implements SurveyRepository {
     await _db.delete('source_points', where: 'id = ?', whereArgs: [id]);
   }
 
+  @override
+  Future<void> markSourcePointSynced(String id) async {
+    await _db.update(
+      'source_points',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   // ---- Inlet points ---------------------------------------------------------
 
   @override
-  Future<List<InletPoint>> getInletPoints(String siteId) async {
+  Future<List<InletPoint>> getInletPoints(
+    String siteId, {
+    bool dirtyOnly = false,
+  }) async {
     final rows = await _db.query(
       'inlet_points',
-      where: 'site_id = ?',
+      where: dirtyOnly ? 'site_id = ? AND dirty = 1' : 'site_id = ?',
       whereArgs: [siteId],
       orderBy: 'rowid',
     );
@@ -254,13 +310,26 @@ class SqfliteSurveyRepository implements SurveyRepository {
     await _db.delete('inlet_points', where: 'id = ?', whereArgs: [id]);
   }
 
+  @override
+  Future<void> markInletPointSynced(String id) async {
+    await _db.update(
+      'inlet_points',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   // ---- Duct LoRa units ------------------------------------------------------
 
   @override
-  Future<List<DuctLora>> getDuctLoras(String siteId) async {
+  Future<List<DuctLora>> getDuctLoras(
+    String siteId, {
+    bool dirtyOnly = false,
+  }) async {
     final rows = await _db.query(
       'duct_loras',
-      where: 'site_id = ?',
+      where: dirtyOnly ? 'site_id = ? AND dirty = 1' : 'site_id = ?',
       whereArgs: [siteId],
       orderBy: 'rowid',
     );
@@ -289,13 +358,26 @@ class SqfliteSurveyRepository implements SurveyRepository {
     await _db.delete('duct_loras', where: 'id = ?', whereArgs: [id]);
   }
 
+  @override
+  Future<void> markDuctLoraSynced(String id) async {
+    await _db.update(
+      'duct_loras',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   // ---- Gateways -------------------------------------------------------------
 
   @override
-  Future<List<Gateway>> getGateways(String siteId) async {
+  Future<List<Gateway>> getGateways(
+    String siteId, {
+    bool dirtyOnly = false,
+  }) async {
     final rows = await _db.query(
       'gateways',
-      where: 'site_id = ?',
+      where: dirtyOnly ? 'site_id = ? AND dirty = 1' : 'site_id = ?',
       whereArgs: [siteId],
       orderBy: 'rowid',
     );
@@ -324,6 +406,16 @@ class SqfliteSurveyRepository implements SurveyRepository {
     await _db.delete('gateways', where: 'id = ?', whereArgs: [id]);
   }
 
+  @override
+  Future<void> markGatewaySynced(String id) async {
+    await _db.update(
+      'gateways',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   // ---- Footer (one per site) ------------------------------------------------
 
   @override
@@ -348,11 +440,39 @@ class SqfliteSurveyRepository implements SurveyRepository {
     );
   }
 
+  @override
+  Future<bool> isFooterDirty(String siteId) async {
+    final rows = await _db.query(
+      'footers',
+      columns: ['site_id'],
+      where: 'site_id = ? AND dirty = 1',
+      whereArgs: [siteId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  @override
+  Future<void> markFooterSynced(String siteId) async {
+    await _db.update(
+      'footers',
+      {'dirty': 0},
+      where: 'site_id = ?',
+      whereArgs: [siteId],
+    );
+  }
+
   // ---- Material Master --------------------------------------------------
 
   @override
-  Future<List<MaterialMasterItem>> getMaterialMasterItems() async {
-    final rows = await _db.query('material_master_items', orderBy: 'rowid');
+  Future<List<MaterialMasterItem>> getMaterialMasterItems({
+    bool dirtyOnly = false,
+  }) async {
+    final rows = await _db.query(
+      'material_master_items',
+      where: dirtyOnly ? 'dirty = 1' : null,
+      orderBy: 'rowid',
+    );
     return rows.map(_materialMasterItemFromRow).toList(growable: false);
   }
 
@@ -437,12 +557,35 @@ class SqfliteSurveyRepository implements SurveyRepository {
   }
 
   @override
-  Future<List<MaterialMasterAuditEntry>> getMaterialMasterAuditLog() async {
+  Future<void> markMaterialMasterItemSynced(String id) async {
+    await _db.update(
+      'material_master_items',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<List<MaterialMasterAuditEntry>> getMaterialMasterAuditLog({
+    bool dirtyOnly = false,
+  }) async {
     final rows = await _db.query(
       'material_master_audit',
+      where: dirtyOnly ? 'dirty = 1' : null,
       orderBy: 'changed_at DESC, rowid DESC',
     );
     return rows.map(_materialMasterAuditEntryFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<void> markMaterialMasterAuditEntrySynced(String id) async {
+    await _db.update(
+      'material_master_audit',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> _writeMaterialMasterAudit(
@@ -475,6 +618,15 @@ class SqfliteSurveyRepository implements SurveyRepository {
     List<SurveyPhoto> photos,
   ) async {
     await _db.transaction((txn) async {
+      final existingRows = await txn.query(
+        'photos',
+        where: 'owner_type = ? AND owner_id = ?',
+        whereArgs: [ownerType, ownerId],
+      );
+      final existingById = {
+        for (final row in existingRows) row['id'] as String: row,
+      };
+
       final keepIds = photos
           .where((p) => p.id.isNotEmpty)
           .map((p) => p.id)
@@ -494,21 +646,34 @@ class SqfliteSurveyRepository implements SurveyRepository {
             'photos',
             _photoToRow(photo.copyWithId(_idService.newId())),
           );
-        } else {
-          await txn.update(
-            'photos',
-            _photoToRow(photo),
-            where: 'id = ?',
-            whereArgs: [photo.id],
-          );
+          continue;
         }
+        // Re-saving the owner's form (e.g. a text field edit) passes back
+        // every existing photo unchanged — only touch (and re-dirty) rows
+        // whose actual content differs, so untouched photos don't get
+        // re-queued for sync.
+        final existing = existingById[photo.id];
+        final newRow = _photoToRow(photo);
+        if (existing != null && _photoRowUnchanged(existing, newRow)) {
+          continue;
+        }
+        await txn.update(
+          'photos',
+          newRow,
+          where: 'id = ?',
+          whereArgs: [photo.id],
+        );
       }
     });
   }
 
   @override
-  Future<List<SurveyPhoto>> getAllPhotos() async {
-    final rows = await _db.query('photos', orderBy: 'rowid');
+  Future<List<SurveyPhoto>> getAllPhotos({bool dirtyOnly = false}) async {
+    final rows = await _db.query(
+      'photos',
+      where: dirtyOnly ? 'dirty = 1' : null,
+      orderBy: 'rowid',
+    );
     return rows.map(_photoFromRow).toList(growable: false);
   }
 
@@ -522,13 +687,26 @@ class SqfliteSurveyRepository implements SurveyRepository {
     );
   }
 
+  @override
+  Future<void> markPhotoSynced(String id) async {
+    await _db.update(
+      'photos',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   // ---- BoM manual entries ----------------------------------------------
 
   @override
-  Future<List<BomManualEntry>> getBomManualEntries(String surveyId) async {
+  Future<List<BomManualEntry>> getBomManualEntries(
+    String surveyId, {
+    bool dirtyOnly = false,
+  }) async {
     final rows = await _db.query(
       'bom_manual_entries',
-      where: 'survey_id = ?',
+      where: dirtyOnly ? 'survey_id = ? AND dirty = 1' : 'survey_id = ?',
       whereArgs: [surveyId],
       orderBy: 'added_at, rowid',
     );
@@ -557,6 +735,16 @@ class SqfliteSurveyRepository implements SurveyRepository {
     await _db.delete('bom_manual_entries', where: 'id = ?', whereArgs: [id]);
   }
 
+  @override
+  Future<void> markBomManualEntrySynced(String id) async {
+    await _db.update(
+      'bom_manual_entries',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   // ---- BoM snapshots ---------------------------------------------------
 
   @override
@@ -572,14 +760,51 @@ class SqfliteSurveyRepository implements SurveyRepository {
   }
 
   @override
-  Future<List<BomSnapshotLine>> getBomSnapshotLines(String snapshotId) async {
+  Future<bool> isBomSnapshotDirty(String surveyId) async {
+    final rows = await _db.query(
+      'bom_snapshots',
+      columns: ['id'],
+      where: 'survey_id = ? AND dirty = 1',
+      whereArgs: [surveyId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  @override
+  Future<void> markBomSnapshotSynced(String id) async {
+    await _db.update(
+      'bom_snapshots',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<List<BomSnapshotLine>> getBomSnapshotLines(
+    String snapshotId, {
+    bool dirtyOnly = false,
+  }) async {
     final rows = await _db.query(
       'bom_snapshot_lines',
-      where: 'snapshot_id = ?',
+      where: dirtyOnly
+          ? 'snapshot_id = ? AND dirty = 1'
+          : 'snapshot_id = ?',
       whereArgs: [snapshotId],
       orderBy: 'group_code, rowid',
     );
     return rows.map(_bomSnapshotLineFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<void> markBomSnapshotLineSynced(String id) async {
+    await _db.update(
+      'bom_snapshot_lines',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   @override
@@ -611,7 +836,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
       }
       await txn.update(
         'sites',
-        {'bom_locked': 1},
+        {'bom_locked': 1, 'dirty': 1},
         where: 'id = ?',
         whereArgs: [surveyId],
       );
@@ -623,10 +848,13 @@ class SqfliteSurveyRepository implements SurveyRepository {
   // ---- BoM revisions ----------------------------------------------------
 
   @override
-  Future<List<BomRevision>> getBomRevisions(String surveyId) async {
+  Future<List<BomRevision>> getBomRevisions(
+    String surveyId, {
+    bool dirtyOnly = false,
+  }) async {
     final rows = await _db.query(
       'bom_revisions',
-      where: 'survey_id = ?',
+      where: dirtyOnly ? 'survey_id = ? AND dirty = 1' : 'survey_id = ?',
       whereArgs: [surveyId],
       orderBy: 'version',
     );
@@ -634,14 +862,39 @@ class SqfliteSurveyRepository implements SurveyRepository {
   }
 
   @override
-  Future<List<BomRevisionLine>> getBomRevisionLines(String revisionId) async {
+  Future<void> markBomRevisionSynced(String id) async {
+    await _db.update(
+      'bom_revisions',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<List<BomRevisionLine>> getBomRevisionLines(
+    String revisionId, {
+    bool dirtyOnly = false,
+  }) async {
     final rows = await _db.query(
       'bom_revision_lines',
-      where: 'revision_id = ?',
+      where: dirtyOnly
+          ? 'revision_id = ? AND dirty = 1'
+          : 'revision_id = ?',
       whereArgs: [revisionId],
       orderBy: 'group_code, rowid',
     );
     return rows.map(_bomRevisionLineFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<void> markBomRevisionLineSynced(String id) async {
+    await _db.update(
+      'bom_revision_lines',
+      {'dirty': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   @override
@@ -717,7 +970,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
     await _db.transaction((txn) async {
       await txn.update(
         'sites',
-        {'assigned_to': newAssignee},
+        {'assigned_to': newAssignee, 'dirty': 1},
         where: 'id = ?',
         whereArgs: [siteId],
       );
@@ -768,6 +1021,7 @@ Map<String, Object?> _inputsToRow(String siteId, ClientInputs i) {
     'age_of_plumbing_lines': i.ageOfPlumbingLines,
     'aesthetic_guidelines': _boolToInt(i.aestheticGuidelines),
     'aesthetic_details': i.aestheticDetails,
+    'dirty': 1,
   };
 }
 
@@ -873,6 +1127,7 @@ Map<String, Object?> _sourcePointToRow(SourcePoint s) {
     'antenna_required': _boolToInt(s.antennaRequired),
     'transmitting_part_open_to_air': _boolToInt(s.transmittingPartOpenToAir),
     'nrv_feasibility': _boolToInt(s.nrvFeasibility),
+    'dirty': 1,
   };
 }
 
@@ -950,6 +1205,7 @@ Map<String, Object?> _inletPointToRow(InletPoint i) {
     'conduit_clamping': _boolToInt(i.conduitClamping),
     'civil_work_needed': _boolToInt(i.civilWorkNeeded),
     'civil_work_details': i.civilWorkDetails,
+    'dirty': 1,
   };
 }
 
@@ -1004,6 +1260,7 @@ Map<String, Object?> _ductLoraToRow(DuctLora d) {
     'separate_mcb_for_series': _boolToInt(d.separateMcbForSeries),
     'ups_power_supply': _boolToInt(d.upsPowerSupply),
     'cable_length': d.cableLength,
+    'dirty': 1,
   };
 }
 
@@ -1038,6 +1295,7 @@ Map<String, Object?> _gatewayToRow(Gateway g) {
     'sim_coverage': g.simCoverage?.name,
     'uninterrupted_power_source': _boolToInt(g.uninterruptedPowerSource),
     'mounting_hardware_needed': g.mountingHardwareNeeded,
+    'dirty': 1,
   };
 }
 
@@ -1070,6 +1328,7 @@ Map<String, Object?> _footerToRow(String siteId, Footer f) {
     'general_remarks': f.generalRemarks,
     'survey_date': f.surveyDate?.toIso8601String(),
     'surveyor_name': f.surveyorName,
+    'dirty': 1,
   };
 }
 
@@ -1101,6 +1360,7 @@ Map<String, Object?> _materialMasterItemToRow(MaterialMasterItem m) {
     'formula_divisor': m.formulaDivisor,
     'variable_source': m.variableSource?.name,
     'notes': m.notes,
+    'dirty': 1,
   };
 }
 
@@ -1144,6 +1404,7 @@ Map<String, Object?> _materialMasterAuditEntryToRow(
     'new_value': e.newValue,
     'changed_by_role': e.changedByRole,
     'changed_at': e.changedAt.toIso8601String(),
+    'dirty': 1,
   };
 }
 
@@ -1171,7 +1432,20 @@ Map<String, Object?> _photoToRow(SurveyPhoto p) {
     'position': p.position,
     'local_path': p.localPath,
     'remote_path': p.remotePath,
+    'dirty': 1,
   };
+}
+
+bool _photoRowUnchanged(
+  Map<String, Object?> existing,
+  Map<String, Object?> updated,
+) {
+  return existing['owner_type'] == updated['owner_type'] &&
+      existing['owner_id'] == updated['owner_id'] &&
+      existing['slot'] == updated['slot'] &&
+      existing['position'] == updated['position'] &&
+      existing['local_path'] == updated['local_path'] &&
+      existing['remote_path'] == updated['remote_path'];
 }
 
 SurveyPhoto _photoFromRow(Map<String, Object?> r) {
@@ -1203,6 +1477,7 @@ Map<String, Object?> _bomManualEntryToRow(BomManualEntry e) {
     'group_code': e.group.code,
     'added_by': e.addedBy,
     'added_at': e.addedAt.toIso8601String(),
+    'dirty': 1,
   };
 }
 
@@ -1242,6 +1517,7 @@ Map<String, Object?> _bomSnapshotToRow(BomSnapshot s) {
     'status': s.status,
     'finalized_by': s.finalizedBy,
     'finalized_at': s.finalizedAt.toIso8601String(),
+    'dirty': 1,
   };
 }
 
@@ -1274,6 +1550,7 @@ Map<String, Object?> _bomSnapshotLineToRow(BomSnapshotLine l) {
     // manual (D/E/G).
     'group_code': l.group.code,
     'source': l.source.name, // literal 'auto' | 'manual'
+    'dirty': 1,
   };
 }
 
@@ -1304,6 +1581,7 @@ Map<String, Object?> _bomRevisionToRow(BomRevision v) {
     'reason': v.reason,
     'created_by': v.createdBy,
     'created_at': v.createdAt.toIso8601String(),
+    'dirty': 1,
   };
 }
 
@@ -1334,6 +1612,7 @@ Map<String, Object?> _bomRevisionLineToRow(BomRevisionLine l) {
     // Literal 'A'..'G' — mirrors bom_snapshot_lines.group_code; a revision
     // line is not restricted to D/E/G like bom_manual_entries.
     'group_code': l.group.code,
+    'dirty': 1,
   };
 }
 
