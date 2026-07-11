@@ -82,7 +82,27 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Blocks')),
+      appBar: AppBar(
+        title: const Text('Blocks'),
+        actions: [
+          IconButton(
+            tooltip: 'Save blocks',
+            onPressed: _saving ? null : _save,
+            icon: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.save_outlined),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addBlock,
+        icon: const Icon(Icons.add),
+        label: const Text('Add block'),
+      ),
       body: ListView(
         controller: _scrollController,
         padding: const EdgeInsets.all(16),
@@ -94,11 +114,6 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
                   'Blocks for "${widget.site.name}"',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
-              ),
-              TextButton.icon(
-                onPressed: _addBlock,
-                icon: const Icon(Icons.add),
-                label: const Text('Add block'),
               ),
             ],
           ),
@@ -130,18 +145,9 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
                 ],
               ),
             ),
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_outlined),
-            label: const Text('Save blocks'),
-          ),
+          // Clears the floating "Add block" button so the last row's text
+          // field and delete icon stay reachable when scrolled to the end.
+          const SizedBox(height: 96),
         ],
       ),
     );
