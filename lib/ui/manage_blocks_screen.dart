@@ -26,6 +26,7 @@ class ManageBlocksScreen extends StatefulWidget {
 class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
   final _scrollController = ScrollController();
   final List<TextEditingController> _blockControllers = [];
+  final List<FocusNode> _blockFocusNodes = [];
   bool _saving = false;
 
   @override
@@ -33,6 +34,7 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
     super.initState();
     for (final block in widget.site.blocks) {
       _blockControllers.add(TextEditingController(text: block));
+      _blockFocusNodes.add(FocusNode());
     }
   }
 
@@ -42,11 +44,17 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
     for (final c in _blockControllers) {
       c.dispose();
     }
+    for (final f in _blockFocusNodes) {
+      f.dispose();
+    }
     super.dispose();
   }
 
   void _addBlock() {
-    setState(() => _blockControllers.add(TextEditingController()));
+    setState(() {
+      _blockControllers.add(TextEditingController());
+      _blockFocusNodes.add(FocusNode());
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -55,6 +63,7 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
           curve: Curves.easeOut,
         );
       }
+      _blockFocusNodes.last.requestFocus();
     });
   }
 
@@ -62,6 +71,8 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
     setState(() {
       _blockControllers[index].dispose();
       _blockControllers.removeAt(index);
+      _blockFocusNodes[index].dispose();
+      _blockFocusNodes.removeAt(index);
     });
   }
 
@@ -131,6 +142,7 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
                   Expanded(
                     child: TextField(
                       controller: _blockControllers[i],
+                      focusNode: _blockFocusNodes[i],
                       decoration: InputDecoration(
                         labelText: 'Block ${i + 1}',
                         border: const OutlineInputBorder(),
