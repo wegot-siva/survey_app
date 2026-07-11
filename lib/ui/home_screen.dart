@@ -481,6 +481,104 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Groups Sales' surveys into two tabs by status — display only, no status
+  /// transitions happen here (mirrors [_buildEngineerGroupedList]). "Assigned"
+  /// covers everything not yet fully approved ([SurveyStatus.assigned],
+  /// [SurveyStatus.inProgress], [SurveyStatus.submitted], or no status at
+  /// all, defensively); "Completed" is [SurveyStatus.approved] /
+  /// [SurveyStatus.released] — the same two statuses the existing row
+  /// subtitle already treats as "ready" (see [_salesSiteTile]).
+  Widget _buildSalesGroupedList(List<Site> sites) {
+    final assigned = sites
+        .where(
+          (s) =>
+              s.status == SurveyStatus.assigned ||
+              s.status == SurveyStatus.inProgress ||
+              s.status == SurveyStatus.submitted ||
+              s.status == null,
+        )
+        .toList(growable: false);
+    final completed = sites
+        .where(
+          (s) =>
+              s.status == SurveyStatus.approved ||
+              s.status == SurveyStatus.released,
+        )
+        .toList(growable: false);
+
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          TabBar(
+            tabs: [
+              _tabLabelWithBadge(context, 'Assigned', assigned.length),
+              _tabLabelWithBadge(context, 'Completed', completed.length),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                _salesSiteGroupList(assigned),
+                _salesSiteGroupList(completed),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _salesSiteGroupList(List<Site> sites) {
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: sites.isEmpty
+          ? ListView(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Center(
+                    child: Text(
+                      _query.isEmpty
+                          ? 'No surveys in this group yet.'
+                          : 'No sites found.',
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : ListView.separated(
+              itemCount: sites.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, i) => _salesSiteTile(sites[i]),
+            ),
+    );
+  }
+
+  /// Same row rendering the flat list already used for Sales — extracted so
+  /// the grouped tabs and the (untouched) flat list for other roles don't
+  /// duplicate-and-drift.
+  Widget _salesSiteTile(Site site) {
+    final isReadyForSales =
+        site.status == SurveyStatus.approved ||
+        site.status == SurveyStatus.released;
+    return ListTile(
+      leading: const Icon(Icons.location_city_outlined),
+      title: Text(site.name),
+      subtitle: Text(
+        isReadyForSales
+            ? 'Approved · ready  ·  Assigned to: '
+                  '${site.assignedTo ?? 'Unassigned'}'
+            : 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
+                  '· Status: ${site.status ?? 'Not assigned'}',
+      ),
+      trailing: isReadyForSales
+          ? const Icon(Icons.check_circle, color: Colors.green)
+          : const Icon(Icons.chevron_right),
+      onTap: () => _openSite(site),
+    );
+  }
+
   void _openSearch() {
     setState(() => _searchOpen = true);
   }
@@ -579,6 +677,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? const Center(child: Text('No sites found.'))
                 : widget.session.currentRole == UserRole.engineer
                 ? _buildEngineerGroupedList(_filteredSites)
+                : widget.session.currentRole == UserRole.sales
+                ? _buildSalesGroupedList(_filteredSites)
                 : RefreshIndicator(
                     onRefresh: _load,
                     child: ListView.separated(
