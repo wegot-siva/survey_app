@@ -12,11 +12,16 @@ class DuctLorasListScreen extends StatefulWidget {
     required this.repository,
     required this.site,
     this.readOnly = false,
+    this.isAdmin = false,
   });
 
   final SurveyRepository repository;
   final Site site;
   final bool readOnly;
+
+  /// Threaded through to [DuctLoraFormScreen] — see its doc for what this
+  /// shows.
+  final bool isAdmin;
 
   @override
   State<DuctLorasListScreen> createState() => _DuctLorasListScreenState();
@@ -62,6 +67,7 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
           availableSeries: _availableSeries,
           existing: existing,
           readOnly: widget.readOnly,
+          isAdmin: widget.isAdmin,
         ),
       ),
     );

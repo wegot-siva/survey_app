@@ -13,11 +13,16 @@ class InletPointsListScreen extends StatefulWidget {
     required this.repository,
     required this.site,
     this.readOnly = false,
+    this.isAdmin = false,
   });
 
   final SurveyRepository repository;
   final Site site;
   final bool readOnly;
+
+  /// Threaded through to [InletPointFormScreen] — see its doc for what this
+  /// shows.
+  final bool isAdmin;
 
   @override
   State<InletPointsListScreen> createState() => _InletPointsListScreenState();
@@ -51,6 +56,7 @@ class _InletPointsListScreenState extends State<InletPointsListScreen> {
           site: widget.site,
           existing: existing,
           readOnly: widget.readOnly,
+          isAdmin: widget.isAdmin,
         ),
       ),
     );
@@ -67,6 +73,7 @@ class _InletPointsListScreenState extends State<InletPointsListScreen> {
           repository: widget.repository,
           site: widget.site,
           duplicateFrom: source.copyAsDuplicate(),
+          isAdmin: widget.isAdmin,
         ),
       ),
     );

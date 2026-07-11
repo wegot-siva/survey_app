@@ -18,11 +18,17 @@ class FooterScreen extends StatefulWidget {
     required this.repository,
     required this.site,
     this.readOnly = false,
+    this.isAdmin = false,
   });
 
   final SurveyRepository repository;
   final Site site;
   final bool readOnly;
+
+  /// Shows the Admin-only "Fill test data" shortcut — a dev/QA tool that
+  /// fills every mandatory field with a placeholder value so the section
+  /// passes validation instantly. Never shown to any other role.
+  final bool isAdmin;
 
   @override
   State<FooterScreen> createState() => _FooterScreenState();
@@ -174,6 +180,20 @@ class _FooterScreenState extends State<FooterScreen> {
     if (picked != null) setState(() => _surveyDate = picked);
   }
 
+  /// Admin-only dev/QA shortcut — fills every mandatory field with a
+  /// placeholder value so the section passes validation immediately.
+  void _fillTestData() {
+    setState(() {
+      _surveyorName.text = 'Test Surveyor';
+      _surveyDate = DateTime.now();
+      _surveyorNameError = null;
+      _surveyDateError = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Test data filled.')),
+    );
+  }
+
   Future<void> _save() async {
     final surveyorName = _surveyorName.text.trim();
 
@@ -225,6 +245,12 @@ class _FooterScreenState extends State<FooterScreen> {
       appBar: AppBar(
         title: const Text('Footer'),
         actions: [
+          if (widget.isAdmin && !_viewOnly)
+            IconButton(
+              tooltip: 'Fill test data (Admin only)',
+              onPressed: _fillTestData,
+              icon: const Icon(Icons.auto_fix_high),
+            ),
           if (_viewOnly)
             IconButton(
               tooltip: 'Edit',

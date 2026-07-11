@@ -95,11 +95,18 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     return count >= target ? _SectionStatus.complete : _SectionStatus.partial;
   }
 
+  /// Gates the Admin-only "Fill test data" dev/QA shortcut on every survey
+  /// section screen — see e.g. [ClientInputsScreen.isAdmin].
+  bool get _isAdmin => widget.session.currentRole == UserRole.admin;
+
   Future<void> _openClientInputs(Site site) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            ClientInputsScreen(repository: widget.repository, site: site),
+        builder: (_) => ClientInputsScreen(
+          repository: widget.repository,
+          site: site,
+          isAdmin: _isAdmin,
+        ),
       ),
     );
     await _load();
@@ -108,8 +115,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   Future<void> _openSourcePoints(Site site) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            SourcePointsListScreen(repository: widget.repository, site: site),
+        builder: (_) => SourcePointsListScreen(
+          repository: widget.repository,
+          site: site,
+          isAdmin: _isAdmin,
+        ),
       ),
     );
     await _load();
@@ -118,8 +128,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   Future<void> _openInletPoints(Site site) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            InletPointsListScreen(repository: widget.repository, site: site),
+        builder: (_) => InletPointsListScreen(
+          repository: widget.repository,
+          site: site,
+          isAdmin: _isAdmin,
+        ),
       ),
     );
     await _load();
@@ -128,8 +141,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   Future<void> _openDuctLoras(Site site) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            DuctLorasListScreen(repository: widget.repository, site: site),
+        builder: (_) => DuctLorasListScreen(
+          repository: widget.repository,
+          site: site,
+          isAdmin: _isAdmin,
+        ),
       ),
     );
     await _load();
@@ -138,8 +154,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   Future<void> _openGateways(Site site) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            GatewaysListScreen(repository: widget.repository, site: site),
+        builder: (_) => GatewaysListScreen(
+          repository: widget.repository,
+          site: site,
+          isAdmin: _isAdmin,
+        ),
       ),
     );
     await _load();
@@ -148,8 +167,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   Future<void> _openFooter(Site site) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            FooterScreen(repository: widget.repository, site: site),
+        builder: (_) => FooterScreen(
+          repository: widget.repository,
+          site: site,
+          isAdmin: _isAdmin,
+        ),
       ),
     );
     await _load();

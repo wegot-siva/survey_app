@@ -23,6 +23,7 @@ class DuctLoraFormScreen extends StatefulWidget {
     required this.availableSeries,
     this.existing,
     this.readOnly = false,
+    this.isAdmin = false,
   });
 
   final SurveyRepository repository;
@@ -30,6 +31,11 @@ class DuctLoraFormScreen extends StatefulWidget {
   final List<String> availableSeries;
   final DuctLora? existing;
   final bool readOnly;
+
+  /// Shows the Admin-only "Fill test data" shortcut — a dev/QA tool that
+  /// fills every mandatory field with a placeholder value so the section
+  /// passes validation instantly. Never shown to any other role.
+  final bool isAdmin;
 
   @override
   State<DuctLoraFormScreen> createState() => _DuctLoraFormScreenState();
@@ -170,6 +176,34 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
     return list;
   }
 
+  /// Admin-only dev/QA shortcut — fills every mandatory field with a
+  /// placeholder value so the section passes validation immediately.
+  /// "Series served" can only be filled if the site already has at least
+  /// one inlet-point Series to pick from (see [widget.availableSeries]) —
+  /// if there isn't one yet, this fills what it can and says so.
+  void _fillTestData() {
+    setState(() {
+      if (widget.availableSeries.isNotEmpty) {
+        _seriesServed
+          ..clear()
+          ..add(widget.availableSeries.first);
+        _seriesServedError = null;
+      }
+      _cableLength.text = '1';
+      _cableLengthError = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          widget.availableSeries.isEmpty
+              ? 'Cable length filled — add an inlet point with a Series '
+                    'first to also fill Series served.'
+              : 'Test data filled.',
+        ),
+      ),
+    );
+  }
+
   Future<void> _save() async {
     final cableLength = double.tryParse(_cableLength.text.trim());
 
@@ -236,6 +270,12 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
               : 'Edit Duct LoRa',
         ),
         actions: [
+          if (widget.isAdmin && !_viewOnly)
+            IconButton(
+              tooltip: 'Fill test data (Admin only)',
+              onPressed: _fillTestData,
+              icon: const Icon(Icons.auto_fix_high),
+            ),
           if (_viewOnly)
             IconButton(
               tooltip: 'Edit',

@@ -21,11 +21,17 @@ class InletPointFormScreen extends StatefulWidget {
     this.existing,
     this.duplicateFrom,
     this.readOnly = false,
+    this.isAdmin = false,
   });
 
   final SurveyRepository repository;
   final Site site;
   final InletPoint? existing;
+
+  /// Shows the Admin-only "Fill test data" shortcut — a dev/QA tool that
+  /// fills every mandatory field with a placeholder value so the section
+  /// passes validation instantly. Never shown to any other role.
+  final bool isAdmin;
 
   /// Pre-fills the form from this record — via [InletPoint.copyAsDuplicate]
   /// — while still saving as a brand new record. Mutually exclusive with
@@ -255,6 +261,26 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
     );
   }
 
+  /// Admin-only dev/QA shortcut — fills every mandatory field with a
+  /// placeholder value so the section passes validation immediately.
+  void _fillTestData() {
+    setState(() {
+      _apartmentBhk.text = 'Test Apartment';
+      _sensorSize = SensorSize.values.first;
+      _sensorType = SensorType.values.first;
+      _qty.text = '1';
+      _series.text = 'Test Series';
+      _apartmentBhkError = null;
+      _sensorSizeError = null;
+      _sensorTypeError = null;
+      _qtyError = null;
+      _seriesError = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Test data filled.')),
+    );
+  }
+
   Future<void> _save() async {
     final apartmentBhk = _apartmentBhk.text.trim();
     final series = _series.text.trim();
@@ -341,6 +367,12 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
               : 'Edit inlet point',
         ),
         actions: [
+          if (widget.isAdmin && !_viewOnly)
+            IconButton(
+              tooltip: 'Fill test data (Admin only)',
+              onPressed: _fillTestData,
+              icon: const Icon(Icons.auto_fix_high),
+            ),
           if (_viewOnly)
             IconButton(
               tooltip: 'Edit',

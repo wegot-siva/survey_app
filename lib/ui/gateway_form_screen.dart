@@ -20,12 +20,18 @@ class GatewayFormScreen extends StatefulWidget {
     required this.site,
     this.existing,
     this.readOnly = false,
+    this.isAdmin = false,
   });
 
   final SurveyRepository repository;
   final Site site;
   final Gateway? existing;
   final bool readOnly;
+
+  /// Shows the Admin-only "Fill test data" shortcut — a dev/QA tool that
+  /// fills every mandatory field with a placeholder value so the section
+  /// passes validation instantly. Never shown to any other role.
+  final bool isAdmin;
 
   @override
   State<GatewayFormScreen> createState() => _GatewayFormScreenState();
@@ -180,6 +186,39 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
     return list;
   }
 
+  /// Admin-only dev/QA shortcut — fills every mandatory field with a
+  /// placeholder value so the section passes validation immediately.
+  /// "Blocks covered" can only be filled if the site already has at least
+  /// one block — if there isn't one yet, this fills what it can and says so.
+  void _fillTestData() {
+    setState(() {
+      _placement = GatewayPlacement.values.first;
+      if (widget.site.blocks.isNotEmpty) {
+        _blocksCovered
+          ..clear()
+          ..add(widget.site.blocks.first);
+        _blocksCoveredError = null;
+      }
+      _quantity.text = '1';
+      _uplinkType = UplinkType.values.first;
+      _simCoverage = SimCoverage.values.first;
+      _placementError = null;
+      _quantityError = null;
+      _uplinkTypeError = null;
+      _simCoverageError = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          widget.site.blocks.isEmpty
+              ? 'Other fields filled — add a block to the site first to '
+                    'also fill Blocks covered.'
+              : 'Test data filled.',
+        ),
+      ),
+    );
+  }
+
   Future<void> _save() async {
     final quantity = int.tryParse(_quantity.text.trim());
 
@@ -259,6 +298,12 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
               : 'Edit gateway',
         ),
         actions: [
+          if (widget.isAdmin && !_viewOnly)
+            IconButton(
+              tooltip: 'Fill test data (Admin only)',
+              onPressed: _fillTestData,
+              icon: const Icon(Icons.auto_fix_high),
+            ),
           if (_viewOnly)
             IconButton(
               tooltip: 'Edit',

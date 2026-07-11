@@ -13,11 +13,16 @@ class SourcePointsListScreen extends StatefulWidget {
     required this.repository,
     required this.site,
     this.readOnly = false,
+    this.isAdmin = false,
   });
 
   final SurveyRepository repository;
   final Site site;
   final bool readOnly;
+
+  /// Threaded through to [SourcePointFormScreen] — see its doc for what
+  /// this shows.
+  final bool isAdmin;
 
   @override
   State<SourcePointsListScreen> createState() => _SourcePointsListScreenState();
@@ -51,6 +56,7 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
           site: widget.site,
           existing: existing,
           readOnly: widget.readOnly,
+          isAdmin: widget.isAdmin,
         ),
       ),
     );
@@ -67,6 +73,7 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
           repository: widget.repository,
           site: widget.site,
           duplicateFrom: source.copyAsDuplicate(),
+          isAdmin: widget.isAdmin,
         ),
       ),
     );

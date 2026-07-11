@@ -17,11 +17,17 @@ class ClientInputsScreen extends StatefulWidget {
     required this.repository,
     required this.site,
     this.readOnly = false,
+    this.isAdmin = false,
   });
 
   final SurveyRepository repository;
   final Site site;
   final bool readOnly;
+
+  /// Shows the Admin-only "Fill test data" shortcut — a dev/QA tool that
+  /// fills every mandatory field with a placeholder value so the section
+  /// passes validation instantly. Never shown to any other role.
+  final bool isAdmin;
 
   @override
   State<ClientInputsScreen> createState() => _ClientInputsScreenState();
@@ -199,6 +205,25 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     return list;
   }
 
+  /// Admin-only dev/QA shortcut — fills every mandatory field with a
+  /// placeholder value so the section passes validation immediately. Never
+  /// touches optional/free-text fields (e.g. Notes-style fields elsewhere).
+  void _fillTestData() {
+    setState(() {
+      if (_siteName.text.trim().isEmpty) _siteName.text = widget.site.name;
+      _pocName.text = 'Test POC';
+      _pocContact.text = '9999999999';
+      _goal.text = 'Test goal of installation';
+      _siteNameError = null;
+      _pocNameError = null;
+      _pocContactError = null;
+      _goalError = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Test data filled.')),
+    );
+  }
+
   Future<void> _save() async {
     final siteName = _siteName.text.trim();
     final pocName = _pocName.text.trim();
@@ -261,6 +286,12 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
       appBar: AppBar(
         title: const Text('Client inputs'),
         actions: [
+          if (widget.isAdmin && !_viewOnly)
+            IconButton(
+              tooltip: 'Fill test data (Admin only)',
+              onPressed: _fillTestData,
+              icon: const Icon(Icons.auto_fix_high),
+            ),
           if (_viewOnly)
             IconButton(
               tooltip: 'Edit',
