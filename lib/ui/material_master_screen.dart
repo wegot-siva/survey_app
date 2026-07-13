@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
 import '../models/material_master_item.dart';
+import '../services/material_master_cascade_test_seed.dart';
 import 'material_master_audit_log_screen.dart';
 import 'material_master_form_screen.dart';
 
@@ -58,6 +60,44 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
           existing: existing,
         ),
       ),
+    );
+    await _load();
+  }
+
+  /// Developer-only: seeds a disposable set of group C plumbing rows with
+  /// material_type/category/variant/size_mm/size_display populated, so the
+  /// "Add materials" picker's 4-level cascade has something to show on a test
+  /// build — see `material_master_cascade_test_seed.dart`. Compiled out of
+  /// release builds entirely (a build-type concern, not a role/permission
+  /// one), same convention as the "Test Supabase connection" action on the
+  /// Sites home screen.
+  Future<void> _seedCascadeTestData() async {
+    final count = await seedCascadeTestData(
+      widget.repository,
+      changedByRole: widget.changedByRole,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          count == 0
+              ? 'Cascade test data already present — remove it first to reseed.'
+              : 'Seeded $count cascade test rows (group C, SKU TEST-CASCADE-*).',
+        ),
+      ),
+    );
+    await _load();
+  }
+
+  /// Developer-only: removes every row [_seedCascadeTestData] added.
+  Future<void> _removeCascadeTestData() async {
+    final count = await removeCascadeTestData(
+      widget.repository,
+      changedByRole: widget.changedByRole,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Removed $count cascade test rows.')),
     );
     await _load();
   }
@@ -125,6 +165,18 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
       appBar: AppBar(
         title: const Text('Material Master'),
         actions: [
+          if (kDebugMode) ...[
+            IconButton(
+              tooltip: 'Seed cascade test data (dev only)',
+              onPressed: _seedCascadeTestData,
+              icon: const Icon(Icons.science_outlined),
+            ),
+            IconButton(
+              tooltip: 'Remove cascade test data (dev only)',
+              onPressed: _removeCascadeTestData,
+              icon: const Icon(Icons.science),
+            ),
+          ],
           IconButton(
             tooltip: 'Change log',
             onPressed: _openChangeLog,

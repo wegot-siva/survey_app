@@ -107,14 +107,18 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     super.dispose();
   }
 
-  /// True when group C should show the 4-level cascade instead of the flat
-  /// dropdown — i.e. the target group is C and at least one catalog row
-  /// carries a non-empty [MaterialMasterItem.materialType]. Rows without one
-  /// (D/E/F/G, and any C row from the earlier Lumax-derived seed) never
-  /// appear in the cascade — they're only reachable via the flat dropdown
-  /// under a different target group, unchanged from before.
+  /// True when the target group should show the 4-level cascade instead of
+  /// the flat dropdown — i.e. the target group is C (Plumbing accessories)
+  /// or D (Plumbing rework — reworks draw from the same plumbing catalog),
+  /// and at least one catalog row carries a non-empty
+  /// [MaterialMasterItem.materialType]. The cascade under D reads the exact
+  /// same material_type-tagged rows as C — those rows' own `group` stays C;
+  /// only the entry being saved gets D (see [_save], unchanged). Rows without
+  /// a materialType (E/F/G, and any C row from the earlier Lumax-derived
+  /// seed) never appear in the cascade — they're only reachable via the flat
+  /// dropdown under a different target group, unchanged from before.
   bool get _cascadeModeActive {
-    if (_group != MaterialGroup.c) return false;
+    if (_group != MaterialGroup.c && _group != MaterialGroup.d) return false;
     return _catalog.any((m) => (m.materialType ?? '').isNotEmpty);
   }
 
