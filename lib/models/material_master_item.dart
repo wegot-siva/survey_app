@@ -80,6 +80,11 @@ class MaterialMasterItem {
     this.formulaDivisor,
     this.variableSource,
     this.notes = '',
+    this.materialType,
+    this.category,
+    this.variant,
+    this.sizeMm,
+    this.sizeDisplay,
   });
 
   final String id;
@@ -115,6 +120,29 @@ class MaterialMasterItem {
 
   final String notes;
 
+  /// The following five fields drive the 4-level cascading picker (Material
+  /// Type → Category → Variant → Size) used only for group C's plumbing
+  /// catalog (uPVC/CPVC fittings). All null for every other row — D/E/F/G
+  /// rows, and any C row from the earlier Lumax-derived seed, keep using the
+  /// flat single-dropdown picker unaffected by these columns.
+  ///
+  /// e.g. 'uPVC', 'CPVC'.
+  final String? materialType;
+
+  /// e.g. 'Elbow 90°', 'Tee', 'Coupler'.
+  final String? category;
+
+  /// e.g. 'SCH40', 'SCH80', 'Brass Threaded'.
+  final String? variant;
+
+  /// Nominal DN in mm — sort/join field only, never shown directly. For a
+  /// reducer/multi-size fitting, this is the larger of the two sizes.
+  final double? sizeMm;
+
+  /// Human-readable size shown in the picker, e.g. '1¼"' or '1¼" x 1"' for a
+  /// reducer.
+  final String? sizeDisplay;
+
   /// Returns a copy with a different [id]. Used when the repository assigns
   /// an id to a freshly added row.
   MaterialMasterItem copyWithId(String newId) => MaterialMasterItem(
@@ -132,5 +160,10 @@ class MaterialMasterItem {
     formulaDivisor: formulaDivisor,
     variableSource: variableSource,
     notes: notes,
+    materialType: materialType,
+    category: category,
+    variant: variant,
+    sizeMm: sizeMm,
+    sizeDisplay: sizeDisplay,
   );
 }

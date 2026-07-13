@@ -1533,6 +1533,11 @@ Map<String, Object?> _materialMasterItemToRow(MaterialMasterItem m) {
     'formula_divisor': m.formulaDivisor,
     'variable_source': m.variableSource?.name,
     'notes': m.notes,
+    'material_type': m.materialType,
+    'category': m.category,
+    'variant': m.variant,
+    'size_mm': m.sizeMm,
+    'size_display': m.sizeDisplay,
     'dirty': 1,
   };
 }
@@ -1563,6 +1568,11 @@ MaterialMasterItem _materialMasterItemFromRow(Map<String, Object?> r) {
       r['variable_source'] as String?,
     ),
     notes: (r['notes'] as String?) ?? '',
+    materialType: r['material_type'] as String?,
+    category: r['category'] as String?,
+    variant: r['variant'] as String?,
+    sizeMm: (r['size_mm'] as num?)?.toDouble(),
+    sizeDisplay: r['size_display'] as String?,
   );
 }
 

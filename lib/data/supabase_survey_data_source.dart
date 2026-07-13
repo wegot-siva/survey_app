@@ -382,6 +382,11 @@ Map<String, Object?> _materialMasterItemToRemoteRow(MaterialMasterItem m) {
     'formula_divisor': m.formulaDivisor,
     'variable_source': m.variableSource?.name,
     'notes': m.notes,
+    'material_type': m.materialType,
+    'category': m.category,
+    'variant': m.variant,
+    'size_mm': m.sizeMm,
+    'size_display': m.sizeDisplay,
   };
 }
 

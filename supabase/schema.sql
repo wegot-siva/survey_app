@@ -243,7 +243,12 @@ create table if not exists public.material_master_items (
   derived_formula      text,                        -- enum name; e.g. ceilWiredSensorsDividedByDivisor
   formula_divisor      double precision,
   variable_source      text,                        -- enum name; e.g. ductLoraCableLength
-  notes                text
+  notes                text,
+  material_type        text,                        -- e.g. 'uPVC', 'CPVC'; only set on group C's plumbing catalog
+  category              text,                        -- e.g. 'Elbow 90°', 'Tee', 'Coupler'
+  variant               text,                        -- e.g. 'SCH40', 'SCH80', 'Brass Threaded'
+  size_mm               double precision,            -- nominal DN in mm; sort/join field only, never shown directly
+  size_display          text                         -- human-readable size, e.g. '1¼"' or '1¼" x 1"' for a reducer
 );
 
 alter table public.material_master_items enable row level security;
@@ -528,3 +533,24 @@ alter table public.bom_revision_lines
   add column if not exists item_label    text,
   add column if not exists sensor_size   text,
   add column if not exists sensor_type   text;
+
+-- ---------------------------------------------------------------------------
+-- Group C plumbing catalog (uPVC/CPVC fittings) — five columns to drive a
+-- 4-level cascading picker (Material Type -> Category -> Variant -> Size) in
+-- the "Add materials" screen, instead of the flat single-dropdown every other
+-- group still uses.
+--
+-- `alter table add column if not exists` covers projects that already ran the
+-- material_master_items block above before these columns existed; the
+-- `create table` above already includes them for fresh setups. All nullable
+-- and unset on every existing row (D/E/F/G, and any C row from the earlier
+-- Lumax-derived seed) — those keep using the flat picker unaffected.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.material_master_items
+  add column if not exists material_type text,
+  add column if not exists category      text,
+  add column if not exists variant       text,
+  add column if not exists size_mm       double precision,
+  add column if not exists size_display  text;

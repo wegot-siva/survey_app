@@ -11,7 +11,7 @@ import 'material_master_seed.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 18;
+const int _dbVersion = 19;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -221,6 +221,29 @@ Future<Database> openAppDatabase() async {
         await db.execute(
           'ALTER TABLE inlet_points ADD COLUMN pending_delete '
           'INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      // v18 -> v19: group C plumbing catalog (uPVC/CPVC fittings) needs finer
+      // structure than a flat row to drive a 4-level cascading picker
+      // (Material Type -> Category -> Variant -> Size). All nullable — every
+      // existing row (D/E/F/G, and any C row from the earlier Lumax-derived
+      // seed) has these columns unset and keeps using the flat single-dropdown
+      // picker unaffected.
+      if (oldVersion < 19) {
+        await db.execute(
+          'ALTER TABLE material_master_items ADD COLUMN material_type TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE material_master_items ADD COLUMN category TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE material_master_items ADD COLUMN variant TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE material_master_items ADD COLUMN size_mm REAL',
+        );
+        await db.execute(
+          'ALTER TABLE material_master_items ADD COLUMN size_display TEXT',
         );
       }
     },
@@ -496,10 +519,14 @@ Future<void> _migrateDuctLoraPlacementPhotoToPhotosTable(Database db) async {
   }
 }
 
-/// Material Master table (v5, +sku in v9, +item_label in v13). Admin-editable reference data —
-/// NOT site-scoped (no FK to sites). The BoM engine reads every quantity from
-/// this table at generation time; it starts empty and is populated via the
-/// admin screen.
+/// Material Master table (v5, +sku in v9, +item_label in v13,
+/// +material_type/category/variant/size_mm/size_display in v19).
+/// Admin-editable reference data — NOT site-scoped (no FK to sites). The BoM
+/// engine reads every quantity from this table at generation time; it starts
+/// empty and is populated via the admin screen. The v19 columns are nullable
+/// and only ever set on group C's plumbing catalog rows, to drive the 4-level
+/// cascading picker — every other row leaves them null and keeps using the
+/// flat single-dropdown picker.
 Future<void> _createMaterialMasterItemsTable(Database db) async {
   await db.execute('''
     CREATE TABLE material_master_items (
@@ -517,6 +544,11 @@ Future<void> _createMaterialMasterItemsTable(Database db) async {
       formula_divisor      REAL,
       variable_source      TEXT,
       notes                TEXT,
+      material_type        TEXT,
+      category             TEXT,
+      variant              TEXT,
+      size_mm              REAL,
+      size_display         TEXT,
       dirty                INTEGER NOT NULL DEFAULT 1
     )
   ''');

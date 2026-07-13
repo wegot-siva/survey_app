@@ -7,9 +7,17 @@ import '../models/material_master_item.dart';
 import '../models/survey_options.dart';
 import 'widgets/form_fields.dart';
 
-/// The reusable "Add materials" picker: pick a Material Master catalog row
-/// (its name/SKU/unit come along for the ride), enter a quantity, and file it
-/// under C, D, E, F, or G. Add or edit a single [BomManualEntry].
+/// The reusable "Add materials" picker: choose a target group (C, D, E, F, or
+/// G), pick a Material Master catalog row (its name/SKU/unit come along for
+/// the ride), and enter a quantity. Add or edit a single [BomManualEntry].
+///
+/// Group C's plumbing catalog (uPVC/CPVC fittings) can carry finer structure
+/// ([MaterialMasterItem.materialType]/[category]/[variant]/[sizeMm]/
+/// [sizeDisplay]) to drive a 4-level cascading selector (Material Type ->
+/// Category -> Variant -> Size) instead of one flat dropdown — see
+/// [_cascadeModeActive]. Every other group, and any C row from the earlier
+/// Lumax-derived seed (material_type unset), keeps the flat dropdown exactly
+/// as before.
 ///
 /// Mechanics only — this entry is not linked back to the catalog row's id, so
 /// it survives that row being edited or removed later, and it is never read
@@ -44,10 +52,11 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
   List<MaterialMasterItem> _catalog = const [];
   bool _loadingCatalog = true;
 
-  /// The catalog row picked via the dropdown, if any — only used to update
-  /// [_materialName]/[_sku]/[_unit] when a selection is (re)made. Starts null
-  /// even when editing (an entry isn't linked back to a catalog row by id);
-  /// the copied fields below already carry the existing values in that case.
+  /// The catalog row picked (flat dropdown or resolved cascade leaf), if
+  /// any — only used to update [_materialName]/[_sku]/[_unit] when a
+  /// selection is (re)made. Starts null even when editing (an entry isn't
+  /// linked back to a catalog row by id); the copied fields below already
+  /// carry the existing values in that case.
   MaterialMasterItem? _selectedMaterial;
 
   String _materialName = '';
@@ -57,6 +66,12 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
   SensorType? _sensorType;
   String _unit = '';
   MaterialGroup? _group;
+
+  // Cascade-only selections (group C with material_type-populated rows).
+  // Each level resets everything below it when changed.
+  String? _cascadeMaterialType;
+  String? _cascadeCategory;
+  String? _cascadeVariant;
 
   bool _saving = false;
 
@@ -92,18 +107,119 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     super.dispose();
   }
 
-  void _onMaterialSelected(MaterialMasterItem? item) {
+  /// True when group C should show the 4-level cascade instead of the flat
+  /// dropdown — i.e. the target group is C and at least one catalog row
+  /// carries a non-empty [MaterialMasterItem.materialType]. Rows without one
+  /// (D/E/F/G, and any C row from the earlier Lumax-derived seed) never
+  /// appear in the cascade — they're only reachable via the flat dropdown
+  /// under a different target group, unchanged from before.
+  bool get _cascadeModeActive {
+    if (_group != MaterialGroup.c) return false;
+    return _catalog.any((m) => (m.materialType ?? '').isNotEmpty);
+  }
+
+  void _onGroupChanged(MaterialGroup? newGroup) {
+    final wasCascade = _cascadeModeActive;
+    setState(() => _group = newGroup);
+    if (_cascadeModeActive != wasCascade) {
+      // Switching between flat and cascade mode leaves the other mode's
+      // selection meaningless — clear it so the summary card can't show a
+      // material the currently-visible selector didn't pick.
+      _clearMaterialSelection();
+    }
+  }
+
+  void _clearMaterialSelection() {
     setState(() {
-      _selectedMaterial = item;
-      if (item != null) {
-        _materialName = item.materialName;
-        _sku = item.sku;
-        _itemLabel = item.itemLabel;
-        _sensorSize = item.sensorSize;
-        _sensorType = item.sensorType;
-        _unit = item.unit;
-      }
+      _selectedMaterial = null;
+      _materialName = '';
+      _sku = '';
+      _itemLabel = '';
+      _sensorSize = null;
+      _sensorType = null;
+      _unit = '';
+      _cascadeMaterialType = null;
+      _cascadeCategory = null;
+      _cascadeVariant = null;
     });
+  }
+
+  void _onMaterialSelected(MaterialMasterItem? item) {
+    setState(() => _applySelectedMaterial(item));
+  }
+
+  /// Same field assignment as [_onMaterialSelected], without wrapping its own
+  /// `setState` — for cascade `onChanged` handlers that need to clear the
+  /// resolved material as part of a single setState alongside a level change.
+  void _applySelectedMaterial(MaterialMasterItem? item) {
+    _selectedMaterial = item;
+    if (item == null) {
+      _materialName = '';
+      _sku = '';
+      _itemLabel = '';
+      _sensorSize = null;
+      _sensorType = null;
+      _unit = '';
+    } else {
+      _materialName = item.materialName;
+      _sku = item.sku;
+      _itemLabel = item.itemLabel;
+      _sensorSize = item.sensorSize;
+      _sensorType = item.sensorType;
+      _unit = item.unit;
+    }
+  }
+
+  List<String> _distinct(Iterable<String?> values) {
+    final seen = <String>{};
+    for (final v in values) {
+      if (v != null && v.isNotEmpty) seen.add(v);
+    }
+    final list = seen.toList()..sort();
+    return list;
+  }
+
+  List<String> get _cascadeMaterialTypes =>
+      _distinct(_catalog.map((m) => m.materialType));
+
+  List<String> get _cascadeCategories {
+    final materialType = _cascadeMaterialType;
+    if (materialType == null) return const [];
+    return _distinct(
+      _catalog
+          .where((m) => m.materialType == materialType)
+          .map((m) => m.category),
+    );
+  }
+
+  List<String> get _cascadeVariants {
+    final materialType = _cascadeMaterialType;
+    final category = _cascadeCategory;
+    if (materialType == null || category == null) return const [];
+    return _distinct(
+      _catalog
+          .where((m) => m.materialType == materialType && m.category == category)
+          .map((m) => m.variant),
+    );
+  }
+
+  List<MaterialMasterItem> get _cascadeSizeRows {
+    final materialType = _cascadeMaterialType;
+    final category = _cascadeCategory;
+    final variant = _cascadeVariant;
+    if (materialType == null || category == null || variant == null) {
+      return const [];
+    }
+    final rows = _catalog
+        .where(
+          (m) =>
+              m.materialType == materialType &&
+              m.category == category &&
+              m.variant == variant,
+        )
+        .toList();
+    rows.sort((a, b) => (a.sizeMm ?? 0).compareTo(b.sizeMm ?? 0));
+    return rows;
   }
 
   Future<void> _save() async {
@@ -164,6 +280,71 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     return '$namePart — ${m.unit}';
   }
 
+  Widget _buildFlatDropdown() {
+    return AppDropdownField<MaterialMasterItem>(
+      label: 'Material (from catalog)',
+      value: _selectedMaterial,
+      items: _catalog,
+      itemLabel: _catalogItemLabel,
+      emptyHint:
+          'No Material Master rows yet — add some first (home '
+          'screen, Admin only).',
+      onChanged: _onMaterialSelected,
+    );
+  }
+
+  Widget _buildCascadeFields() {
+    return Column(
+      children: [
+        AppDropdownField<String>(
+          label: 'Material Type',
+          value: _cascadeMaterialType,
+          items: _cascadeMaterialTypes,
+          itemLabel: (t) => t,
+          onChanged: (v) => setState(() {
+            _cascadeMaterialType = v;
+            _cascadeCategory = null;
+            _cascadeVariant = null;
+            _applySelectedMaterial(null);
+          }),
+        ),
+        AppDropdownField<String>(
+          label: 'Category',
+          value: _cascadeCategory,
+          items: _cascadeCategories,
+          itemLabel: (t) => t,
+          emptyHint: 'Choose a Material Type first.',
+          onChanged: (v) => setState(() {
+            _cascadeCategory = v;
+            _cascadeVariant = null;
+            _applySelectedMaterial(null);
+          }),
+        ),
+        AppDropdownField<String>(
+          label: 'Variant',
+          value: _cascadeVariant,
+          items: _cascadeVariants,
+          itemLabel: (t) => t,
+          emptyHint: 'Choose a Category first.',
+          onChanged: (v) => setState(() {
+            _cascadeVariant = v;
+            _applySelectedMaterial(null);
+          }),
+        ),
+        AppDropdownField<MaterialMasterItem>(
+          label: 'Size',
+          value: _selectedMaterial,
+          items: _cascadeSizeRows,
+          itemLabel: (m) => m.sizeDisplay?.isNotEmpty == true
+              ? m.sizeDisplay!
+              : _catalogItemLabel(m),
+          emptyHint: 'Choose a Variant first.',
+          onChanged: _onMaterialSelected,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -175,16 +356,15 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                AppDropdownField<MaterialMasterItem>(
-                  label: 'Material (from catalog)',
-                  value: _selectedMaterial,
-                  items: _catalog,
-                  itemLabel: _catalogItemLabel,
-                  emptyHint:
-                      'No Material Master rows yet — add some first (home '
-                      'screen, Admin only).',
-                  onChanged: _onMaterialSelected,
+                AppDropdownField<MaterialGroup>(
+                  label: 'Group (C, D, E, F, or G only)',
+                  value: _group,
+                  items: kBomManualEntryGroups,
+                  itemLabel: (g) => '${g.code} — ${g.label}',
+                  onChanged: _onGroupChanged,
                 ),
+                const SizedBox(height: 8),
+                if (_cascadeModeActive) _buildCascadeFields() else _buildFlatDropdown(),
                 if (_materialName.isNotEmpty)
                   Card(
                     child: ListTile(
@@ -203,13 +383,6 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                   ],
-                ),
-                AppDropdownField<MaterialGroup>(
-                  label: 'Group (C, D, E, F, or G only)',
-                  value: _group,
-                  items: kBomManualEntryGroups,
-                  itemLabel: (g) => '${g.code} — ${g.label}',
-                  onChanged: (v) => setState(() => _group = v),
                 ),
                 const SizedBox(height: 24),
                 FilledButton.icon(
