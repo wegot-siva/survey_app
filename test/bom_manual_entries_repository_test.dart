@@ -1,8 +1,9 @@
-// Contract tests for the D/E/G "Add materials" picker's storage, exercised
+// Contract tests for the "Add materials" picker's storage, exercised
 // through the in-memory repository: create/edit/delete, scoping to a single
-// survey, and that the group stays restricted to D/E/G at the picker layer
-// (this test only asserts the model/repository don't reject other groups
-// outright — enforcement of D/E/G-only lives in the form UI).
+// survey, and that the group stays restricted to kBomManualEntryGroups at the
+// picker layer (this test only asserts the model/repository don't reject
+// other groups outright — enforcement of the allowed set lives in the form
+// UI).
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -29,20 +30,24 @@ void main() {
         addedAt: DateTime(2026, 1, 1),
       );
 
-  test('kBomManualEntryGroups is exactly D, E, G', () {
+  test('kBomManualEntryGroups is exactly C, D, E, F, G', () {
     expect(kBomManualEntryGroups, [
+      MaterialGroup.c,
       MaterialGroup.d,
       MaterialGroup.e,
+      MaterialGroup.f,
       MaterialGroup.g,
     ]);
   });
 
-  test('the three allowed groups .code is the literal D/E/G the DB stores', () {
+  test('the five allowed groups .code is the literal value the DB stores', () {
     // sqflite/Supabase row mapping persists `.code` (not `.name`) for this
     // table's group_code column — locks that contract in against MaterialGroup
     // changing shape later without this table's storage format being noticed.
+    expect(MaterialGroup.c.code, 'C');
     expect(MaterialGroup.d.code, 'D');
     expect(MaterialGroup.e.code, 'E');
+    expect(MaterialGroup.f.code, 'F');
     expect(MaterialGroup.g.code, 'G');
   });
 

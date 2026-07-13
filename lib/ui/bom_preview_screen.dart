@@ -125,6 +125,15 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Future<void> _generate() async {
     setState(() => _loading = true);
     final materials = await widget.repository.getMaterialMasterItems();
+    // C (Plumbing accessories) and F (Consumables) moved to manual-picker-only
+    // entry — excluded here so the engine stops auto-generating lines for
+    // them, but the rows themselves stay in Material Master for the picker
+    // to read from.
+    final autoMaterials = materials
+        .where(
+          (m) => m.group != MaterialGroup.c && m.group != MaterialGroup.f,
+        )
+        .toList();
     final sourcePoints = await widget.repository.getSourcePoints(
       widget.site.id,
     );
@@ -134,7 +143,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     final ductLoras = await widget.repository.getDuctLoras(widget.site.id);
 
     final bom = const BomEngine().generate(
-      materials: materials,
+      materials: autoMaterials,
       sourcePoints: sourcePoints,
       inletPoints: inletPoints,
       ductLoras: ductLoras,
@@ -241,7 +250,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     );
   }
 
-  /// Opens the D/E/G "Add materials" picker for this survey. Available any
+  /// Opens the C/D/E/F/G "Add materials" picker for this survey. Available any
   /// time regardless of survey status — not gated to the computed BoM having
   /// any rows.
   Future<void> _openManualEntries() async {
@@ -627,7 +636,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
             ),
           if (!widget.readOnly)
             IconButton(
-              tooltip: 'Add materials (D/E/G)',
+              tooltip: 'Add materials (C/D/E/F/G)',
               onPressed: _openManualEntries,
               icon: const Icon(Icons.playlist_add_outlined),
             ),

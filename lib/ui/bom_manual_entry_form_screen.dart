@@ -9,7 +9,7 @@ import 'widgets/form_fields.dart';
 
 /// The reusable "Add materials" picker: pick a Material Master catalog row
 /// (its name/SKU/unit come along for the ride), enter a quantity, and file it
-/// under D, E, or G. Add or edit a single [BomManualEntry].
+/// under C, D, E, F, or G. Add or edit a single [BomManualEntry].
 ///
 /// Mechanics only — this entry is not linked back to the catalog row's id, so
 /// it survives that row being edited or removed later, and it is never read
@@ -123,7 +123,7 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     }
     if (group == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Choose a group (D, E, or G).')),
+        const SnackBar(content: Text('Choose a group (C, D, E, F, or G).')),
       );
       return;
     }
@@ -205,7 +205,7 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
                   ],
                 ),
                 AppDropdownField<MaterialGroup>(
-                  label: 'Group (D, E, or G only)',
+                  label: 'Group (C, D, E, F, or G only)',
                   value: _group,
                   items: kBomManualEntryGroups,
                   itemLabel: (g) => '${g.code} — ${g.label}',

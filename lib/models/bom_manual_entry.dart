@@ -2,17 +2,21 @@ import 'material_master_item.dart';
 import 'survey_options.dart';
 
 /// Groups the "Add materials" picker allows a manual entry to be filed under.
-/// Only D (Plumbing rework), E (Electrical), and G (Labour) — the auto-computed
-/// BoM already covers A/B/C/F from survey data; this picker is strictly for
-/// hand-added extras in those three sections.
+/// C (Plumbing accessories), D (Plumbing rework), E (Electrical), F
+/// (Consumables), and G (Labour) — the auto-computed BoM only covers A
+/// (WEGOTAqua sensors) and B (DCU/Duct LoRa) from survey data; this picker
+/// covers everything else.
 const List<MaterialGroup> kBomManualEntryGroups = [
+  MaterialGroup.c,
   MaterialGroup.d,
   MaterialGroup.e,
+  MaterialGroup.f,
   MaterialGroup.g,
 ];
 
-/// A manually-added BoM line for one survey, filed under D/E/G via the "Add
-/// materials" picker. Distinct from [BomLine] (the read-only, computed-only
+/// A manually-added BoM line for one survey, filed under one of
+/// [kBomManualEntryGroups] via the "Add materials" picker. Distinct from
+/// [BomLine] (the read-only, computed-only
 /// output of [BomEngine]): this is a persisted, user-entered record, sourced
 /// by name/SKU/unit from a Material Master row at the moment it was picked —
 /// not linked back to that row's id, so it survives that row being edited or

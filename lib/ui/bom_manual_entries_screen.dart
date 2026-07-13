@@ -4,7 +4,7 @@ import '../data/survey_repository.dart';
 import '../models/bom_manual_entry.dart';
 import 'bom_manual_entry_form_screen.dart';
 
-/// Lists a survey's manually-added D/E/G BoM entries, with add/edit/delete.
+/// Lists a survey's manually-added C/D/E/F/G BoM entries, with add/edit/delete.
 /// Reachable only from the BoM preview screen — not per survey point — and
 /// available for any survey regardless of status.
 class BomManualEntriesScreen extends StatefulWidget {
@@ -107,8 +107,9 @@ class _BomManualEntriesScreenState extends State<BomManualEntriesScreen> {
                 padding: EdgeInsets.all(24),
                 child: Text(
                   'No manually-added materials yet.\n\n'
-                  'Use this to add extra D (Plumbing rework), E (Electrical), '
-                  'or G (Labour) items the computed BoM doesn\'t cover.',
+                  'Use this to add C (Plumbing accessories), D (Plumbing '
+                  'rework), E (Electrical), F (Consumables), or G (Labour) '
+                  'items the computed BoM doesn\'t cover.',
                   textAlign: TextAlign.center,
                 ),
               ),
