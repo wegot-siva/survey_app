@@ -322,6 +322,57 @@ class SyncService {
     }
   }
 
+  /// Pulls every Material Master row from Supabase and merges it into local
+  /// storage (see [SurveyRepository.upsertMaterialMasterItemsFromRemote] for
+  /// the merge rule — new rows are inserted, existing ones overwritten
+  /// unless they have an unsynced local edit of their own).
+  ///
+  /// Material Master is the one table in this file that needs a pull at
+  /// all: it's global reference data populated centrally (e.g. a bulk SQL
+  /// import of the plumbing catalog), so a row entered directly in Supabase
+  /// must still reach every device — unlike every other table here, which is
+  /// device-authored and reaches Supabase by push alone. Deliberately kept
+  /// separate from [pushAll] rather than folded into its loop, so push
+  /// behavior for every table (including Material Master's own push) is
+  /// completely unaffected by this method existing.
+  ///
+  /// Reuses [SyncResult] purely as a convenient result shape (`success`,
+  /// `materialMasterItems` count, `message` on failure) — it does not mean a
+  /// push happened.
+  Future<SyncResult> pullMaterialMasterItems() async {
+    if (!_supabase.isConfigured) {
+      return const SyncResult(
+        success: false,
+        message: 'Supabase is not configured.',
+      );
+    }
+
+    await _supabase.initIfConfigured();
+    if (!_supabase.isInitialized) {
+      return const SyncResult(
+        success: false,
+        message: 'Supabase failed to initialize. Check your keys in .env.',
+      );
+    }
+
+    try {
+      final remoteItems = await _remote.fetchMaterialMasterItems();
+      await _repository.upsertMaterialMasterItemsFromRemote(remoteItems);
+      return SyncResult(success: true, materialMasterItems: remoteItems.length);
+    } on PostgrestException catch (e) {
+      return SyncResult(
+        success: false,
+        message: 'Material Master pull failed (database):\n\n'
+            'message: ${e.message}\n'
+            'code: ${e.code}\n'
+            'details: ${e.details}\n'
+            'hint: ${e.hint}',
+      );
+    } catch (e) {
+      return SyncResult(success: false, message: 'Material Master pull failed:\n\n$e');
+    }
+  }
+
   /// If [photo] has a locally-captured file not yet uploaded, uploads it to
   /// Storage, records the remote key locally (write-back, so we don't
   /// re-upload on the next sync), and returns the updated photo. A missing

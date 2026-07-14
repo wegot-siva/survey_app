@@ -19,9 +19,15 @@ import '../models/material_master_audit_entry.dart';
 import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
+import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 
-/// Remote (Supabase) writes for survey data. Push-only for now.
+/// Remote (Supabase) reads/writes for survey data. Push-only for almost
+/// every table — the one exception is Material Master
+/// ([fetchMaterialMasterItems]), which also needs a pull: it's global
+/// reference data populated centrally (e.g. a bulk SQL import of the
+/// plumbing catalog), so it must reach every device, not just the one that
+/// entered it.
 ///
 /// Upserts are idempotent — keyed by the same UUIDs used locally — so repeating
 /// a sync converges to the same rows instead of duplicating them.
@@ -108,6 +114,17 @@ class SupabaseSurveyDataSource {
     await _client
         .from('material_master_items')
         .upsert(_materialMasterItemToRemoteRow(item));
+  }
+
+  /// Fetches every Material Master row from Supabase — the pull half of
+  /// Material Master's sync (see the class doc comment for why this table
+  /// alone needs one). The caller merges these into local storage; this
+  /// method only reads.
+  Future<List<MaterialMasterItem>> fetchMaterialMasterItems() async {
+    final rows = await _client.from('material_master_items').select();
+    return rows
+        .map((r) => _materialMasterItemFromRemoteRow(r))
+        .toList(growable: false);
   }
 
   /// Upserts a Material Master change-log entry by its id (idempotent). Not
@@ -388,6 +405,48 @@ Map<String, Object?> _materialMasterItemToRemoteRow(MaterialMasterItem m) {
     'size_mm': m.sizeMm,
     'size_display': m.sizeDisplay,
   };
+}
+
+MaterialMasterItem _materialMasterItemFromRemoteRow(Map<String, dynamic> r) {
+  return MaterialMasterItem(
+    id: r['id'] as String,
+    group:
+        _enumByName(MaterialGroup.values, r['group_code'] as String?) ??
+        MaterialGroup.a,
+    materialName: (r['material_name'] as String?) ?? '',
+    sku: (r['sku'] as String?) ?? '',
+    itemLabel: (r['item_label'] as String?) ?? '',
+    unit: (r['unit'] as String?) ?? '',
+    behaviorType:
+        _enumByName(MaterialBehaviorType.values, r['behavior_type'] as String?) ??
+        MaterialBehaviorType.fixed,
+    sensorSize: _enumByName(SensorSize.values, r['sensor_size'] as String?),
+    sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
+    quantityPerSensor: (r['quantity_per_sensor'] as num?)?.toDouble() ?? 0,
+    derivedFormula: _enumByName(
+      DerivedFormula.values,
+      r['derived_formula'] as String?,
+    ),
+    formulaDivisor: (r['formula_divisor'] as num?)?.toDouble(),
+    variableSource: _enumByName(
+      VariableSource.values,
+      r['variable_source'] as String?,
+    ),
+    notes: (r['notes'] as String?) ?? '',
+    materialType: r['material_type'] as String?,
+    category: r['category'] as String?,
+    variant: r['variant'] as String?,
+    sizeMm: (r['size_mm'] as num?)?.toDouble(),
+    sizeDisplay: r['size_display'] as String?,
+  );
+}
+
+T? _enumByName<T extends Enum>(List<T> values, String? name) {
+  if (name == null) return null;
+  for (final value in values) {
+    if (value.name == name) return value;
+  }
+  return null;
 }
 
 Map<String, Object?> _materialMasterAuditEntryToRemoteRow(

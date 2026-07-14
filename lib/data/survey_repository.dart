@@ -207,6 +207,22 @@ abstract class SurveyRepository {
   /// that row's push to Supabase has succeeded.
   Future<void> markMaterialMasterItemSynced(String id);
 
+  /// Merges Supabase's material_master_items rows into local storage, keyed
+  /// by id: inserts anything new, and overwrites anything existing — unless
+  /// that local row has an unsynced edit of its own (still dirty), in which
+  /// case it's left untouched so a pull never clobbers an admin's in-flight
+  /// change before it's had a chance to push. Merged rows are never marked
+  /// dirty themselves — they came from Supabase, the table's source of
+  /// truth, so they're already in sync.
+  ///
+  /// The pull half of Material Master's sync (the other tables here are all
+  /// device-authored and push-only) — Material Master is populated
+  /// centrally (e.g. a bulk SQL import of the plumbing catalog) and needs to
+  /// reach every device, not just the one that entered it.
+  Future<void> upsertMaterialMasterItemsFromRemote(
+    List<MaterialMasterItem> remoteItems,
+  );
+
   /// The full Material Master change log, newest first. [dirtyOnly] limits
   /// to entries not yet pushed — sync-only, see
   /// [markMaterialMasterAuditEntrySynced].

@@ -635,6 +635,32 @@ class SqfliteSurveyRepository implements SurveyRepository {
   }
 
   @override
+  Future<void> upsertMaterialMasterItemsFromRemote(
+    List<MaterialMasterItem> remoteItems,
+  ) async {
+    await _db.transaction((txn) async {
+      for (final item in remoteItems) {
+        final existingRows = await txn.query(
+          'material_master_items',
+          columns: ['dirty'],
+          where: 'id = ?',
+          whereArgs: [item.id],
+          limit: 1,
+        );
+        if (existingRows.isNotEmpty &&
+            (existingRows.first['dirty'] as int?) == 1) {
+          continue; // Unsynced local edit — leave it, don't clobber.
+        }
+        await txn.insert(
+          'material_master_items',
+          {..._materialMasterItemToRow(item), 'dirty': 0},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
+  @override
   Future<List<MaterialMasterAuditEntry>> getMaterialMasterAuditLog({
     bool dirtyOnly = false,
   }) async {

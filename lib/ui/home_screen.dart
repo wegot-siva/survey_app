@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
@@ -74,6 +76,16 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _query = _searchController.text.trim().toLowerCase());
     });
     _load();
+    // Material Master is global reference data populated centrally (e.g. a
+    // bulk SQL import of the plumbing catalog into Supabase) rather than
+    // authored on-device, so — unlike every other table, which only ever
+    // pushes — it needs a pull to actually reach this device. Fired here on
+    // every login/startup (this screen is only ever built fresh right after
+    // one of those) so a centrally-added row shows up without waiting for an
+    // explicit manual Sync tap. Fire-and-forget: a failure (offline, not
+    // configured) silently no-ops — see [SyncService.pullMaterialMasterItems]
+    // — and the manual Sync button below retries the same pull anyway.
+    unawaited(widget.syncService.pullMaterialMasterItems());
     // Catches the recurring "built without --dart-define-from-file=.env"
     // mistake at launch instead of a confusing sync-time error later — see
     // scripts/build_debug.ps1 / scripts/run_debug.ps1.
@@ -263,6 +275,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _syncNow() async {
     setState(() => _syncStatus = _SyncStatus.syncing);
 
+    // Pull before push: Material Master rows added centrally in Supabase
+    // since the last sync land locally first, so this run's push (and
+    // anything the user does right after tapping Sync) sees them. A pull
+    // failure here doesn't fail the whole sync — it's folded into the
+    // message only when it actually found something, and the push below
+    // still runs and reports on its own terms either way.
+    final pullResult = await widget.syncService.pullMaterialMasterItems();
     final result = await widget.syncService.pushAll();
     if (!mounted) return;
 
@@ -273,11 +292,13 @@ class _HomeScreenState extends State<HomeScreen> {
       });
       final records = _syncRecordTotal(result);
       final photos = result.photos;
+      final pulled = pullResult.success ? pullResult.materialMasterItems : 0;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             'All synced — $records record${records == 1 ? '' : 's'} and '
-            '$photos photo${photos == 1 ? '' : 's'} backed up.',
+            '$photos photo${photos == 1 ? '' : 's'} backed up'
+            '${pulled > 0 ? ', $pulled Material Master row${pulled == 1 ? '' : 's'} pulled' : ''}.',
           ),
         ),
       );

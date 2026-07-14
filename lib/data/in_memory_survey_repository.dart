@@ -435,6 +435,20 @@ class InMemorySurveyRepository implements SurveyRepository {
   }
 
   @override
+  Future<void> upsertMaterialMasterItemsFromRemote(
+    List<MaterialMasterItem> remoteItems,
+  ) async {
+    for (final item in remoteItems) {
+      if (_dirtyMaterialMasterItemIds.contains(item.id)) {
+        continue; // Unsynced local edit — leave it, don't clobber.
+      }
+      _materialMasterItems[item.id] = item;
+      // Deliberately not added to _dirtyMaterialMasterItemIds — it came from
+      // remote, already in sync.
+    }
+  }
+
+  @override
   Future<List<MaterialMasterAuditEntry>> getMaterialMasterAuditLog({
     bool dirtyOnly = false,
   }) async {
