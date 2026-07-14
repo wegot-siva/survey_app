@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show unawaited, Timer;
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
@@ -49,6 +49,11 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Session-only — resets on app restart, not persisted.
   DateTime? _lastSyncedAt;
 
+  /// Reverts [_syncStatus] to [_SyncStatus.idle] 45s after a success — see
+  /// the success branch of [_syncNow]. Restarted (not stacked) on every new
+  /// success, so only the most recent sync's timer ever fires.
+  Timer? _syncStatusRevertTimer;
+
   final _searchController = TextEditingController();
 
   /// Lowercased, trimmed live from [_searchController] — see [_filteredSites].
@@ -98,6 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _syncStatusRevertTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -289,6 +295,10 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _syncStatus = _SyncStatus.success;
         _lastSyncedAt = DateTime.now();
+      });
+      _syncStatusRevertTimer?.cancel();
+      _syncStatusRevertTimer = Timer(const Duration(seconds: 45), () {
+        if (mounted) setState(() => _syncStatus = _SyncStatus.idle);
       });
       final records = _syncRecordTotal(result);
       final photos = result.photos;
