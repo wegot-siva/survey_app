@@ -5,6 +5,7 @@ import '../data/survey_repository.dart';
 import '../models/bom_line.dart';
 import '../models/bom_manual_edit_snapshot.dart';
 import '../models/bom_manual_edit_snapshot_line.dart';
+import '../models/bom_manual_entry.dart';
 import '../models/bom_revision.dart';
 import '../models/bom_revision_line.dart';
 import '../models/bom_snapshot.dart';
@@ -15,8 +16,10 @@ import '../services/bom_engine.dart';
 import '../services/bom_revision_engine.dart';
 import '../services/lumax_exporter.dart';
 import '../services/sun_bom_exporter.dart';
+import 'bom_group_a_section_screen.dart';
+import 'bom_group_b_section_screen.dart';
+import 'bom_group_manual_section_screen.dart';
 import 'bom_manual_edit_screen.dart';
-import 'bom_manual_entries_screen.dart';
 import 'bom_revisions_screen.dart';
 
 /// Which export formatter to use — both read the same running-total data
@@ -66,6 +69,7 @@ class BomPreviewScreen extends StatefulWidget {
 
 class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Map<MaterialGroup, List<BomLine>>? _bom;
+  List<BomManualEntry> _manualEntries = const [];
   bool _loading = true;
   bool _exporting = false;
   bool _finalizing = false;
@@ -106,15 +110,10 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   // Display-only filter: hides zero-qty rows (and groups with none left)
   // in the locked view (running total + v1 snapshot). Default OFF = hidden.
   // Never affects export, which already excludes zero-qty rows/empty groups
-  // on its own. The unlocked/live view has its own per-group toggle instead
-  // — see _showAllInGroup.
+  // on its own. The unlocked/live view's own per-group "show all" toggle
+  // lives on each section screen now (BomGroupASectionScreen /
+  // BomGroupBSectionScreen) instead of here.
   bool _showAllItems = false;
-
-  // Per-group "show all" toggle for the unlocked/live view only (bom_engine
-  // emits every Material Master row regardless of quantity, so most groups
-  // are mostly zero-qty rows by default). Empty = every group hides its
-  // zero-qty lines.
-  final Set<MaterialGroup> _showAllInGroup = {};
 
   @override
   void initState() {
@@ -147,6 +146,11 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       sourcePoints: sourcePoints,
       inletPoints: inletPoints,
       ductLoras: ductLoras,
+    );
+    // Fetched here (rather than lazily per section) so the section-list
+    // overview can show each group's running count without a per-tile fetch.
+    final manualEntries = await widget.repository.getBomManualEntries(
+      widget.site.id,
     );
 
     // Loaded unconditionally alongside the live compute above — a locked
@@ -184,6 +188,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     if (!mounted) return;
     setState(() {
       _bom = bom;
+      _manualEntries = manualEntries;
       _snapshot = snapshot;
       _snapshotLines = snapshotLines;
       _revisions = revisions;
@@ -250,22 +255,55 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     );
   }
 
-  /// Opens the C/D/E/F/G "Add materials" picker for this survey. Available any
-  /// time regardless of survey status — not gated to the computed BoM having
-  /// any rows.
-  Future<void> _openManualEntries() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => BomManualEntriesScreen(
-          repository: widget.repository,
-          surveyId: widget.site.id,
-          surveyName: widget.site.name,
-          addedByRole: widget.addedByRole,
-        ),
-      ),
-    );
-    // Manual entries aren't part of the computed BoM shown here yet
-    // (mechanics only this slice) — no need to regenerate on return.
+  /// Opens the tapped group's own BoM section — the unlocked-view entry
+  /// point, available any time regardless of survey status. A (fully
+  /// auto-computed) and B (Duct LoRa auto-computed + cable via the existing
+  /// Duct LoRa flow) get bespoke read-only-biased screens; C/D/E/F/G share
+  /// [BomGroupManualSectionScreen], pre-scoped so the engineer never
+  /// re-selects the group. Always refreshes on return — a manual entry (or,
+  /// for B, a Duct LoRa unit) may have been added/edited/deleted, and the
+  /// section-list overview's counts need to reflect that.
+  Future<void> _openSection(MaterialGroup group) async {
+    final bom = _bom;
+    final autoLines = bom?[group] ?? const <BomLine>[];
+    switch (group) {
+      case MaterialGroup.a:
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => BomGroupASectionScreen(lines: autoLines),
+          ),
+        );
+      case MaterialGroup.b:
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => BomGroupBSectionScreen(
+              repository: widget.repository,
+              site: widget.site,
+              lines: autoLines,
+              readOnly: widget.readOnly,
+            ),
+          ),
+        );
+      case MaterialGroup.c:
+      case MaterialGroup.d:
+      case MaterialGroup.e:
+      case MaterialGroup.f:
+      case MaterialGroup.g:
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => BomGroupManualSectionScreen(
+              repository: widget.repository,
+              surveyId: widget.site.id,
+              surveyName: widget.site.name,
+              addedByRole: widget.addedByRole,
+              group: group,
+              autoLines: autoLines,
+              readOnly: widget.readOnly,
+            ),
+          ),
+        );
+    }
+    await _generate();
   }
 
   /// Opens the version history (v1 + every revision + every manual edit),
@@ -634,12 +672,6 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
               onPressed: _openEditBom,
               icon: const Icon(Icons.edit),
             ),
-          if (!widget.readOnly)
-            IconButton(
-              tooltip: 'Add materials (C/D/E/F/G)',
-              onPressed: _openManualEntries,
-              icon: const Icon(Icons.playlist_add_outlined),
-            ),
         ],
       ),
       floatingActionButton: canFinalize
@@ -718,115 +750,60 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
               padding: const EdgeInsets.all(16),
               children: [
                 for (final group in MaterialGroup.values)
-                  if (bom![group]!.isNotEmpty)
-                    _GroupSection(
-                      group: group,
-                      lines: bom[group]!,
-                      showAll: _showAllInGroup.contains(group),
-                      onToggleShowAll: () => setState(() {
-                        if (!_showAllInGroup.remove(group)) {
-                          _showAllInGroup.add(group);
-                        }
-                      }),
-                    ),
+                  _BomSectionTile(
+                    group: group,
+                    count: _sectionCount(bom!, group),
+                    onTap: () => _openSection(group),
+                  ),
               ],
             ),
     );
   }
+
+  /// How many lines currently count as "in" [group], for the section-list
+  /// overview only — auto lines with a positive quantity (BomEngine emits
+  /// every Material Master row regardless of quantity, so a zero-qty row
+  /// isn't "current"), plus, for C/D/E/F/G, that group's manual entries.
+  /// Group A and B never have manual entries of their own (A has no add
+  /// action at all; B's only addable thing, cable, rides on Duct LoRa units,
+  /// not a manual entry), so their count is auto-only.
+  int _sectionCount(Map<MaterialGroup, List<BomLine>> bom, MaterialGroup group) {
+    final autoCount = (bom[group] ?? const []).where((l) => l.quantity > 0).length;
+    if (group == MaterialGroup.a || group == MaterialGroup.b) return autoCount;
+    return autoCount + _manualEntries.where((e) => e.group == group).length;
+  }
 }
 
-/// Live/unlocked group section. Hides zero-qty lines by default — bom_engine
-/// emits every Material Master row regardless of computed quantity, so most
-/// rows are zero — with a per-group "Show all (N)" button to reveal them.
-class _GroupSection extends StatelessWidget {
-  const _GroupSection({
+/// One row of the section-list overview (unlocked/live view only) — tapping
+/// opens that group's own BoM section screen (see [_BomPreviewScreenState._openSection]).
+class _BomSectionTile extends StatelessWidget {
+  const _BomSectionTile({
     required this.group,
-    required this.lines,
-    required this.showAll,
-    required this.onToggleShowAll,
+    required this.count,
+    required this.onTap,
   });
 
   final MaterialGroup group;
-  final List<BomLine> lines;
-  final bool showAll;
-  final VoidCallback onToggleShowAll;
+  final int count;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final hiddenCount = lines.where((l) => l.quantity <= 0).length;
-    final visibleLines = showAll
-        ? lines
-        : lines.where((l) => l.quantity > 0).toList();
-
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Card(
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: double.infinity,
-              color: scheme.secondaryContainer,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Text(
-                      '${group.code} — ${group.label}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: scheme.onSecondaryContainer,
-                      ),
-                    ),
-                  ),
-                  if (hiddenCount > 0)
-                    TextButton(
-                      onPressed: onToggleShowAll,
-                      style: TextButton.styleFrom(
-                        foregroundColor: scheme.onSecondaryContainer,
-                      ),
-                      child: Text(
-                        showAll ? 'Hide zero-qty' : 'Show all ($hiddenCount)',
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            for (final line in visibleLines) _BomLineRow(line: line),
-          ],
+        child: ListTile(
+          leading: CircleAvatar(child: Text(group.code)),
+          title: Text(group.label),
+          subtitle: Text('$count item${count == 1 ? '' : 's'}'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: onTap,
         ),
       ),
     );
   }
 }
 
-class _BomLineRow extends StatelessWidget {
-  const _BomLineRow({required this.line});
-
-  final BomLine line;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      dense: true,
-      title: Text(line.materialName),
-      subtitle: Text(line.variantLabel),
-      trailing: Text(
-        '${_formatQuantity(line.quantity)} ${line.unit}',
-        style: const TextStyle(fontWeight: FontWeight.w600),
-      ),
-    );
-  }
-
-  static String _formatQuantity(double q) {
-    return q == q.roundToDouble() ? q.toInt().toString() : q.toStringAsFixed(2);
-  }
-}
 
 /// Read-only rendering of one group's frozen [BomSnapshotLine]s. Mirrors
 /// [_GroupSection]'s look so a finalized BoM feels like the same screen, not

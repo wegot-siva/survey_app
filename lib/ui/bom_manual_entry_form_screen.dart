@@ -7,9 +7,10 @@ import '../models/material_master_item.dart';
 import '../models/survey_options.dart';
 import 'widgets/form_fields.dart';
 
-/// The reusable "Add materials" picker: choose a target group (C, D, E, F, or
-/// G), pick a Material Master catalog row (its name/SKU/unit come along for
-/// the ride), and enter a quantity. Add or edit a single [BomManualEntry].
+/// The reusable "Add materials" picker: opened from within one BoM section
+/// (C, D, E, F, or G — see [lockedGroup]), pick a Material Master catalog
+/// row (its name/SKU/unit come along for the ride), and enter a quantity.
+/// Add or edit a single [BomManualEntry].
 ///
 /// Group C's plumbing catalog (uPVC/CPVC fittings) can carry finer structure
 /// ([MaterialMasterItem.materialType]/[category]/[variant]/[sizeMm]/
@@ -29,6 +30,7 @@ class BomManualEntryFormScreen extends StatefulWidget {
     required this.surveyId,
     required this.addedByRole,
     this.existing,
+    this.lockedGroup,
   });
 
   final SurveyRepository repository;
@@ -40,6 +42,13 @@ class BomManualEntryFormScreen extends StatefulWidget {
   final String addedByRole;
 
   final BomManualEntry? existing;
+
+  /// When set, the target group is fixed to this value and the Group field
+  /// becomes a read-only label instead of an interactive dropdown — used
+  /// when this screen is opened from within one BoM section
+  /// (BomGroupManualSectionScreen), where the group is already implied by
+  /// which section the engineer navigated into, whether adding or editing.
+  final MaterialGroup? lockedGroup;
 
   @override
   State<BomManualEntryFormScreen> createState() =>
@@ -86,7 +95,7 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     _sensorSize = e?.sensorSize;
     _sensorType = e?.sensorType;
     _unit = e?.unit ?? '';
-    _group = e?.group;
+    _group = e?.group ?? widget.lockedGroup;
     _loadCatalog();
   }
 
@@ -351,22 +360,41 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final lockedGroup = widget.lockedGroup;
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.existing == null ? 'Add material' : 'Edit entry'),
+        title: Text(
+          widget.existing == null
+              ? (lockedGroup == null
+                    ? 'Add material'
+                    : 'Add material (${lockedGroup.code})')
+              : 'Edit entry',
+        ),
       ),
       body: _loadingCatalog
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                AppDropdownField<MaterialGroup>(
-                  label: 'Group (C, D, E, F, or G only)',
-                  value: _group,
-                  items: kBomManualEntryGroups,
-                  itemLabel: (g) => '${g.code} — ${g.label}',
-                  onChanged: _onGroupChanged,
-                ),
+                if (lockedGroup != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Group',
+                        border: OutlineInputBorder(),
+                      ),
+                      child: Text('${lockedGroup.code} — ${lockedGroup.label}'),
+                    ),
+                  )
+                else
+                  AppDropdownField<MaterialGroup>(
+                    label: 'Group (C, D, E, F, or G only)',
+                    value: _group,
+                    items: kBomManualEntryGroups,
+                    itemLabel: (g) => '${g.code} — ${g.label}',
+                    onChanged: _onGroupChanged,
+                  ),
                 const SizedBox(height: 8),
                 if (_cascadeModeActive) _buildCascadeFields() else _buildFlatDropdown(),
                 if (_materialName.isNotEmpty)
