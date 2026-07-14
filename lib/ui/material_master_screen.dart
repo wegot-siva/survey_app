@@ -35,10 +35,39 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
   List<MaterialMasterItem> _items = const [];
   bool _loading = true;
 
+  final _searchController = TextEditingController();
+
+  /// Lowercased, trimmed live from [_searchController] — see [_filteredItems].
+  String _query = '';
+
+  /// Whether the AppBar search field is showing in place of the "Material
+  /// Master" title — collapsed by default so it never takes up screen space
+  /// until the user actually taps the search icon (see [_openSearch]), same
+  /// convention as the Sites home screen.
+  bool _searchOpen = false;
+
+  /// [_items] (unchanged) narrowed by [_query], case-insensitive substring
+  /// match on material name only. Filter only — never touches storage, sort
+  /// order, or an individual row's own behavior (tap-to-edit, delete, etc.).
+  List<MaterialMasterItem> get _filteredItems => _query.isEmpty
+      ? _items
+      : _items
+            .where((i) => i.materialName.toLowerCase().contains(_query))
+            .toList(growable: false);
+
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(() {
+      setState(() => _query = _searchController.text.trim().toLowerCase());
+    });
     _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -159,30 +188,68 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
     }
   }
 
+  void _openSearch() {
+    setState(() => _searchOpen = true);
+  }
+
+  /// Closes the AppBar search field and clears whatever was typed, restoring
+  /// the full list — collapsing back to the icon is also how the user
+  /// "clears" the search, not just the field's own clear button.
+  void _closeSearch() {
+    _searchController.clear();
+    setState(() => _searchOpen = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Material Master'),
-        actions: [
-          if (kDebugMode) ...[
-            IconButton(
-              tooltip: 'Seed cascade test data (dev only)',
-              onPressed: _seedCascadeTestData,
-              icon: const Icon(Icons.science_outlined),
-            ),
-            IconButton(
-              tooltip: 'Remove cascade test data (dev only)',
-              onPressed: _removeCascadeTestData,
-              icon: const Icon(Icons.science),
-            ),
-          ],
-          IconButton(
-            tooltip: 'Change log',
-            onPressed: _openChangeLog,
-            icon: const Icon(Icons.history),
-          ),
-        ],
+        title: _searchOpen
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                style: TextStyle(
+                  color: Theme.of(context).appBarTheme.foregroundColor ??
+                      Theme.of(context).colorScheme.onSurface,
+                ),
+                decoration: const InputDecoration(
+                  hintText: 'Search materials by name',
+                  border: InputBorder.none,
+                ),
+              )
+            : const Text('Material Master'),
+        actions: _searchOpen
+            ? [
+                IconButton(
+                  tooltip: 'Close search',
+                  onPressed: _closeSearch,
+                  icon: const Icon(Icons.close),
+                ),
+              ]
+            : [
+                IconButton(
+                  tooltip: 'Search materials',
+                  onPressed: _openSearch,
+                  icon: const Icon(Icons.search),
+                ),
+                if (kDebugMode) ...[
+                  IconButton(
+                    tooltip: 'Seed cascade test data (dev only)',
+                    onPressed: _seedCascadeTestData,
+                    icon: const Icon(Icons.science_outlined),
+                  ),
+                  IconButton(
+                    tooltip: 'Remove cascade test data (dev only)',
+                    onPressed: _removeCascadeTestData,
+                    icon: const Icon(Icons.science),
+                  ),
+                ],
+                IconButton(
+                  tooltip: 'Change log',
+                  onPressed: _openChangeLog,
+                  icon: const Icon(Icons.history),
+                ),
+              ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _addOrEdit(),
@@ -204,10 +271,20 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                 ),
               ),
             )
+          : _filteredItems.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  'No materials match your search.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            )
           : ListView(
               children: [
                 for (final group in MaterialGroup.values)
-                  if (_items.any((i) => i.group == group)) ...[
+                  if (_filteredItems.any((i) => i.group == group)) ...[
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
                       child: Text(
@@ -215,7 +292,7 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ),
-                    for (final item in _items.where((i) => i.group == group))
+                    for (final item in _filteredItems.where((i) => i.group == group))
                       ListTile(
                         leading: const Icon(Icons.inventory_2_outlined),
                         title: Text(
