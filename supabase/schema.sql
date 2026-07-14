@@ -248,7 +248,8 @@ create table if not exists public.material_master_items (
   category              text,                        -- e.g. 'Elbow 90°', 'Tee', 'Coupler'
   variant               text,                        -- e.g. 'SCH40', 'SCH80', 'Brass Threaded'
   size_mm               double precision,            -- nominal DN in mm; sort/join field only, never shown directly
-  size_display          text                         -- human-readable size, e.g. '1¼"' or '1¼" x 1"' for a reducer
+  size_display          text,                        -- human-readable size, e.g. '1¼"' or '1¼" x 1"' for a reducer
+  deleted_at            text                         -- unused; superseded, see the migration note below
 );
 
 alter table public.material_master_items enable row level security;
@@ -554,3 +555,19 @@ alter table public.material_master_items
   add column if not exists variant       text,
   add column if not exists size_mm       double precision,
   add column if not exists size_display  text;
+
+-- ---------------------------------------------------------------------------
+-- Material Master soft-delete, first attempt (superseded — see the app's
+-- deleteMaterialMasterItem / pending_delete handling for the actual
+-- mechanism now in place; a real row delete propagates both ways via a
+-- genuine `delete`, not this column). Column kept, unused, rather than
+-- reversing an already-applied additive migration; safe to ignore.
+--
+-- `alter table add column if not exists` covers projects that already ran
+-- the material_master_items block above before this column existed; the
+-- `create table` above already includes it for fresh setups. Nullable and
+-- unset on every existing row. Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.material_master_items
+  add column if not exists deleted_at text;

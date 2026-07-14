@@ -536,9 +536,13 @@ class SqfliteSurveyRepository implements SurveyRepository {
   Future<List<MaterialMasterItem>> getMaterialMasterItems({
     bool dirtyOnly = false,
   }) async {
+    final conditions = <String>[
+      'pending_delete = 0',
+      if (dirtyOnly) 'dirty = 1',
+    ];
     final rows = await _db.query(
       'material_master_items',
-      where: dirtyOnly ? 'dirty = 1' : null,
+      where: conditions.join(' AND '),
       orderBy: 'rowid',
     );
     return rows.map(_materialMasterItemFromRow).toList(growable: false);
@@ -609,7 +613,16 @@ class SqfliteSurveyRepository implements SurveyRepository {
         whereArgs: [id],
         limit: 1,
       );
-      await txn.delete('material_master_items', where: 'id = ?', whereArgs: [id]);
+      // Tombstone: flag pending_delete (and mark dirty, so sync pushes a
+      // real remote delete for it) instead of removing the row yet — same
+      // convention as source/inlet points. hardDeleteMaterialMasterItem does
+      // the actual removal, once that remote delete has succeeded.
+      await txn.update(
+        'material_master_items',
+        {'pending_delete': 1, 'dirty': 1},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
       if (existingRows.isNotEmpty) {
         final existing = _materialMasterItemFromRow(existingRows.first);
         await _writeMaterialMasterAudit(
@@ -622,6 +635,21 @@ class SqfliteSurveyRepository implements SurveyRepository {
         );
       }
     });
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteMaterialMasterItemIds() async {
+    final rows = await _db.query(
+      'material_master_items',
+      columns: ['id'],
+      where: 'pending_delete = 1',
+    );
+    return rows.map((r) => r['id']! as String).toList(growable: false);
+  }
+
+  @override
+  Future<void> hardDeleteMaterialMasterItem(String id) async {
+    await _db.delete('material_master_items', where: 'id = ?', whereArgs: [id]);
   }
 
   @override
@@ -638,24 +666,50 @@ class SqfliteSurveyRepository implements SurveyRepository {
   Future<void> upsertMaterialMasterItemsFromRemote(
     List<MaterialMasterItem> remoteItems,
   ) async {
+    final remoteIds = remoteItems.map((i) => i.id).toSet();
     await _db.transaction((txn) async {
       for (final item in remoteItems) {
         final existingRows = await txn.query(
           'material_master_items',
-          columns: ['dirty'],
+          columns: ['dirty', 'pending_delete'],
           where: 'id = ?',
           whereArgs: [item.id],
           limit: 1,
         );
-        if (existingRows.isNotEmpty &&
-            (existingRows.first['dirty'] as int?) == 1) {
-          continue; // Unsynced local edit — leave it, don't clobber.
+        if (existingRows.isNotEmpty) {
+          final row = existingRows.first;
+          final isDirty = (row['dirty'] as int?) == 1;
+          final isPendingDelete = (row['pending_delete'] as int?) == 1;
+          if (isDirty || isPendingDelete) {
+            continue; // Unsynced local edit/delete — leave it, don't clobber.
+          }
         }
         await txn.insert(
           'material_master_items',
           {..._materialMasterItemToRow(item), 'dirty': 0},
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
+      }
+
+      // Reconciliation: a row that's active locally (not dirty, not already
+      // pending its own local delete) but absent from this complete remote
+      // fetch was deleted directly in Supabase — remove it here too. Skipped
+      // entirely when remoteItems is empty: a wholesale-empty result is far
+      // more likely to mean the fetch went wrong than that every row was
+      // genuinely deleted, and treating it as the latter would wipe the
+      // whole local catalog on a fluke.
+      if (remoteItems.isEmpty) return;
+      final localRows = await txn.query(
+        'material_master_items',
+        columns: ['id', 'dirty', 'pending_delete'],
+      );
+      for (final row in localRows) {
+        final id = row['id']! as String;
+        if (remoteIds.contains(id)) continue;
+        final isDirty = (row['dirty'] as int?) == 1;
+        final isPendingDelete = (row['pending_delete'] as int?) == 1;
+        if (isDirty || isPendingDelete) continue; // protect unsynced local state
+        await txn.delete('material_master_items', where: 'id = ?', whereArgs: [id]);
       }
     });
   }

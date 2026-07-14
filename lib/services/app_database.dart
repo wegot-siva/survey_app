@@ -11,7 +11,7 @@ import 'material_master_seed.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 19;
+const int _dbVersion = 21;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -244,6 +244,28 @@ Future<Database> openAppDatabase() async {
         );
         await db.execute(
           'ALTER TABLE material_master_items ADD COLUMN size_display TEXT',
+        );
+      }
+      // v19 -> v20: Material Master soft-delete, first attempt. Superseded by
+      // v21 below (deleted_at required knowing which side "won" a delete,
+      // which nothing ever needed) — deleted_at stays defined and harmless
+      // (nullable, never written or read by any code) rather than reversing
+      // an already-applied additive migration.
+      if (oldVersion < 20) {
+        await db.execute(
+          'ALTER TABLE material_master_items ADD COLUMN deleted_at TEXT',
+        );
+      }
+      // v20 -> v21: Material Master delete tombstoning, same pending_delete
+      // convention already used for source/inlet points — deleteMaterialMasterItem
+      // flags the row instead of removing it, so sync can still push a real
+      // remote delete for it (see getPendingDeleteMaterialMasterItemIds /
+      // hardDeleteMaterialMasterItem). Nullable-equivalent (defaults 0), so
+      // every existing row is unaffected until an explicit delete sets it.
+      if (oldVersion < 21) {
+        await db.execute(
+          'ALTER TABLE material_master_items ADD COLUMN pending_delete '
+          'INTEGER NOT NULL DEFAULT 0',
         );
       }
     },
@@ -520,13 +542,17 @@ Future<void> _migrateDuctLoraPlacementPhotoToPhotosTable(Database db) async {
 }
 
 /// Material Master table (v5, +sku in v9, +item_label in v13,
-/// +material_type/category/variant/size_mm/size_display in v19).
+/// +material_type/category/variant/size_mm/size_display in v19,
+/// +deleted_at in v20 [unused, see the v19->v20 migration comment],
+/// +pending_delete in v21).
 /// Admin-editable reference data — NOT site-scoped (no FK to sites). The BoM
 /// engine reads every quantity from this table at generation time; it starts
 /// empty and is populated via the admin screen. The v19 columns are nullable
 /// and only ever set on group C's plumbing catalog rows, to drive the 4-level
 /// cascading picker — every other row leaves them null and keeps using the
-/// flat single-dropdown picker.
+/// flat single-dropdown picker. `pending_delete` (v21) is a tombstone flag,
+/// same convention as source_points/inlet_points — see
+/// [SurveyRepository.deleteMaterialMasterItem].
 Future<void> _createMaterialMasterItemsTable(Database db) async {
   await db.execute('''
     CREATE TABLE material_master_items (
@@ -549,6 +575,8 @@ Future<void> _createMaterialMasterItemsTable(Database db) async {
       variant              TEXT,
       size_mm              REAL,
       size_display         TEXT,
+      deleted_at           TEXT,
+      pending_delete       INTEGER NOT NULL DEFAULT 0,
       dirty                INTEGER NOT NULL DEFAULT 1
     )
   ''');

@@ -70,6 +70,7 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Set<String> _dirtyGatewayIds = {};
   final Set<String> _dirtyFooterSiteIds = {};
   final Set<String> _dirtyMaterialMasterItemIds = {};
+  final Set<String> _pendingDeleteMaterialMasterItemIds = {};
   final Set<String> _dirtyMaterialMasterAuditIds = {};
   final Set<String> _dirtyPhotoIds = {};
   final Set<String> _dirtyBomManualEntryIds = {};
@@ -370,7 +371,11 @@ class InMemorySurveyRepository implements SurveyRepository {
   Future<List<MaterialMasterItem>> getMaterialMasterItems({
     bool dirtyOnly = false,
   }) async => _materialMasterItems.values
-      .where((m) => !dirtyOnly || _dirtyMaterialMasterItemIds.contains(m.id))
+      .where(
+        (m) =>
+            !_pendingDeleteMaterialMasterItemIds.contains(m.id) &&
+            (!dirtyOnly || _dirtyMaterialMasterItemIds.contains(m.id)),
+      )
       .toList(growable: false);
 
   @override
@@ -416,17 +421,31 @@ class InMemorySurveyRepository implements SurveyRepository {
     String id, {
     required String changedByRole,
   }) async {
-    final existing = _materialMasterItems.remove(id);
+    final existing = _materialMasterItems[id];
+    if (existing == null) return;
+    // Tombstone (and mark dirty, so sync pushes a real remote delete for
+    // it) instead of removing the row yet — same convention as source/inlet
+    // points. hardDeleteMaterialMasterItem does the actual removal.
+    _pendingDeleteMaterialMasterItemIds.add(id);
+    _dirtyMaterialMasterItemIds.add(id);
+    _writeAudit(
+      _auditBuilder.forDelete(
+        item: existing,
+        changedByRole: changedByRole,
+        changedAt: DateTime.now(),
+      ),
+    );
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteMaterialMasterItemIds() async =>
+      _pendingDeleteMaterialMasterItemIds.toList(growable: false);
+
+  @override
+  Future<void> hardDeleteMaterialMasterItem(String id) async {
+    _materialMasterItems.remove(id);
+    _pendingDeleteMaterialMasterItemIds.remove(id);
     _dirtyMaterialMasterItemIds.remove(id);
-    if (existing != null) {
-      _writeAudit(
-        _auditBuilder.forDelete(
-          item: existing,
-          changedByRole: changedByRole,
-          changedAt: DateTime.now(),
-        ),
-      );
-    }
   }
 
   @override
@@ -439,12 +458,29 @@ class InMemorySurveyRepository implements SurveyRepository {
     List<MaterialMasterItem> remoteItems,
   ) async {
     for (final item in remoteItems) {
-      if (_dirtyMaterialMasterItemIds.contains(item.id)) {
-        continue; // Unsynced local edit — leave it, don't clobber.
+      if (_dirtyMaterialMasterItemIds.contains(item.id) ||
+          _pendingDeleteMaterialMasterItemIds.contains(item.id)) {
+        continue; // Unsynced local edit/delete — leave it, don't clobber.
       }
       _materialMasterItems[item.id] = item;
       // Deliberately not added to _dirtyMaterialMasterItemIds — it came from
       // remote, already in sync.
+    }
+
+    // Reconciliation: a row that's active locally (not dirty, not already
+    // pending its own local delete) but absent from this complete remote
+    // fetch was deleted directly in Supabase — remove it here too. Skipped
+    // entirely when remoteItems is empty — see the sqflite repository's
+    // implementation for why.
+    if (remoteItems.isEmpty) return;
+    final remoteIds = remoteItems.map((i) => i.id).toSet();
+    for (final id in _materialMasterItems.keys.toList()) {
+      if (remoteIds.contains(id)) continue;
+      if (_dirtyMaterialMasterItemIds.contains(id) ||
+          _pendingDeleteMaterialMasterItemIds.contains(id)) {
+        continue;
+      }
+      _materialMasterItems.remove(id);
     }
   }
 

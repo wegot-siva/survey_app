@@ -182,7 +182,10 @@ abstract class SurveyRepository {
   // (e.g. "Admin"), recorded against each audit entry.
 
   /// [dirtyOnly] limits to rows not yet pushed since their last local
-  /// change — sync-only, see [markMaterialMasterItemSynced].
+  /// change — sync-only, see [markMaterialMasterItemSynced]. Never includes
+  /// a row pending deletion (see [deleteMaterialMasterItem]) — deletion is
+  /// its own sync path, [getPendingDeleteMaterialMasterItemIds] /
+  /// [hardDeleteMaterialMasterItem].
   Future<List<MaterialMasterItem>> getMaterialMasterItems({bool dirtyOnly = false});
 
   /// Persists a new Material Master row, assigning it an id, and returns it.
@@ -199,9 +202,24 @@ abstract class SurveyRepository {
     required String changedByRole,
   });
 
-  /// Deletes a row and logs a single change-log entry summarizing what was
-  /// removed.
+  /// Marks [id] for deletion (a tombstone, not a hard delete) and logs a
+  /// single change-log entry summarizing what was removed — same convention
+  /// as [deleteSourcePoint]/[deleteInletPoint]. The row disappears from
+  /// every normal read immediately, but survives in storage until
+  /// [hardDeleteMaterialMasterItem] is called once that remote delete
+  /// succeeds, so a delete that fails partway (offline, etc.) is retried on
+  /// the next sync exactly like any other unsynced change.
   Future<void> deleteMaterialMasterItem(String id, {required String changedByRole});
+
+  /// Every Material Master row id currently pending deletion — sync-only,
+  /// see [deleteMaterialMasterItem] / [hardDeleteMaterialMasterItem]. Not
+  /// site-scoped, unlike the source/inlet point equivalents.
+  Future<List<String>> getPendingDeleteMaterialMasterItemIds();
+
+  /// Physically removes a pending-delete row. Call only after that id's
+  /// remote delete has actually succeeded — see
+  /// [getPendingDeleteMaterialMasterItemIds].
+  Future<void> hardDeleteMaterialMasterItem(String id);
 
   /// Clears the sync-pending flag for Material Master row [id]. Call once
   /// that row's push to Supabase has succeeded.
@@ -209,11 +227,24 @@ abstract class SurveyRepository {
 
   /// Merges Supabase's material_master_items rows into local storage, keyed
   /// by id: inserts anything new, and overwrites anything existing — unless
-  /// that local row has an unsynced edit of its own (still dirty), in which
-  /// case it's left untouched so a pull never clobbers an admin's in-flight
-  /// change before it's had a chance to push. Merged rows are never marked
-  /// dirty themselves — they came from Supabase, the table's source of
-  /// truth, so they're already in sync.
+  /// that local row has an unsynced edit or pending delete of its own, in
+  /// which case it's left untouched so a pull never clobbers an admin's
+  /// in-flight change before it's had a chance to push. Merged rows are
+  /// never marked dirty themselves — they came from Supabase, the table's
+  /// source of truth, so they're already in sync.
+  ///
+  /// Also reconciles the other direction: a local row that's active (not
+  /// dirty, not already pending its own local delete) but absent from
+  /// [remoteItems] was deleted directly in Supabase, so it's hard-deleted
+  /// here too — unless [remoteItems] is empty, in which case reconciliation
+  /// is skipped entirely (an empty result is far more likely to mean "the
+  /// fetch went wrong somehow" than "every row was really just deleted";
+  /// treating it as the latter would wipe the whole local catalog on a
+  /// fluke). [remoteItems] must always be a complete, successful fetch of
+  /// the whole table (see [SupabaseSurveyDataSource.fetchMaterialMasterItems]'s
+  /// pagination) — a partial or failed fetch must never reach this method at
+  /// all, since a truncated list would otherwise look identical to a mass
+  /// deletion.
   ///
   /// The pull half of Material Master's sync (the other tables here are all
   /// device-authored and push-only) — Material Master is populated

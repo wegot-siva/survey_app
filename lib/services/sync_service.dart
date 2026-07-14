@@ -261,14 +261,21 @@ class SyncService {
       }
 
       // Material Master is global reference data, not site-scoped — push
-      // just the dirty rows once, outside the per-site loop.
-      final materials = await _repository.getMaterialMasterItems(
-        dirtyOnly: true,
-      );
+      // once, outside the per-site loop. Deletions first (so a delete that
+      // fails partway is retried next sync, same convention as source/inlet
+      // point tombstones), then dirty upserts.
+      var materialMasterItems = 0;
+      for (final id in await _repository.getPendingDeleteMaterialMasterItemIds()) {
+        await _remote.deleteMaterialMasterItem(id);
+        await _repository.hardDeleteMaterialMasterItem(id);
+        materialMasterItems++;
+      }
+      final materials = await _repository.getMaterialMasterItems(dirtyOnly: true);
       for (final material in materials) {
         await _remote.pushMaterialMasterItem(material);
         await _repository.markMaterialMasterItemSynced(material.id);
       }
+      materialMasterItems += materials.length;
 
       final auditEntries = await _repository.getMaterialMasterAuditLog(
         dirtyOnly: true,
@@ -300,7 +307,7 @@ class SyncService {
         ductLoras: ductLoras,
         gateways: gateways,
         footers: footers,
-        materialMasterItems: materials.length,
+        materialMasterItems: materialMasterItems,
         materialMasterAuditEntries: auditEntries.length,
         photos: photos,
         bomManualEntries: bomManualEntries,
@@ -324,17 +331,19 @@ class SyncService {
 
   /// Pulls every Material Master row from Supabase and merges it into local
   /// storage (see [SurveyRepository.upsertMaterialMasterItemsFromRemote] for
-  /// the merge rule — new rows are inserted, existing ones overwritten
-  /// unless they have an unsynced local edit of their own).
+  /// the merge rule — new rows are inserted, existing ones overwritten,
+  /// unless they have an unsynced local edit/delete of their own, and a row
+  /// deleted directly in Supabase is reconciled away locally too).
   ///
   /// Material Master is the one table in this file that needs a pull at
-  /// all: it's global reference data populated centrally (e.g. a bulk SQL
-  /// import of the plumbing catalog), so a row entered directly in Supabase
-  /// must still reach every device — unlike every other table here, which is
-  /// device-authored and reaches Supabase by push alone. Deliberately kept
-  /// separate from [pushAll] rather than folded into its loop, so push
-  /// behavior for every table (including Material Master's own push) is
-  /// completely unaffected by this method existing.
+  /// all: it's global reference data populated/edited centrally (e.g. bulk
+  /// SQL against the plumbing catalog), so a row added, edited, or deleted
+  /// directly in Supabase must still reach every device — unlike every
+  /// other table here, which is device-authored and reaches Supabase by
+  /// push alone. Deliberately kept separate from [pushAll] rather than
+  /// folded into its loop, so push behavior for every table (including
+  /// Material Master's own push) is completely unaffected by this method
+  /// existing.
   ///
   /// Reuses [SyncResult] purely as a convenient result shape (`success`,
   /// `materialMasterItems` count, `message` on failure) — it does not mean a

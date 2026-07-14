@@ -116,15 +116,43 @@ class SupabaseSurveyDataSource {
         .upsert(_materialMasterItemToRemoteRow(item));
   }
 
+  /// Deletes a Material Master row by id (idempotent — a no-op if it was
+  /// never pushed, or already deleted remotely). Only called once
+  /// [SurveyRepository.getPendingDeleteMaterialMasterItemIds] confirms the
+  /// row is tombstoned locally.
+  Future<void> deleteMaterialMasterItem(String id) async {
+    await _client.from('material_master_items').delete().eq('id', id);
+  }
+
   /// Fetches every Material Master row from Supabase — the pull half of
   /// Material Master's sync (see the class doc comment for why this table
-  /// alone needs one). The caller merges these into local storage; this
-  /// method only reads.
+  /// alone needs one). The caller merges these into local storage (including
+  /// reconciling deletes — a row missing from this result is treated as
+  /// deleted remotely), so this MUST return the complete table, never a
+  /// partial page.
+  ///
+  /// Paginates explicitly via `.range()` rather than trusting a single
+  /// `.select()` to return everything — PostgREST caps an unbounded request
+  /// at a server-configured max-rows (commonly 1000), and the plumbing
+  /// catalog import alone is expected to add ~1000 rows on top of what's
+  /// already here. Advances by the actual row count received each page
+  /// (not the nominal page size), so this stays correct even if the server
+  /// enforces a smaller cap than requested; stops only on a genuinely empty
+  /// page, so it can never mistake a capped page for the end of the table.
   Future<List<MaterialMasterItem>> fetchMaterialMasterItems() async {
-    final rows = await _client.from('material_master_items').select();
-    return rows
-        .map((r) => _materialMasterItemFromRemoteRow(r))
-        .toList(growable: false);
+    const pageSize = 500;
+    final all = <MaterialMasterItem>[];
+    var offset = 0;
+    while (true) {
+      final page = await _client
+          .from('material_master_items')
+          .select()
+          .range(offset, offset + pageSize - 1);
+      if (page.isEmpty) break;
+      all.addAll(page.map((r) => _materialMasterItemFromRemoteRow(r)));
+      offset += page.length;
+    }
+    return all;
   }
 
   /// Upserts a Material Master change-log entry by its id (idempotent). Not
