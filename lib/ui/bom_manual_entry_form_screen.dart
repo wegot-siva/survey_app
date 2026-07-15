@@ -12,13 +12,13 @@ import 'widgets/form_fields.dart';
 /// row (its name/SKU/unit come along for the ride), and enter a quantity.
 /// Add or edit a single [BomManualEntry].
 ///
-/// Group C's plumbing catalog (uPVC/CPVC fittings) can carry finer structure
-/// ([MaterialMasterItem.materialType]/[category]/[variant]/[sizeMm]/
-/// [sizeDisplay]) to drive a 4-level cascading selector (Material Type ->
-/// Category -> Variant -> Size) instead of one flat dropdown — see
-/// [_cascadeModeActive]. Every other group, and any C row from the earlier
-/// Lumax-derived seed (material_type unset), keeps the flat dropdown exactly
-/// as before.
+/// Groups C and D always show a 4-level cascading selector (Material Type ->
+/// Category -> Variant -> Size) driven by the plumbing catalog's finer
+/// structure ([MaterialMasterItem.materialType]/[category]/[variant]/
+/// [sizeMm]/[sizeDisplay]) — see [_cascadeModeActive]. Unconditional: C/D
+/// never fall back to a flat dropdown, even if the catalog currently has no
+/// material_type-tagged rows (the Material Type level just shows an empty
+/// hint in that case). Every other group (E/F/G) uses the flat dropdown.
 ///
 /// Mechanics only — this entry is not linked back to the catalog row's id, so
 /// it survives that row being edited or removed later, and it is never read
@@ -117,19 +117,18 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
   }
 
   /// True when the target group should show the 4-level cascade instead of
-  /// the flat dropdown — i.e. the target group is C (Plumbing accessories)
-  /// or D (Plumbing rework — reworks draw from the same plumbing catalog),
-  /// and at least one catalog row carries a non-empty
-  /// [MaterialMasterItem.materialType]. The cascade under D reads the exact
-  /// same material_type-tagged rows as C — those rows' own `group` stays C;
-  /// only the entry being saved gets D (see [_save], unchanged). Rows without
-  /// a materialType (E/F/G, and any C row from the earlier Lumax-derived
-  /// seed) never appear in the cascade — they're only reachable via the flat
-  /// dropdown under a different target group, unchanged from before.
-  bool get _cascadeModeActive {
-    if (_group != MaterialGroup.c && _group != MaterialGroup.d) return false;
-    return _catalog.any((m) => (m.materialType ?? '').isNotEmpty);
-  }
+  /// the flat dropdown — unconditionally for C (Plumbing accessories) and D
+  /// (Plumbing rework — reworks draw from the same plumbing catalog), never
+  /// for any other group. Not gated on whether the catalog currently has any
+  /// material_type-tagged rows: C/D must always show the cascade, even on an
+  /// empty catalog (see the Material Type dropdown's emptyHint in
+  /// [_buildCascadeFields] for that case) — a flat dropdown must never
+  /// appear for these two groups under any data condition. The cascade under
+  /// D reads the exact same material_type-tagged rows as C — those rows'
+  /// own `group` stays C; only the entry being saved gets D (see [_save],
+  /// unchanged).
+  bool get _cascadeModeActive =>
+      _group == MaterialGroup.c || _group == MaterialGroup.d;
 
   void _onGroupChanged(MaterialGroup? newGroup) {
     final wasCascade = _cascadeModeActive;
@@ -216,19 +215,42 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     );
   }
 
+  /// True when the current Material Type + Category has two or more
+  /// distinct real variant values to choose between — re-evaluated on every
+  /// build, so changing either level above immediately reflects the new
+  /// combination's own variant situation. When false (zero or exactly one
+  /// distinct value), the Variant step is skipped entirely: most rows carry
+  /// no variant distinction at all, and requiring a selection there was a
+  /// dead end (a disabled dropdown the flow still waited on).
+  bool get _cascadeNeedsVariantStep => _cascadeVariants.length >= 2;
+
   List<MaterialMasterItem> get _cascadeSizeRows {
     final materialType = _cascadeMaterialType;
     final category = _cascadeCategory;
-    final variant = _cascadeVariant;
-    if (materialType == null || category == null || variant == null) {
-      return const [];
+    if (materialType == null || category == null) return const [];
+    if (_cascadeNeedsVariantStep) {
+      final variant = _cascadeVariant;
+      if (variant == null) return const [];
+      final rows = _catalog
+          .where(
+            (m) =>
+                m.materialType == materialType &&
+                m.category == category &&
+                m.variant == variant,
+          )
+          .toList();
+      rows.sort((a, b) => (a.sizeMm ?? 0).compareTo(b.sizeMm ?? 0));
+      return rows;
     }
+    // No real variant distinction for this Material Type + Category — every
+    // matching row is reachable from Category alone (whether its own
+    // `variant` is null, or the one shared non-null value there's no need
+    // to choose between).
     final rows = _catalog
         .where(
           (m) =>
               m.materialType == materialType &&
-              m.category == category &&
-              m.variant == variant,
+              m.category == category,
         )
         .toList();
     rows.sort((a, b) => (a.sizeMm ?? 0).compareTo(b.sizeMm ?? 0));
@@ -306,7 +328,19 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     );
   }
 
+  /// Why the Size dropdown is currently empty, if it is — reflects whichever
+  /// prior step actually gates it, since the Variant step may or may not be
+  /// part of that chain (see [_cascadeNeedsVariantStep]).
+  String get _cascadeSizeEmptyHint {
+    if (_cascadeCategory == null) return 'Choose a Category first.';
+    if (_cascadeNeedsVariantStep && _cascadeVariant == null) {
+      return 'Choose a Variant first.';
+    }
+    return 'No sizes found for this selection.';
+  }
+
   Widget _buildCascadeFields() {
+    final needsVariantStep = _cascadeNeedsVariantStep;
     return Column(
       children: [
         AppDropdownField<String>(
@@ -314,6 +348,9 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
           value: _cascadeMaterialType,
           items: _cascadeMaterialTypes,
           itemLabel: (t) => t,
+          emptyHint:
+              'No plumbing catalog rows yet — add Material Master rows with '
+              'Material Type set (Admin only).',
           onChanged: (v) => setState(() {
             _cascadeMaterialType = v;
             _cascadeCategory = null;
@@ -333,17 +370,23 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
             _applySelectedMaterial(null);
           }),
         ),
-        AppDropdownField<String>(
-          label: 'Variant',
-          value: _cascadeVariant,
-          items: _cascadeVariants,
-          itemLabel: (t) => t,
-          emptyHint: 'Choose a Category first.',
-          onChanged: (v) => setState(() {
-            _cascadeVariant = v;
-            _applySelectedMaterial(null);
-          }),
-        ),
+        // Skipped entirely (not just disabled) when this Material Type +
+        // Category combination has zero or one real variant value — most
+        // rows carry no variant distinction at all, so requiring a
+        // selection here was a dead end. Re-evaluated on every build, so
+        // switching Category can add or remove this step immediately.
+        if (needsVariantStep)
+          AppDropdownField<String>(
+            label: 'Variant',
+            value: _cascadeVariant,
+            items: _cascadeVariants,
+            itemLabel: (t) => t,
+            emptyHint: 'Choose a Category first.',
+            onChanged: (v) => setState(() {
+              _cascadeVariant = v;
+              _applySelectedMaterial(null);
+            }),
+          ),
         AppDropdownField<MaterialMasterItem>(
           label: 'Size',
           value: _selectedMaterial,
@@ -351,7 +394,7 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
           itemLabel: (m) => m.sizeDisplay?.isNotEmpty == true
               ? m.sizeDisplay!
               : _catalogItemLabel(m),
-          emptyHint: 'Choose a Variant first.',
+          emptyHint: _cascadeSizeEmptyHint,
           onChanged: _onMaterialSelected,
         ),
       ],

@@ -438,9 +438,7 @@ Map<String, Object?> _materialMasterItemToRemoteRow(MaterialMasterItem m) {
 MaterialMasterItem _materialMasterItemFromRemoteRow(Map<String, dynamic> r) {
   return MaterialMasterItem(
     id: r['id'] as String,
-    group:
-        _enumByName(MaterialGroup.values, r['group_code'] as String?) ??
-        MaterialGroup.a,
+    group: _materialGroupFromRemoteCode(r['group_code'] as String?),
     materialName: (r['material_name'] as String?) ?? '',
     sku: (r['sku'] as String?) ?? '',
     itemLabel: (r['item_label'] as String?) ?? '',
@@ -475,6 +473,26 @@ T? _enumByName<T extends Enum>(List<T> values, String? name) {
     if (value.name == name) return value;
   }
   return null;
+}
+
+/// Resolves a Supabase material_master_items.group_code value to its
+/// [MaterialGroup]. This table's own convention (every row this app itself
+/// writes) is the lowercase enum identifier, e.g. 'c' — but a bulk SQL
+/// import (the plumbing catalog) instead used the uppercase display letter,
+/// e.g. 'C', for every row. `_enumByName`'s exact, case-sensitive match
+/// against `.name` silently missed all of those and fell back to A, so
+/// this accepts either form, matched case-insensitively, before falling
+/// back. Falls back to A only when truly unrecognized — same default
+/// [_enumByName] already used here.
+MaterialGroup _materialGroupFromRemoteCode(String? code) {
+  if (code == null) return MaterialGroup.a;
+  final normalized = code.toLowerCase();
+  for (final group in MaterialGroup.values) {
+    if (group.name == normalized || group.code.toLowerCase() == normalized) {
+      return group;
+    }
+  }
+  return MaterialGroup.a;
 }
 
 Map<String, Object?> _materialMasterAuditEntryToRemoteRow(
