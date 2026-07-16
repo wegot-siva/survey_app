@@ -4,7 +4,6 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/engineer_directory.dart';
-import 'material_master_seed.dart';
 
 /// Opens (and on first run, creates) the local SQLite database.
 ///
@@ -326,9 +325,6 @@ Future<Database> openAppDatabase() async {
       await _createGatewaysTable(db);
       await _createFootersTable(db);
       await _createMaterialMasterItemsTable(db);
-      // DEV-ONLY, fresh installs only — see material_master_seed.dart for
-      // removal instructions once real production data replaces this.
-      await seedMaterialMasterItems(db);
       await _createPhotosTable(db);
       await _createMaterialMasterAuditTable(db);
       await _createBomManualEntriesTable(db);
