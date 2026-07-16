@@ -2,11 +2,12 @@ import 'material_master_item.dart';
 import 'survey_options.dart';
 
 /// Groups the "Add materials" picker allows a manual entry to be filed under.
-/// C (Plumbing accessories), D (Plumbing rework), E (Electrical), F
-/// (Consumables), and G (Labour) — the auto-computed BoM only covers A
-/// (WEGOTAqua sensors) and B (DCU/Duct LoRa) from survey data; this picker
-/// covers everything else.
+/// B (DCU/Duct LoRa/cable), C (Plumbing accessories), D (Plumbing rework), E
+/// (Electrical), F (Consumables), and G (Labour) — the auto-computed BoM only
+/// covers A (WEGOTAqua sensors) from survey data; this picker covers
+/// everything else.
 const List<MaterialGroup> kBomManualEntryGroups = [
+  MaterialGroup.b,
   MaterialGroup.c,
   MaterialGroup.d,
   MaterialGroup.e,

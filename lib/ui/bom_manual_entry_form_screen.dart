@@ -127,7 +127,9 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
     }
     if (group == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Choose a group (C, D, E, F, or G).')),
+        const SnackBar(
+          content: Text('Choose a group (B, C, D, E, F, or G).'),
+        ),
       );
       return;
     }
@@ -193,7 +195,7 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
             )
           else
             AppDropdownField<MaterialGroup>(
-              label: 'Group (C, D, E, F, or G only)',
+              label: 'Group (B, C, D, E, F, or G only)',
               value: _group,
               items: kBomManualEntryGroups,
               itemLabel: (g) => '${g.code} — ${g.label}',

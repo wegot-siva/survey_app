@@ -6,10 +6,10 @@ import '../models/bom_manual_entry.dart';
 import '../models/material_master_item.dart';
 import 'bom_manual_entry_form_screen.dart';
 
-/// One group's (C, D, E, F, or G) BoM section: any auto-computed lines for
+/// One group's (B, C, D, E, F, or G) BoM section: any auto-computed lines for
 /// that group (read-only — most Material Master rows in these groups are
 /// manual-only, but D/E/G can still carry a real fixed/derived/variable row
-/// same as A/B, so this isn't assumed empty), plus that group's manually-
+/// same as A, so this isn't assumed empty), plus that group's manually-
 /// added entries, with add/edit/delete. Replaces the old cross-group
 /// `BomManualEntriesScreen` — reachable only from within its own BoM
 /// section, so the target group is already implied by [group] and the

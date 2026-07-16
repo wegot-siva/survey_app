@@ -30,8 +30,9 @@ void main() {
         addedAt: DateTime(2026, 1, 1),
       );
 
-  test('kBomManualEntryGroups is exactly C, D, E, F, G', () {
+  test('kBomManualEntryGroups is exactly B, C, D, E, F, G', () {
     expect(kBomManualEntryGroups, [
+      MaterialGroup.b,
       MaterialGroup.c,
       MaterialGroup.d,
       MaterialGroup.e,
@@ -40,10 +41,11 @@ void main() {
     ]);
   });
 
-  test('the five allowed groups .code is the literal value the DB stores', () {
+  test('the six allowed groups .code is the literal value the DB stores', () {
     // sqflite/Supabase row mapping persists `.code` (not `.name`) for this
     // table's group_code column — locks that contract in against MaterialGroup
     // changing shape later without this table's storage format being noticed.
+    expect(MaterialGroup.b.code, 'B');
     expect(MaterialGroup.c.code, 'C');
     expect(MaterialGroup.d.code, 'D');
     expect(MaterialGroup.e.code, 'E');

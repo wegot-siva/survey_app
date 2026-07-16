@@ -17,7 +17,6 @@ import '../services/bom_revision_engine.dart';
 import '../services/lumax_exporter.dart';
 import '../services/sun_bom_exporter.dart';
 import 'bom_group_a_section_screen.dart';
-import 'bom_group_b_section_screen.dart';
 import 'bom_group_manual_section_screen.dart';
 import 'bom_manual_edit_screen.dart';
 import 'bom_revision_form_screen.dart';
@@ -113,7 +112,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   // Never affects export, which already excludes zero-qty rows/empty groups
   // on its own. The unlocked/live view's own per-group "show all" toggle
   // lives on each section screen now (BomGroupASectionScreen /
-  // BomGroupBSectionScreen) instead of here.
+  // BomGroupManualSectionScreen) instead of here.
   bool _showAllItems = false;
 
   @override
@@ -125,13 +124,17 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Future<void> _generate() async {
     setState(() => _loading = true);
     final materials = await widget.repository.getMaterialMasterItems();
-    // C (Plumbing accessories) and F (Consumables) moved to manual-picker-only
-    // entry — excluded here so the engine stops auto-generating lines for
-    // them, but the rows themselves stay in Material Master for the picker
-    // to read from.
+    // B (DCU/Duct LoRa/cable), C (Plumbing accessories), and F (Consumables)
+    // moved to manual-picker-only entry — excluded here so the engine stops
+    // auto-generating lines for them, but the rows themselves stay in
+    // Material Master for the picker to read from. A is now the only fully
+    // auto-generated group.
     final autoMaterials = materials
         .where(
-          (m) => m.group != MaterialGroup.c && m.group != MaterialGroup.f,
+          (m) =>
+              m.group != MaterialGroup.b &&
+              m.group != MaterialGroup.c &&
+              m.group != MaterialGroup.f,
         )
         .toList();
     final sourcePoints = await widget.repository.getSourcePoints(
@@ -258,12 +261,11 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
 
   /// Opens the tapped group's own BoM section — the unlocked-view entry
   /// point, available any time regardless of survey status. A (fully
-  /// auto-computed) and B (Duct LoRa auto-computed + cable via the existing
-  /// Duct LoRa flow) get bespoke read-only-biased screens; C/D/E/F/G share
+  /// auto-computed) gets a bespoke read-only-biased screen; B/C/D/E/F/G share
   /// [BomGroupManualSectionScreen], pre-scoped so the engineer never
-  /// re-selects the group. Always refreshes on return — a manual entry (or,
-  /// for B, a Duct LoRa unit) may have been added/edited/deleted, and the
-  /// section-list overview's counts need to reflect that.
+  /// re-selects the group. Always refreshes on return — a manual entry may
+  /// have been added/edited/deleted, and the section-list overview's counts
+  /// need to reflect that.
   Future<void> _openSection(MaterialGroup group) async {
     final bom = _bom;
     final autoLines = bom?[group] ?? const <BomLine>[];
@@ -275,16 +277,6 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           ),
         );
       case MaterialGroup.b:
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => BomGroupBSectionScreen(
-              repository: widget.repository,
-              site: widget.site,
-              lines: autoLines,
-              readOnly: widget.readOnly,
-            ),
-          ),
-        );
       case MaterialGroup.c:
       case MaterialGroup.d:
       case MaterialGroup.e:
@@ -794,13 +786,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   /// How many lines currently count as "in" [group], for the section-list
   /// overview only — auto lines with a positive quantity (BomEngine emits
   /// every Material Master row regardless of quantity, so a zero-qty row
-  /// isn't "current"), plus, for C/D/E/F/G, that group's manual entries.
-  /// Group A and B never have manual entries of their own (A has no add
-  /// action at all; B's only addable thing, cable, rides on Duct LoRa units,
-  /// not a manual entry), so their count is auto-only.
+  /// isn't "current"), plus, for B/C/D/E/F/G, that group's manual entries.
+  /// Group A never has manual entries of its own (no add action at all), so
+  /// its count is auto-only.
   int _sectionCount(Map<MaterialGroup, List<BomLine>> bom, MaterialGroup group) {
     final autoCount = (bom[group] ?? const []).where((l) => l.quantity > 0).length;
-    if (group == MaterialGroup.a || group == MaterialGroup.b) return autoCount;
+    if (group == MaterialGroup.a) return autoCount;
     return autoCount + _manualEntries.where((e) => e.group == group).length;
   }
 }
