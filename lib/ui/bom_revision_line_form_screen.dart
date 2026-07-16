@@ -5,12 +5,20 @@ import '../data/survey_repository.dart';
 import '../models/bom_revision_line.dart';
 import '../models/material_master_item.dart';
 import '../models/survey_options.dart';
+import 'widgets/bom_material_picker.dart';
 import 'widgets/form_fields.dart';
 
-/// Builds one draft [BomRevisionLine] for the "Add revision" flow: pick a
-/// Material Master catalog row (name/SKU/unit come along for the ride, like
-/// the D/E/G "Add materials" picker), enter a quantity delta (+/-), and file
-/// it under any group A-G.
+/// Builds one draft [BomRevisionLine] for the "Add revision" flow: choose a
+/// target group (A-G), pick a Material Master catalog row from it (name/
+/// SKU/unit come along for the ride), and enter a quantity delta (+/-).
+///
+/// Group is chosen first here (unlike the old flat-catalog-then-group
+/// order this screen used to have) so [BomMaterialPicker] — the same
+/// cascade-for-C/D, group-filtered-flat-for-everything-else picker the
+/// "Add materials" screen uses — has a group to filter by from the start.
+/// This also fixes the same cross-group leakage bug for revisions that the
+/// "Add materials" picker had: the old flat dropdown here showed the
+/// *entire* catalog regardless of group.
 ///
 /// Adding a brand-new material and adjusting the quantity of an existing v1
 /// item are the same action here — both just pick a catalog row and enter a
@@ -34,9 +42,6 @@ class _BomRevisionLineFormScreenState
     extends State<BomRevisionLineFormScreen> {
   final _qty = TextEditingController();
 
-  List<MaterialMasterItem> _catalog = const [];
-  bool _loadingCatalog = true;
-
   MaterialMasterItem? _selectedMaterial;
   String _materialName = '';
   String _sku = '';
@@ -47,37 +52,32 @@ class _BomRevisionLineFormScreenState
   MaterialGroup? _group;
 
   @override
-  void initState() {
-    super.initState();
-    _loadCatalog();
-  }
-
-  Future<void> _loadCatalog() async {
-    final items = await widget.repository.getMaterialMasterItems();
-    if (!mounted) return;
-    setState(() {
-      _catalog = items;
-      _loadingCatalog = false;
-    });
-  }
-
-  @override
   void dispose() {
     _qty.dispose();
     super.dispose();
   }
 
-  void _onMaterialSelected(MaterialMasterItem? item) {
+  void _onGroupChanged(MaterialGroup? newGroup) {
+    setState(() => _group = newGroup);
+  }
+
+  void _onMaterialChanged(MaterialMasterItem? item) {
     setState(() {
       _selectedMaterial = item;
-      if (item != null) {
+      if (item == null) {
+        _materialName = '';
+        _sku = '';
+        _itemLabel = '';
+        _sensorSize = null;
+        _sensorType = null;
+        _unit = '';
+      } else {
         _materialName = item.materialName;
         _sku = item.sku;
         _itemLabel = item.itemLabel;
         _sensorSize = item.sensorSize;
         _sensorType = item.sensorType;
         _unit = item.unit;
-        _group = item.group;
       }
     });
   }
@@ -136,67 +136,63 @@ class _BomRevisionLineFormScreenState
     return parts.isEmpty ? materialName : '$materialName (${parts.join(' · ')})';
   }
 
-  static String _catalogItemLabel(MaterialMasterItem m) {
-    final namePart = m.sku.isEmpty ? m.materialName : '${m.materialName} (${m.sku})';
-    return '$namePart — ${m.unit}';
-  }
-
   @override
   Widget build(BuildContext context) {
+    final group = _group;
     return Scaffold(
       appBar: AppBar(title: const Text('Add line')),
-      body: _loadingCatalog
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                AppDropdownField<MaterialMasterItem>(
-                  label: 'Material (from catalog)',
-                  value: _selectedMaterial,
-                  items: _catalog,
-                  itemLabel: _catalogItemLabel,
-                  emptyHint:
-                      'No Material Master rows yet — add some first (home '
-                      'screen, Admin only).',
-                  onChanged: _onMaterialSelected,
-                ),
-                if (_materialName.isNotEmpty)
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.inventory_2_outlined),
-                      title: Text(_materialName),
-                      subtitle: Text(
-                        _sku.isEmpty ? 'Unit: $_unit' : 'SKU: $_sku  •  Unit: $_unit',
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 16),
-                AppTextField(
-                  controller: _qty,
-                  label: 'Quantity delta (+/-)',
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                    signed: true,
-                  ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
-                  ],
-                ),
-                AppDropdownField<MaterialGroup>(
-                  label: 'Group (A-G)',
-                  value: _group,
-                  items: MaterialGroup.values,
-                  itemLabel: (g) => '${g.code} — ${g.label}',
-                  onChanged: (v) => setState(() => _group = v),
-                ),
-                const SizedBox(height: 24),
-                FilledButton.icon(
-                  onPressed: _addLine,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add line'),
-                ),
-              ],
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          AppDropdownField<MaterialGroup>(
+            label: 'Group (A-G)',
+            value: _group,
+            items: MaterialGroup.values,
+            itemLabel: (g) => '${g.code} — ${g.label}',
+            onChanged: _onGroupChanged,
+          ),
+          const SizedBox(height: 8),
+          if (group != null)
+            BomMaterialPicker(
+              repository: widget.repository,
+              group: group,
+              onChanged: _onMaterialChanged,
+            )
+          else
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('Choose a group first.'),
             ),
+          if (_materialName.isNotEmpty)
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.inventory_2_outlined),
+                title: Text(_materialName),
+                subtitle: Text(
+                  _sku.isEmpty ? 'Unit: $_unit' : 'SKU: $_sku  •  Unit: $_unit',
+                ),
+              ),
+            ),
+          const SizedBox(height: 16),
+          AppTextField(
+            controller: _qty,
+            label: 'Quantity delta (+/-)',
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: true,
+              signed: true,
+            ),
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
+            ],
+          ),
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: _addLine,
+            icon: const Icon(Icons.add),
+            label: const Text('Add line'),
+          ),
+        ],
+      ),
     );
   }
 }

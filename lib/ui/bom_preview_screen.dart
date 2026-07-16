@@ -20,6 +20,7 @@ import 'bom_group_a_section_screen.dart';
 import 'bom_group_b_section_screen.dart';
 import 'bom_group_manual_section_screen.dart';
 import 'bom_manual_edit_screen.dart';
+import 'bom_revision_form_screen.dart';
 import 'bom_revisions_screen.dart';
 
 /// Which export formatter to use — both read the same running-total data
@@ -322,6 +323,25 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     );
     // A revision or manual edit may have been added — refresh the running
     // total.
+    await _generate();
+  }
+
+  /// Jumps straight to "Add revision" — a fast path from the BoM overview
+  /// (the FAB below), added alongside (not replacing) the AppBar's "Version
+  /// history" -> [_openRevisions] path, which still works exactly as before
+  /// for browsing v1/past revisions/manual edits. Only shown once locked —
+  /// see the FAB in [build].
+  Future<void> _addRevision() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => BomRevisionFormScreen(
+          repository: widget.repository,
+          surveyId: widget.site.id,
+          surveyName: widget.site.name,
+          createdByRole: widget.addedByRole,
+        ),
+      ),
+    );
     await _generate();
   }
 
@@ -685,6 +705,17 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                     )
                   : const Icon(Icons.lock_outline),
               label: const Text('Finalize'),
+            )
+          // Fast path to "Add revision" — one tap from the BoM overview,
+          // once locked (mirrors canFinalize's own "!locked" gate, so the
+          // two FABs never overlap). "Version history" still exists in the
+          // AppBar above for browsing v1/past revisions/manual edits;
+          // nothing about that path changed.
+          : locked
+          ? FloatingActionButton.extended(
+              onPressed: _addRevision,
+              icon: const Icon(Icons.add),
+              label: const Text('Add revision'),
             )
           : null,
       body: _loading
