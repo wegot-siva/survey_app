@@ -110,11 +110,7 @@ class _BomRevisionFormScreenState extends State<BomRevisionFormScreen> {
             for (var i = 0; i < _lines.length; i++)
               Card(
                 child: ListTile(
-                  title: Text(
-                    _lines[i].sku.isEmpty
-                        ? _lines[i].item
-                        : '${_lines[i].item} (${_lines[i].sku})',
-                  ),
+                  title: Text(_lines[i].item),
                   subtitle: Text(
                     '${_lines[i].group.code} — ${_lines[i].group.label}',
                   ),

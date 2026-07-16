@@ -184,11 +184,7 @@ class _BomGroupManualSectionScreenState
                   Card(
                     child: ListTile(
                       leading: const Icon(Icons.inventory_2_outlined),
-                      title: Text(
-                        entry.sku.isEmpty
-                            ? entry.materialName
-                            : '${entry.materialName} (${entry.sku})',
-                      ),
+                      title: Text(entry.materialName),
                       subtitle: Text(
                         '${_formatQty(entry.qty)} ${entry.unit}  •  '
                         'added by ${entry.addedBy}',

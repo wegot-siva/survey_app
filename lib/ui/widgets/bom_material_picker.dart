@@ -199,10 +199,11 @@ class _BomMaterialPickerState extends State<BomMaterialPicker> {
   List<MaterialMasterItem> get _flatCatalog =>
       _catalog.where((m) => m.group == widget.group).toList();
 
-  static String _catalogItemLabel(MaterialMasterItem m) {
-    final namePart = m.sku.isEmpty ? m.materialName : '${m.materialName} (${m.sku})';
-    return '$namePart — ${m.unit}';
-  }
+  /// SKU is deliberately left out — it made these labels hard to scan when
+  /// choosing between similar rows. Storage/export/audit still carry it;
+  /// only this selection-time display drops it.
+  static String _catalogItemLabel(MaterialMasterItem m) =>
+      '${m.materialName} — ${m.unit}';
 
   Widget _buildFlatDropdown() {
     return AppDropdownField<MaterialMasterItem>(

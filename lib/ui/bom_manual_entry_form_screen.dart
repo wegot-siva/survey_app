@@ -218,9 +218,7 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
               child: ListTile(
                 leading: const Icon(Icons.inventory_2_outlined),
                 title: Text(_materialName),
-                subtitle: Text(
-                  _sku.isEmpty ? 'Unit: $_unit' : 'SKU: $_sku  •  Unit: $_unit',
-                ),
+                subtitle: Text('Unit: $_unit'),
               ),
             ),
           const SizedBox(height: 16),
