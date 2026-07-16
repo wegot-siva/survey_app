@@ -208,6 +208,7 @@ class YesNoField extends StatelessWidget {
     required this.value,
     required this.onChanged,
     this.labelTrailing,
+    this.errorText,
   });
 
   final String label;
@@ -216,6 +217,10 @@ class YesNoField extends StatelessWidget {
 
   /// Optional widget shown to the right of the label, e.g. a [ReferenceLink].
   final Widget? labelTrailing;
+
+  /// Shown below the Yes/No buttons in the error color, e.g. "Required" —
+  /// set by the caller after a failed save attempt on a mandatory field.
+  final String? errorText;
 
   @override
   Widget build(BuildContext context) {
@@ -247,6 +252,15 @@ class YesNoField extends StatelessWidget {
             onSelectionChanged: (sel) =>
                 onChanged(sel.isEmpty ? null : sel.first),
           ),
+          if (errorText != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              errorText!,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          ],
         ],
       ),
     );

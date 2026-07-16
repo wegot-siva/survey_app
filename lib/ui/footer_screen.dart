@@ -55,6 +55,10 @@ class _FooterScreenState extends State<FooterScreen> {
   // next one — see _save().
   String? _surveyorNameError;
   bool _surveyDateError = false;
+  String? _tdsError;
+  String? _tssError;
+  String? _tclServiceError;
+  String? _tclServiceDetailsError;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -184,24 +188,43 @@ class _FooterScreenState extends State<FooterScreen> {
   /// placeholder value so the section passes validation immediately.
   void _fillTestData() {
     setState(() {
+      _tds.text = '1';
+      _tss.text = '1';
+      _tclService = false;
       _surveyorName.text = 'Test Surveyor';
       _surveyDate = DateTime.now();
       _surveyorNameError = null;
       _surveyDateError = false;
+      _tdsError = null;
+      _tssError = null;
+      _tclServiceError = null;
+      _tclServiceDetailsError = null;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Test data filled.')),
-    );
   }
 
   Future<void> _save() async {
     final surveyorName = _surveyorName.text.trim();
+    final tds = _tds.text.trim();
+    final tss = _tss.text.trim();
+    final tclServiceDetails = _tclServiceDetails.text.trim();
 
     setState(() {
       _surveyorNameError = surveyorName.isEmpty ? 'Required' : null;
       _surveyDateError = _surveyDate == null;
+      _tdsError = tds.isEmpty ? 'Required' : null;
+      _tssError = tss.isEmpty ? 'Required' : null;
+      _tclServiceError = _tclService == null ? 'Required' : null;
+      _tclServiceDetailsError =
+          (_tclService == true && tclServiceDetails.isEmpty)
+          ? 'Required'
+          : null;
     });
-    if (_surveyorNameError != null || _surveyDateError) {
+    if (_surveyorNameError != null ||
+        _surveyDateError ||
+        _tdsError != null ||
+        _tssError != null ||
+        _tclServiceError != null ||
+        _tclServiceDetailsError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in the required fields.')),
       );
@@ -270,34 +293,38 @@ class _FooterScreenState extends State<FooterScreen> {
                     children: [
                       AppTextField(
                         controller: _tds,
-                        label: 'TDS (ppm)',
+                        label: 'TDS (ppm) *',
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
                         inputFormatters: [
                           FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                         ],
+                        errorText: _tdsError,
                       ),
                       AppTextField(
                         controller: _tss,
-                        label: 'TSS (ppm)',
+                        label: 'TSS (ppm) *',
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
                         inputFormatters: [
                           FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                         ],
+                        errorText: _tssError,
                       ),
                       YesNoField(
-                        label: 'TCL service',
+                        label: 'TCL service *',
                         value: _tclService,
                         onChanged: (v) => setState(() => _tclService = v),
+                        errorText: _tclServiceError,
                       ),
                       if (_tclService == true)
                         AppTextField(
                           controller: _tclServiceDetails,
-                          label: 'TCL service details',
+                          label: 'TCL service details *',
                           maxLines: 2,
+                          errorText: _tclServiceDetailsError,
                         ),
                       AppTextField(
                         controller: _generalRemarks,

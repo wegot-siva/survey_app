@@ -67,6 +67,18 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
   String? _pocNameError;
   String? _pocContactError;
   String? _goalError;
+  String? _informationSourceError;
+  String? _waterSourcesError;
+  String? _ohtHnsError;
+  String? _finalisedDrawingsError;
+  String? _pointsIdentifiedError;
+  String? _pressureError;
+  String? _pressureBoostersError;
+  String? _reworkRequiredError;
+  String? _reworkDetailsError;
+  String? _ageOfLinesError;
+  String? _aestheticGuidelinesError;
+  String? _aestheticDetailsError;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -207,21 +219,43 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
 
   /// Admin-only dev/QA shortcut — fills every mandatory field with a
   /// placeholder value so the section passes validation immediately. Never
-  /// touches optional/free-text fields (e.g. Notes-style fields elsewhere).
+  /// touches optional/free-text fields (Materials & brand guidelines,
+  /// Attach drawings).
   void _fillTestData() {
     setState(() {
       if (_siteName.text.trim().isEmpty) _siteName.text = widget.site.name;
       _pocName.text = 'Test POC';
       _pocContact.text = '9999999999';
       _goal.text = 'Test goal of installation';
+      _informationSource = InformationSource.values.first;
+      _waterSources
+        ..clear()
+        ..add(WaterSource.values.first);
+      _ohtHns = OhtHns.values.first;
+      _finalisedDrawings = true;
+      _pointsIdentified.text = '1';
+      _pressure.text = '1';
+      _pressureBoosters = true;
+      _reworkRequired = false;
+      _ageOfLines.text = '1 year';
+      _aestheticGuidelines = false;
       _siteNameError = null;
       _pocNameError = null;
       _pocContactError = null;
       _goalError = null;
+      _informationSourceError = null;
+      _waterSourcesError = null;
+      _ohtHnsError = null;
+      _finalisedDrawingsError = null;
+      _pointsIdentifiedError = null;
+      _pressureError = null;
+      _pressureBoostersError = null;
+      _reworkRequiredError = null;
+      _reworkDetailsError = null;
+      _ageOfLinesError = null;
+      _aestheticGuidelinesError = null;
+      _aestheticDetailsError = null;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Test data filled.')),
-    );
   }
 
   Future<void> _save() async {
@@ -229,17 +263,55 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     final pocName = _pocName.text.trim();
     final pocContact = _pocContact.text.trim();
     final goal = _goal.text.trim();
+    final pointsIdentified = _pointsIdentified.text.trim();
+    final pressure = _pressure.text.trim();
+    final ageOfLines = _ageOfLines.text.trim();
 
     setState(() {
       _siteNameError = siteName.isEmpty ? 'Required' : null;
       _pocNameError = pocName.isEmpty ? 'Required' : null;
       _pocContactError = pocContact.isEmpty ? 'Required' : null;
       _goalError = goal.isEmpty ? 'Required' : null;
+      _informationSourceError = _informationSource == null ? 'Required' : null;
+      _waterSourcesError = _waterSources.isEmpty
+          ? 'Select at least one water source.'
+          : null;
+      _ohtHnsError = _ohtHns == null ? 'Required' : null;
+      _finalisedDrawingsError = _finalisedDrawings == null ? 'Required' : null;
+      _pointsIdentifiedError = pointsIdentified.isEmpty ? 'Required' : null;
+      _pressureError = pressure.isEmpty ? 'Required' : null;
+      _pressureBoostersError = _pressureBoosters == null ? 'Required' : null;
+      _reworkRequiredError = _reworkRequired == null ? 'Required' : null;
+      _reworkDetailsError =
+          (_reworkRequired == true && _reworkDetails.text.trim().isEmpty)
+          ? 'Required'
+          : null;
+      _ageOfLinesError = ageOfLines.isEmpty ? 'Required' : null;
+      _aestheticGuidelinesError = _aestheticGuidelines == null
+          ? 'Required'
+          : null;
+      _aestheticDetailsError =
+          (_aestheticGuidelines == true &&
+              _aestheticDetails.text.trim().isEmpty)
+          ? 'Required'
+          : null;
     });
     if (_siteNameError != null ||
         _pocNameError != null ||
         _pocContactError != null ||
-        _goalError != null) {
+        _goalError != null ||
+        _informationSourceError != null ||
+        _waterSourcesError != null ||
+        _ohtHnsError != null ||
+        _finalisedDrawingsError != null ||
+        _pointsIdentifiedError != null ||
+        _pressureError != null ||
+        _pressureBoostersError != null ||
+        _reworkRequiredError != null ||
+        _reworkDetailsError != null ||
+        _ageOfLinesError != null ||
+        _aestheticGuidelinesError != null ||
+        _aestheticDetailsError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in the required fields.')),
       );
@@ -311,14 +383,16 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
           IgnorePointer(
             ignoring: _viewOnly,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _text(_siteName, 'Site name *', errorText: _siteNameError),
                 _dropdown<InformationSource>(
-                  label: 'Information source',
+                  label: 'Information source *',
                   value: _informationSource,
                   items: InformationSource.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _informationSource = v),
+                  errorText: _informationSourceError,
                 ),
                 _text(
                   _pocName,
@@ -337,7 +411,7 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
                   errorText: _goalError,
                 ),
 
-                _Label('Water sources present'),
+                _Label('Water sources present *'),
                 Wrap(
                   spacing: 8,
                   children: [
@@ -355,20 +429,31 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
                       ),
                   ],
                 ),
+                if (_waterSourcesError != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _waterSourcesError!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 16),
 
                 _dropdown<OhtHns>(
-                  label: 'OHT / HNS',
+                  label: 'OHT / HNS *',
                   value: _ohtHns,
                   items: OhtHns.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _ohtHns = v),
+                  errorText: _ohtHnsError,
                 ),
 
                 _yesNo(
-                  'Finalised plumbing drawings',
+                  'Finalised plumbing drawings *',
                   _finalisedDrawings,
                   (v) => setState(() => _finalisedDrawings = v),
+                  errorText: _finalisedDrawingsError,
                 ),
                 MultiPhotoCaptureField(
                   label: 'Attach drawings (photo/scan)',
@@ -386,37 +471,59 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
 
                 _text(
                   _pointsIdentified,
-                  'No. of points identified by client (optional)',
+                  'No. of points identified by client *',
                   keyboardType: TextInputType.number,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  errorText: _pointsIdentifiedError,
                 ),
-                _text(_pressure, 'Max & continuous pressure at all points'),
+                _text(
+                  _pressure,
+                  'Max & continuous pressure at all points *',
+                  errorText: _pressureError,
+                ),
 
                 _yesNo(
-                  'Pressure boosters in system',
+                  'Pressure boosters in system *',
                   _pressureBoosters,
                   (v) => setState(() => _pressureBoosters = v),
+                  errorText: _pressureBoostersError,
                 ),
 
                 _text(_materials, 'Materials & brand guidelines', maxLines: 2),
 
                 _yesNo(
-                  'Rework requirements',
+                  'Rework requirements *',
                   _reworkRequired,
                   (v) => setState(() => _reworkRequired = v),
+                  errorText: _reworkRequiredError,
                 ),
                 if (_reworkRequired == true)
-                  _text(_reworkDetails, 'Rework details', maxLines: 2),
+                  _text(
+                    _reworkDetails,
+                    'Rework details *',
+                    maxLines: 2,
+                    errorText: _reworkDetailsError,
+                  ),
 
-                _text(_ageOfLines, 'Age of plumbing lines'),
+                _text(
+                  _ageOfLines,
+                  'Age of plumbing lines *',
+                  errorText: _ageOfLinesError,
+                ),
 
                 _yesNo(
-                  'Aesthetic guidelines',
+                  'Aesthetic guidelines *',
                   _aestheticGuidelines,
                   (v) => setState(() => _aestheticGuidelines = v),
+                  errorText: _aestheticGuidelinesError,
                 ),
                 if (_aestheticGuidelines == true)
-                  _text(_aestheticDetails, 'Aesthetic details', maxLines: 2),
+                  _text(
+                    _aestheticDetails,
+                    'Aesthetic details *',
+                    maxLines: 2,
+                    errorText: _aestheticDetailsError,
+                  ),
               ],
             ),
           ),
@@ -472,6 +579,7 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     required List<T> items,
     required String Function(T) itemLabel,
     required ValueChanged<T?> onChanged,
+    String? errorText,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -481,6 +589,7 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
+          errorText: errorText,
         ),
         items: [
           for (final item in items)
@@ -491,7 +600,12 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     );
   }
 
-  Widget _yesNo(String label, bool? value, ValueChanged<bool?> onChanged) {
+  Widget _yesNo(
+    String label,
+    bool? value,
+    ValueChanged<bool?> onChanged, {
+    String? errorText,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -510,6 +624,15 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
             onSelectionChanged: (sel) =>
                 onChanged(sel.isEmpty ? null : sel.first),
           ),
+          if (errorText != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              errorText,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          ],
         ],
       ),
     );

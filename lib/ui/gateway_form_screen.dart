@@ -63,6 +63,10 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
   String? _quantityError;
   String? _uplinkTypeError;
   String? _simCoverageError;
+  String? _locationDescriptionError;
+  String? _wifiInterferenceCheckError;
+  String? _wifiInterferenceDetailsError;
+  String? _uninterruptedPowerSourceError;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -193,6 +197,7 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
   void _fillTestData() {
     setState(() {
       _placement = GatewayPlacement.values.first;
+      _locationDescription.text = 'Test location';
       if (widget.site.blocks.isNotEmpty) {
         _blocksCovered
           ..clear()
@@ -201,26 +206,36 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
       }
       _quantity.text = '1';
       _uplinkType = UplinkType.values.first;
+      if (_usesRouter) {
+        _wifiInterferenceCheck = false;
+      }
       _simCoverage = SimCoverage.values.first;
+      _uninterruptedPowerSource = true;
       _placementError = null;
       _quantityError = null;
       _uplinkTypeError = null;
       _simCoverageError = null;
+      _locationDescriptionError = null;
+      _wifiInterferenceCheckError = null;
+      _wifiInterferenceDetailsError = null;
+      _uninterruptedPowerSourceError = null;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          widget.site.blocks.isEmpty
-              ? 'Other fields filled — add a block to the site first to '
-                    'also fill Blocks covered.'
-              : 'Test data filled.',
+    if (widget.site.blocks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Other fields filled — add a block to the site first to '
+                'also fill Blocks covered.',
+          ),
         ),
-      ),
-    );
+      );
+    }
   }
 
   Future<void> _save() async {
     final quantity = int.tryParse(_quantity.text.trim());
+    final locationDescription = _locationDescription.text.trim();
+    final wifiInterferenceDetails = _wifiInterferenceDetails.text.trim();
 
     setState(() {
       _placementError = _placement == null ? 'Required' : null;
@@ -230,12 +245,28 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
       _quantityError = (quantity == null || quantity <= 0) ? 'Required' : null;
       _uplinkTypeError = _uplinkType == null ? 'Required' : null;
       _simCoverageError = _simCoverage == null ? 'Required' : null;
+      _locationDescriptionError =
+          locationDescription.isEmpty ? 'Required' : null;
+      _wifiInterferenceCheckError =
+          (_usesRouter && _wifiInterferenceCheck == null) ? 'Required' : null;
+      _wifiInterferenceDetailsError =
+          (_usesRouter &&
+              _wifiInterferenceCheck == true &&
+              wifiInterferenceDetails.isEmpty)
+          ? 'Required'
+          : null;
+      _uninterruptedPowerSourceError =
+          _uninterruptedPowerSource == null ? 'Required' : null;
     });
     if (_placementError != null ||
         _blocksCoveredError != null ||
         _quantityError != null ||
         _uplinkTypeError != null ||
-        _simCoverageError != null) {
+        _simCoverageError != null ||
+        _locationDescriptionError != null ||
+        _wifiInterferenceCheckError != null ||
+        _wifiInterferenceDetailsError != null ||
+        _uninterruptedPowerSourceError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in the required fields.')),
       );
@@ -330,8 +361,9 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
                 ),
                 AppTextField(
                   controller: _locationDescription,
-                  label: 'Location description',
+                  label: 'Location description *',
                   maxLines: 2,
+                  errorText: _locationDescriptionError,
                 ),
                 MultiSelectChips<String>(
                   label: 'Blocks covered *',
@@ -364,16 +396,18 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
                 ),
                 if (_usesRouter) ...[
                   YesNoField(
-                    label: 'WiFi interference check',
+                    label: 'WiFi interference check *',
                     value: _wifiInterferenceCheck,
                     onChanged: (v) =>
                         setState(() => _wifiInterferenceCheck = v),
+                    errorText: _wifiInterferenceCheckError,
                   ),
                   if (_wifiInterferenceCheck == true)
                     AppTextField(
                       controller: _wifiInterferenceDetails,
-                      label: 'WiFi interference details',
+                      label: 'WiFi interference details *',
                       maxLines: 2,
+                      errorText: _wifiInterferenceDetailsError,
                     ),
                 ],
                 AppDropdownField<SimCoverage>(
@@ -385,10 +419,11 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
                   errorText: _simCoverageError,
                 ),
                 YesNoField(
-                  label: 'Uninterrupted power source',
+                  label: 'Uninterrupted power source *',
                   value: _uninterruptedPowerSource,
                   onChanged: (v) =>
                       setState(() => _uninterruptedPowerSource = v),
+                  errorText: _uninterruptedPowerSourceError,
                 ),
                 AppTextField(
                   controller: _mountingHardware,

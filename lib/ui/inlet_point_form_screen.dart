@@ -86,6 +86,24 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
   String? _sensorTypeError;
   String? _qtyError;
   String? _seriesError;
+  String? _blockError;
+  String? _sensorOdError;
+  String? _pipeSizeError;
+  String? _pipeTypeError;
+  String? _reworkError;
+  String? _reworkDetailsError;
+  String? _linearDistanceClearance10xError;
+  String? _reverseFlowError;
+  String? _ohtHnsError;
+  String? _distanceFromMotorPumpError;
+  String? _pressureError;
+  String? _strainerScreenFilterError;
+  String? _flowDirectionError;
+  String? _accessModeError;
+  String? _cableRunLengthError;
+  String? _conduitClampingError;
+  String? _civilWorkNeededError;
+  String? _civilWorkDetailsError;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -266,25 +284,69 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
   void _fillTestData() {
     setState(() {
       _apartmentBhk.text = 'Test Apartment';
+      if (widget.site.blocks.isNotEmpty) _block = widget.site.blocks.first;
       _sensorSize = SensorSize.values.first;
+      _sensorOd = SensorOd.values.first;
+      _pipeSize = PipeSize.values.first;
+      _pipeType = PipeType.values.first;
       _sensorType = SensorType.values.first;
       _qty.text = '1';
       _series.text = 'Test Series';
+      _rework = false;
+      _linearDistanceClearance10x = true;
+      _reverseFlow = false;
+      _ohtHns = _ohtHnsOptions.first;
+      _distanceFromMotorPump = true;
+      _pressure.text = '1';
+      _strainerScreenFilter = true;
+      _flowDirection = FlowDirection.values.first;
+      _accessMode = AccessMode.values.first;
+      _cableRunLength = CableRunLength.values.first;
+      _conduitClamping = true;
+      _civilWorkNeeded = false;
+
       _apartmentBhkError = null;
       _sensorSizeError = null;
       _sensorTypeError = null;
       _qtyError = null;
       _seriesError = null;
+      _blockError = null;
+      _sensorOdError = null;
+      _pipeSizeError = null;
+      _pipeTypeError = null;
+      _reworkError = null;
+      _reworkDetailsError = null;
+      _linearDistanceClearance10xError = null;
+      _reverseFlowError = null;
+      _ohtHnsError = null;
+      _distanceFromMotorPumpError = null;
+      _pressureError = null;
+      _strainerScreenFilterError = null;
+      _flowDirectionError = null;
+      _accessModeError = null;
+      _cableRunLengthError = null;
+      _conduitClampingError = null;
+      _civilWorkNeededError = null;
+      _civilWorkDetailsError = null;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Test data filled.')),
-    );
+    if (widget.site.blocks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Other fields filled — add a block to the site first to also fill Block.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _save() async {
     final apartmentBhk = _apartmentBhk.text.trim();
     final series = _series.text.trim();
     final qty = int.tryParse(_qty.text.trim());
+    final reworkDetails = _reworkDetails.text.trim();
+    final pressure = _pressure.text.trim();
+    final civilWorkDetails = _civilWorkDetails.text.trim();
 
     setState(() {
       _apartmentBhkError = apartmentBhk.isEmpty ? 'Required' : null;
@@ -292,12 +354,55 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
       _sensorTypeError = _sensorType == null ? 'Required' : null;
       _qtyError = (qty == null || qty <= 0) ? 'Required' : null;
       _seriesError = series.isEmpty ? 'Required' : null;
+      _blockError = _block == null ? 'Required' : null;
+      _sensorOdError = _sensorOd == null ? 'Required' : null;
+      _pipeSizeError = _pipeSize == null ? 'Required' : null;
+      _pipeTypeError = _pipeType == null ? 'Required' : null;
+      _reworkError = _rework == null ? 'Required' : null;
+      _reworkDetailsError =
+          (_rework == true && reworkDetails.isEmpty) ? 'Required' : null;
+      _linearDistanceClearance10xError =
+          _linearDistanceClearance10x == null ? 'Required' : null;
+      _reverseFlowError = _reverseFlow == null ? 'Required' : null;
+      _ohtHnsError = _ohtHns == null ? 'Required' : null;
+      _distanceFromMotorPumpError =
+          _distanceFromMotorPump == null ? 'Required' : null;
+      _pressureError = pressure.isEmpty ? 'Required' : null;
+      _strainerScreenFilterError =
+          _strainerScreenFilter == null ? 'Required' : null;
+      _flowDirectionError = _flowDirection == null ? 'Required' : null;
+      _accessModeError = _accessMode == null ? 'Required' : null;
+      _cableRunLengthError = _cableRunLength == null ? 'Required' : null;
+      _conduitClampingError = _conduitClamping == null ? 'Required' : null;
+      _civilWorkNeededError = _civilWorkNeeded == null ? 'Required' : null;
+      _civilWorkDetailsError =
+          (_civilWorkNeeded == true && civilWorkDetails.isEmpty)
+          ? 'Required'
+          : null;
     });
     if (_apartmentBhkError != null ||
         _sensorSizeError != null ||
         _sensorTypeError != null ||
         _qtyError != null ||
-        _seriesError != null) {
+        _seriesError != null ||
+        _blockError != null ||
+        _sensorOdError != null ||
+        _pipeSizeError != null ||
+        _pipeTypeError != null ||
+        _reworkError != null ||
+        _reworkDetailsError != null ||
+        _linearDistanceClearance10xError != null ||
+        _reverseFlowError != null ||
+        _ohtHnsError != null ||
+        _distanceFromMotorPumpError != null ||
+        _pressureError != null ||
+        _strainerScreenFilterError != null ||
+        _flowDirectionError != null ||
+        _accessModeError != null ||
+        _cableRunLengthError != null ||
+        _conduitClampingError != null ||
+        _civilWorkNeededError != null ||
+        _civilWorkDetailsError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in the required fields.')),
       );
@@ -390,13 +495,14 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 AppDropdownField<String>(
-                  label: 'Block',
+                  label: 'Block *',
                   value: _block,
                   items: widget.site.blocks,
                   itemLabel: (b) => b,
                   emptyHint:
                       'No blocks on this site — add them via the site first.',
                   onChanged: (v) => setState(() => _block = v),
+                  errorText: _blockError,
                 ),
                 AppTextField(
                   controller: _apartmentBhk,
@@ -418,25 +524,28 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
                   errorText: _seriesError,
                 ),
                 AppDropdownField<SensorOd>(
-                  label: 'Sensor OD',
+                  label: 'Sensor OD *',
                   value: _sensorOd,
                   items: SensorOd.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _sensorOd = v),
+                  errorText: _sensorOdError,
                 ),
                 AppDropdownField<PipeSize>(
-                  label: 'Pipe size',
+                  label: 'Pipe size *',
                   value: _pipeSize,
                   items: PipeSize.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _pipeSize = v),
+                  errorText: _pipeSizeError,
                 ),
                 AppDropdownField<PipeType>(
-                  label: 'Pipe type',
+                  label: 'Pipe type *',
                   value: _pipeType,
                   items: PipeType.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _pipeType = v),
+                  errorText: _pipeTypeError,
                 ),
                 AppTextField(
                   controller: _qty,
@@ -455,91 +564,105 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
                 ),
 
                 YesNoField(
-                  label: 'Rework',
+                  label: 'Rework *',
                   value: _rework,
                   onChanged: (v) => setState(() => _rework = v),
+                  errorText: _reworkError,
                 ),
                 if (_rework == true)
                   AppTextField(
                     controller: _reworkDetails,
-                    label: 'Rework details',
+                    label: 'Rework details *',
                     maxLines: 2,
+                    errorText: _reworkDetailsError,
                   ),
 
                 YesNoField(
-                  label: 'Linear distance & clearance 10X',
+                  label: 'Linear distance & clearance 10X *',
                   value: _linearDistanceClearance10x,
                   onChanged: (v) =>
                       setState(() => _linearDistanceClearance10x = v),
+                  errorText: _linearDistanceClearance10xError,
                 ),
                 YesNoField(
-                  label: 'Reverse flow',
+                  label: 'Reverse flow *',
                   value: _reverseFlow,
                   onChanged: (v) => setState(() => _reverseFlow = v),
+                  errorText: _reverseFlowError,
                 ),
                 AppDropdownField<OhtHns>(
-                  label: 'OHT / HNS',
+                  label: 'OHT / HNS *',
                   value: _ohtHns,
                   items: _ohtHnsOptions,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _ohtHns = v),
+                  errorText: _ohtHnsError,
                 ),
                 YesNoField(
-                  label: 'Distance from motor/pump',
+                  label: 'Distance from motor/pump *',
                   value: _distanceFromMotorPump,
                   onChanged: (v) => setState(() => _distanceFromMotorPump = v),
+                  errorText: _distanceFromMotorPumpError,
                 ),
                 AppTextField(
                   controller: _pressure,
-                  label: 'Max & continuous pressure (bar)',
+                  label: 'Max & continuous pressure (bar) *',
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                   ],
+                  errorText: _pressureError,
                 ),
                 YesNoField(
-                  label: 'Strainer / screen filter',
+                  label: 'Strainer / screen filter *',
                   value: _strainerScreenFilter,
                   onChanged: (v) => setState(() => _strainerScreenFilter = v),
+                  errorText: _strainerScreenFilterError,
                 ),
                 AppDropdownField<FlowDirection>(
-                  label: 'Flow direction',
+                  label: 'Flow direction *',
                   value: _flowDirection,
                   items: FlowDirection.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _flowDirection = v),
+                  errorText: _flowDirectionError,
                 ),
                 AppDropdownField<AccessMode>(
-                  label: 'Access mode',
+                  label: 'Access mode *',
                   value: _accessMode,
                   items: AccessMode.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _accessMode = v),
+                  errorText: _accessModeError,
                 ),
                 AppDropdownField<CableRunLength>(
-                  label: 'Cable run length',
+                  label: 'Cable run length *',
                   value: _cableRunLength,
                   items: CableRunLength.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _cableRunLength = v),
+                  errorText: _cableRunLengthError,
                 ),
                 YesNoField(
-                  label: 'Conduit clamping',
+                  label: 'Conduit clamping *',
                   value: _conduitClamping,
                   onChanged: (v) => setState(() => _conduitClamping = v),
+                  errorText: _conduitClampingError,
                 ),
                 YesNoField(
-                  label: 'Civil work needed',
+                  label: 'Civil work needed *',
                   value: _civilWorkNeeded,
                   onChanged: (v) => setState(() => _civilWorkNeeded = v),
+                  errorText: _civilWorkNeededError,
                 ),
                 if (_civilWorkNeeded == true)
                   AppTextField(
                     controller: _civilWorkDetails,
-                    label: 'Civil work details',
+                    label: 'Civil work details *',
                     maxLines: 2,
+                    errorText: _civilWorkDetailsError,
                   ),
               ],
             ),

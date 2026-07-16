@@ -90,6 +90,29 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
   String? _sensorSizeError;
   String? _sensorTypeError;
   String? _qtyError;
+  String? _blockError;
+  String? _sensorOdError;
+  String? _pipeSizeError;
+  String? _pipeTypeError;
+  String? _reworkError;
+  String? _reworkDetailsError;
+  String? _flowDirectionError;
+  String? _clearance10xError;
+  String? _pipeFullError;
+  String? _valveDownstreamError;
+  String? _reducerSpecError;
+  String? _reducerSpecDetailsError;
+  String? _downstreamOutletAbovePipeFig1Error;
+  String? _airVentNeededFig2Error;
+  String? _reverseFlowError;
+  String? _distanceFromMotorPumpFig3Error;
+  String? _noFlexiblePipeWithin20xError;
+  String? _pressureError;
+  String? _strainerScreenFilterError;
+  String? _chamberInstallationError;
+  String? _antennaRequiredError;
+  String? _transmittingPartOpenToAirError;
+  String? _nrvFeasibilityError;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -272,37 +295,161 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
 
   /// Admin-only dev/QA shortcut — fills every mandatory field with a
   /// placeholder value so the section passes validation immediately. Never
-  /// touches optional/free-text fields (e.g. Inlet description).
+  /// touches optional/free-text fields (Inlet description). Block can only
+  /// be filled if the site already has at least one block.
   void _fillTestData() {
     setState(() {
       _apartment.text = 'Test Apartment';
+      if (widget.site.blocks.isNotEmpty) _block = widget.site.blocks.first;
       _sensorSize = SensorSize.values.first;
-      _sensorType = SensorType.values.first;
+      _sensorOd = SensorOd.values.first;
+      _pipeSize = PipeSize.values.first;
+      _pipeType = PipeType.values.first;
       _qty.text = '1';
+      _sensorType = SensorType.values.first;
+      _rework = false;
+      _flowDirection = FlowDirection.values.first;
+      _clearance10x = true;
+      _pipeFull = true;
+      _valveDownstream = false;
+      _reducerSpec = false;
+      _downstreamOutletAbovePipeFig1 = true;
+      _airVentNeededFig2 = false;
+      _reverseFlow = false;
+      _distanceFromMotorPumpFig3 = true;
+      _noFlexiblePipeWithin20x = true;
+      _pressure.text = '1';
+      _strainerScreenFilter = true;
+      _chamberInstallation = true;
+      if (_sensorType == SensorType.wireless) {
+        _antennaRequired = true;
+        _transmittingPartOpenToAir = false;
+        _nrvFeasibility = true;
+      }
       _apartmentError = null;
       _sensorSizeError = null;
       _sensorTypeError = null;
       _qtyError = null;
+      _blockError = null;
+      _sensorOdError = null;
+      _pipeSizeError = null;
+      _pipeTypeError = null;
+      _reworkError = null;
+      _flowDirectionError = null;
+      _clearance10xError = null;
+      _pipeFullError = null;
+      _valveDownstreamError = null;
+      _reducerSpecError = null;
+      _downstreamOutletAbovePipeFig1Error = null;
+      _airVentNeededFig2Error = null;
+      _reverseFlowError = null;
+      _distanceFromMotorPumpFig3Error = null;
+      _noFlexiblePipeWithin20xError = null;
+      _pressureError = null;
+      _strainerScreenFilterError = null;
+      _chamberInstallationError = null;
+      _antennaRequiredError = null;
+      _transmittingPartOpenToAirError = null;
+      _nrvFeasibilityError = null;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Test data filled.')),
-    );
+    if (widget.site.blocks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Other fields filled — add a block to the site first to '
+                'also fill Block.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _save() async {
     final apartment = _apartment.text.trim();
     final qty = int.tryParse(_qty.text.trim());
+    final pressure = _pressure.text.trim();
+    final isWireless = _sensorType == SensorType.wireless;
 
     setState(() {
       _apartmentError = apartment.isEmpty ? 'Required' : null;
       _sensorSizeError = _sensorSize == null ? 'Required' : null;
       _sensorTypeError = _sensorType == null ? 'Required' : null;
       _qtyError = (qty == null || qty <= 0) ? 'Required' : null;
+      _blockError = _block == null ? 'Required' : null;
+      _sensorOdError = _sensorOd == null ? 'Required' : null;
+      _pipeSizeError = _pipeSize == null ? 'Required' : null;
+      _pipeTypeError = _pipeType == null ? 'Required' : null;
+      _reworkError = _rework == null ? 'Required' : null;
+      _reworkDetailsError =
+          (_rework == true && _reworkDetails.text.trim().isEmpty)
+          ? 'Required'
+          : null;
+      _flowDirectionError = _flowDirection == null ? 'Required' : null;
+      _clearance10xError = _clearance10x == null ? 'Required' : null;
+      _pipeFullError = _pipeFull == null ? 'Required' : null;
+      _valveDownstreamError = _valveDownstream == null ? 'Required' : null;
+      _reducerSpecError = _reducerSpec == null ? 'Required' : null;
+      _reducerSpecDetailsError =
+          (_reducerSpec == true && _reducerSpecDetails.text.trim().isEmpty)
+          ? 'Required'
+          : null;
+      _downstreamOutletAbovePipeFig1Error =
+          _downstreamOutletAbovePipeFig1 == null ? 'Required' : null;
+      _airVentNeededFig2Error = _airVentNeededFig2 == null
+          ? 'Required'
+          : null;
+      _reverseFlowError = _reverseFlow == null ? 'Required' : null;
+      _distanceFromMotorPumpFig3Error = _distanceFromMotorPumpFig3 == null
+          ? 'Required'
+          : null;
+      _noFlexiblePipeWithin20xError = _noFlexiblePipeWithin20x == null
+          ? 'Required'
+          : null;
+      _pressureError = pressure.isEmpty ? 'Required' : null;
+      _strainerScreenFilterError = _strainerScreenFilter == null
+          ? 'Required'
+          : null;
+      _chamberInstallationError = _chamberInstallation == null
+          ? 'Required'
+          : null;
+      _antennaRequiredError = (isWireless && _antennaRequired == null)
+          ? 'Required'
+          : null;
+      _transmittingPartOpenToAirError =
+          (isWireless && _transmittingPartOpenToAir == null)
+          ? 'Required'
+          : null;
+      _nrvFeasibilityError = (isWireless && _nrvFeasibility == null)
+          ? 'Required'
+          : null;
     });
     if (_apartmentError != null ||
         _sensorSizeError != null ||
         _sensorTypeError != null ||
-        _qtyError != null) {
+        _qtyError != null ||
+        _blockError != null ||
+        _sensorOdError != null ||
+        _pipeSizeError != null ||
+        _pipeTypeError != null ||
+        _reworkError != null ||
+        _reworkDetailsError != null ||
+        _flowDirectionError != null ||
+        _clearance10xError != null ||
+        _pipeFullError != null ||
+        _valveDownstreamError != null ||
+        _reducerSpecError != null ||
+        _reducerSpecDetailsError != null ||
+        _downstreamOutletAbovePipeFig1Error != null ||
+        _airVentNeededFig2Error != null ||
+        _reverseFlowError != null ||
+        _distanceFromMotorPumpFig3Error != null ||
+        _noFlexiblePipeWithin20xError != null ||
+        _pressureError != null ||
+        _strainerScreenFilterError != null ||
+        _chamberInstallationError != null ||
+        _antennaRequiredError != null ||
+        _transmittingPartOpenToAirError != null ||
+        _nrvFeasibilityError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in the required fields.')),
       );
@@ -403,13 +550,14 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 AppDropdownField<String>(
-                  label: 'Block',
+                  label: 'Block *',
                   value: _block,
                   items: widget.site.blocks,
                   itemLabel: (b) => b,
                   emptyHint:
                       'No blocks on this site — add them via the site first.',
                   onChanged: (v) => setState(() => _block = v),
+                  errorText: _blockError,
                 ),
                 AppTextField(
                   controller: _apartment,
@@ -432,25 +580,28 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
                   errorText: _sensorSizeError,
                 ),
                 AppDropdownField<SensorOd>(
-                  label: 'Sensor OD',
+                  label: 'Sensor OD *',
                   value: _sensorOd,
                   items: SensorOd.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _sensorOd = v),
+                  errorText: _sensorOdError,
                 ),
                 AppDropdownField<PipeSize>(
-                  label: 'Pipe size',
+                  label: 'Pipe size *',
                   value: _pipeSize,
                   items: PipeSize.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _pipeSize = v),
+                  errorText: _pipeSizeError,
                 ),
                 AppDropdownField<PipeType>(
-                  label: 'Pipe type',
+                  label: 'Pipe type *',
                   value: _pipeType,
                   items: PipeType.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _pipeType = v),
+                  errorText: _pipeTypeError,
                 ),
                 AppTextField(
                   controller: _qty,
@@ -469,55 +620,63 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
                 ),
 
                 YesNoField(
-                  label: 'Rework',
+                  label: 'Rework *',
                   value: _rework,
                   onChanged: (v) => setState(() => _rework = v),
+                  errorText: _reworkError,
                 ),
                 if (_rework == true)
                   AppTextField(
                     controller: _reworkDetails,
-                    label: 'Rework details',
+                    label: 'Rework details *',
                     maxLines: 2,
+                    errorText: _reworkDetailsError,
                   ),
 
                 AppDropdownField<FlowDirection>(
-                  label: 'Flow direction',
+                  label: 'Flow direction *',
                   value: _flowDirection,
                   items: FlowDirection.values,
                   itemLabel: (v) => v.label,
                   onChanged: (v) => setState(() => _flowDirection = v),
+                  errorText: _flowDirectionError,
                 ),
 
                 YesNoField(
-                  label: '10X clearance',
+                  label: '10X clearance *',
                   value: _clearance10x,
                   onChanged: (v) => setState(() => _clearance10x = v),
+                  errorText: _clearance10xError,
                 ),
                 YesNoField(
-                  label: 'Pipe full',
+                  label: 'Pipe full *',
                   value: _pipeFull,
                   onChanged: (v) => setState(() => _pipeFull = v),
+                  errorText: _pipeFullError,
                 ),
                 YesNoField(
-                  label: 'Valve downstream',
+                  label: 'Valve downstream *',
                   value: _valveDownstream,
                   onChanged: (v) => setState(() => _valveDownstream = v),
+                  errorText: _valveDownstreamError,
                 ),
 
                 YesNoField(
-                  label: 'Reducer spec',
+                  label: 'Reducer spec *',
                   value: _reducerSpec,
                   onChanged: (v) => setState(() => _reducerSpec = v),
+                  errorText: _reducerSpecError,
                 ),
                 if (_reducerSpec == true)
                   AppTextField(
                     controller: _reducerSpecDetails,
-                    label: 'Reducer spec details',
+                    label: 'Reducer spec details *',
                     maxLines: 2,
+                    errorText: _reducerSpecDetailsError,
                   ),
 
                 YesNoField(
-                  label: 'Downstream outlet above pipe (FIG1)',
+                  label: 'Downstream outlet above pipe (FIG1) *',
                   labelTrailing: const ReferenceLink(
                     asset: 'assets/figures/FIG1_pipe_full_outlet_above.png',
                     title: 'FIG1',
@@ -525,23 +684,26 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
                   value: _downstreamOutletAbovePipeFig1,
                   onChanged: (v) =>
                       setState(() => _downstreamOutletAbovePipeFig1 = v),
+                  errorText: _downstreamOutletAbovePipeFig1Error,
                 ),
                 YesNoField(
-                  label: 'Air vent needed (FIG2)',
+                  label: 'Air vent needed (FIG2) *',
                   labelTrailing: const ReferenceLink(
                     asset: 'assets/figures/FIG2_air_vent.png',
                     title: 'FIG2',
                   ),
                   value: _airVentNeededFig2,
                   onChanged: (v) => setState(() => _airVentNeededFig2 = v),
+                  errorText: _airVentNeededFig2Error,
                 ),
                 YesNoField(
-                  label: 'Reverse flow',
+                  label: 'Reverse flow *',
                   value: _reverseFlow,
                   onChanged: (v) => setState(() => _reverseFlow = v),
+                  errorText: _reverseFlowError,
                 ),
                 YesNoField(
-                  label: 'Distance from motor/pump (FIG3)',
+                  label: 'Distance from motor/pump (FIG3) *',
                   labelTrailing: const ReferenceLink(
                     asset:
                         'assets/figures/FIG3_distance_motor_reducer_valve.png',
@@ -550,53 +712,61 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
                   value: _distanceFromMotorPumpFig3,
                   onChanged: (v) =>
                       setState(() => _distanceFromMotorPumpFig3 = v),
+                  errorText: _distanceFromMotorPumpFig3Error,
                 ),
                 YesNoField(
-                  label: 'No flexible pipe within 20X',
+                  label: 'No flexible pipe within 20X *',
                   value: _noFlexiblePipeWithin20x,
                   onChanged: (v) =>
                       setState(() => _noFlexiblePipeWithin20x = v),
+                  errorText: _noFlexiblePipeWithin20xError,
                 ),
 
                 AppTextField(
                   controller: _pressure,
-                  label: 'Max & continuous pressure (bar)',
+                  label: 'Max & continuous pressure (bar) *',
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                   ],
+                  errorText: _pressureError,
                 ),
 
                 YesNoField(
-                  label: 'Strainer / screen filter',
+                  label: 'Strainer / screen filter *',
                   value: _strainerScreenFilter,
                   onChanged: (v) => setState(() => _strainerScreenFilter = v),
+                  errorText: _strainerScreenFilterError,
                 ),
                 YesNoField(
-                  label: 'Chamber installation',
+                  label: 'Chamber installation *',
                   value: _chamberInstallation,
                   onChanged: (v) => setState(() => _chamberInstallation = v),
+                  errorText: _chamberInstallationError,
                 ),
 
                 if (isWireless) ...[
                   const FormSectionLabel('Wireless'),
                   YesNoField(
-                    label: 'Antenna required',
+                    label: 'Antenna required *',
                     value: _antennaRequired,
                     onChanged: (v) => setState(() => _antennaRequired = v),
+                    errorText: _antennaRequiredError,
                   ),
                   YesNoField(
-                    label: 'Transmitting part open to air',
+                    label: 'Transmitting part open to air *',
                     value: _transmittingPartOpenToAir,
                     onChanged: (v) =>
                         setState(() => _transmittingPartOpenToAir = v),
+                    errorText: _transmittingPartOpenToAirError,
                   ),
                   YesNoField(
-                    label: 'NRV feasibility',
+                    label: 'NRV feasibility *',
                     value: _nrvFeasibility,
                     onChanged: (v) => setState(() => _nrvFeasibility = v),
+                    errorText: _nrvFeasibilityError,
                   ),
                 ],
               ],
