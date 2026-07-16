@@ -71,6 +71,14 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Map<MaterialGroup, List<BomLine>>? _bom;
   List<BomManualEntry> _manualEntries = const [];
   bool _loading = true;
+
+  /// Whether Material Master has zero rows *at all* — the raw
+  /// `getMaterialMasterItems()` result, before the B/C/F auto-only filter
+  /// below narrows it down to what BomEngine actually sees. Deliberately not
+  /// derived from [_bom]: most groups are manual-only now, so `_bom` having
+  /// no lines for a group reflects that group having no auto-eligible rows
+  /// (normal, expected), not Material Master being unpopulated.
+  bool _materialMasterEmpty = true;
   bool _exporting = false;
   bool _finalizing = false;
 
@@ -192,6 +200,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     if (!mounted) return;
     setState(() {
       _bom = bom;
+      _materialMasterEmpty = materials.isEmpty;
       _manualEntries = manualEntries;
       _snapshot = snapshot;
       _snapshotLines = snapshotLines;
@@ -608,8 +617,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   Widget build(BuildContext context) {
     final bom = _bom;
     final locked = _snapshot != null;
-    final hasNoMaterials =
-        !locked && bom != null && bom.values.every((l) => l.isEmpty);
+    final hasNoMaterials = !locked && bom != null && _materialMasterEmpty;
     final canFinalize = !_loading && !locked && !hasNoMaterials && !widget.readOnly;
     final runningTotal = _runningTotal;
     final visibleRunningTotal = _visibleRunningTotal(runningTotal);
