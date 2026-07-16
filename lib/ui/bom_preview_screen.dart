@@ -458,9 +458,10 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   List<BomRunningTotalLine> get _runningTotal =>
       _cumulativeTotalForVersion(_latestVersion);
 
-  /// Exports the cumulative total as of [_selectedExportVersion] (defaults
-  /// to latest), in whichever format [_selectedExportFormat] has selected,
-  /// and opens the share sheet. One shared data fetch
+  /// Exports the cumulative total as of [_selectedExportVersion], in
+  /// whichever format [_selectedExportFormat] has selected, and opens the
+  /// system share sheet — reached only via [_openExportSheet], which sets
+  /// both right before calling this. One shared data fetch
   /// (_cumulativeTotalForVersion) feeds both formatters — only the output
   /// layout differs.
   Future<void> _exportBom() async {
@@ -497,93 +498,111 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     }
   }
 
+  /// The single AppBar Export action's entry point — collects format and
+  /// version (Running Total vs the frozen v1 snapshot) in one bottom sheet,
+  /// then calls [_exportBom] exactly once, which opens the normal Android
+  /// share sheet (WhatsApp, Gmail, Drive, Files, ...) — this sheet is the
+  /// only export UI now; the main body shows BoM content only.
+  Future<void> _openExportSheet() async {
+    var format = _selectedExportFormat;
+    var runningTotal = _showRunningTotal;
+
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 16,
+              bottom: 16 + MediaQuery.of(sheetContext).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Export BoM',
+                  style: Theme.of(sheetContext).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Format',
+                  style: Theme.of(sheetContext).textTheme.titleSmall,
+                ),
+                RadioGroup<_ExportFormat>(
+                  groupValue: format,
+                  onChanged: (v) => setSheetState(() => format = v!),
+                  child: const Column(
+                    children: [
+                      RadioListTile<_ExportFormat>(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: Text('Standard (Lumax)'),
+                        value: _ExportFormat.lumax,
+                      ),
+                      RadioListTile<_ExportFormat>(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: Text('Zoho Import'),
+                        value: _ExportFormat.sunBom,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Version',
+                  style: Theme.of(sheetContext).textTheme.titleSmall,
+                ),
+                RadioGroup<bool>(
+                  groupValue: runningTotal,
+                  onChanged: (v) => setSheetState(() => runningTotal = v!),
+                  child: const Column(
+                    children: [
+                      RadioListTile<bool>(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: Text('Running Total'),
+                        value: true,
+                      ),
+                      RadioListTile<bool>(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: Text('V1 (Frozen)'),
+                        value: false,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () => Navigator.of(sheetContext).pop(true),
+                  icon: const Icon(Icons.file_download_outlined),
+                  label: const Text('Export'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _selectedExportFormat = format;
+      _selectedExportVersion = runningTotal ? _latestVersion : 1;
+    });
+    await _exportBom();
+  }
+
   List<BomRunningTotalLine> _visibleRunningTotal(List<BomRunningTotalLine> lines) =>
       _showAllItems ? lines : lines.where((l) => l.rawQty > 0).toList();
 
   List<BomSnapshotLine> _visibleSnapshotLines(List<BomSnapshotLine> lines) =>
       _showAllItems ? lines : lines.where((l) => l.qty > 0).toList();
-
-  /// Format + version selectors for Export, living below the AppBar rather
-  /// than as AppBar actions — wide items (two text-heavy dropdowns, plus the
-  /// version menu, export icon, add-materials icon) don't fit an AppBar's
-  /// fixed-width action row, and AppBar.actions doesn't wrap or scroll; the
-  /// ones furthest right (Export, Add materials) were the ones silently
-  /// clipped off-screen. A [Wrap] here can drop to a second line on narrow
-  /// screens instead of overflowing.
-  Widget _exportOptionsRow() {
-    // DropdownButton defaults to textTheme.titleMedium, which doesn't match
-    // the plain "Format: "/"Version: " Text labels beside it (ambient
-    // bodyMedium) — pinning both to the same style fixes the baseline
-    // mismatch, including the closed-state selectedItemBuilder text (which
-    // inherits DropdownButton.style via its DefaultTextStyle wrapper).
-    final labelStyle = Theme.of(context).textTheme.bodyMedium;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Wrap(
-        spacing: 16,
-        runSpacing: 4,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Format: ', style: labelStyle),
-              DropdownButtonHideUnderline(
-                child: DropdownButton<_ExportFormat>(
-                  value: _selectedExportFormat,
-                  style: labelStyle,
-                  isDense: true,
-                  onChanged: (f) {
-                    if (f != null) setState(() => _selectedExportFormat = f);
-                  },
-                  items: const [
-                    DropdownMenuItem(
-                      value: _ExportFormat.sunBom,
-                      child: Text('Zoho Import format'),
-                    ),
-                    DropdownMenuItem(
-                      value: _ExportFormat.lumax,
-                      child: Text('Standard format'),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Version: ', style: labelStyle),
-              DropdownButtonHideUnderline(
-                child: DropdownButton<int>(
-                  value: _selectedExportVersion,
-                  style: labelStyle,
-                  // isDense skips DropdownButton's default itemHeight-based
-                  // SizedBox wrapper around each selectedItemBuilder widget.
-                  // That wrapper doesn't vertically center its child (unlike
-                  // DropdownMenuItem, which self-centers) — without isDense,
-                  // the closed-state "vN" text paints at the top of an
-                  // oversized box instead of level with the label/arrow.
-                  isDense: true,
-                  onChanged: (v) {
-                    if (v != null) setState(() => _selectedExportVersion = v);
-                  },
-                  selectedItemBuilder: (context) => [
-                    for (var v = 1; v <= _latestVersion; v++)
-                      Text('v$v', style: labelStyle),
-                  ],
-                  items: [
-                    for (var v = 1; v <= _latestVersion; v++)
-                      DropdownMenuItem(value: v, child: Text('v$v')),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _showAllItemsToggle() {
     return Padding(
@@ -666,10 +685,9 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                 ),
               ),
             ),
-          // Format/version selectors live below the AppBar now — see
-          // _exportOptionsRow. Keeping AppBar.actions to fixed-size icons
-          // only guarantees it never overflows (AppBar.actions doesn't wrap
-          // or scroll), so Export stays reachable with one visible tap.
+          // Format/version/share-method are all collected in the bottom
+          // sheet _openExportSheet opens — the only export UI now; the main
+          // body shows BoM content only.
           //
           // Export is only offered once finalized: it emits the selected
           // version's cumulative total in the selected format, zero-qty
@@ -677,14 +695,14 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           if (locked)
             IconButton(
               tooltip: 'Export BoM',
-              onPressed: _exporting ? null : _exportBom,
+              onPressed: _exporting ? null : _openExportSheet,
               icon: _exporting
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(Icons.file_download_outlined),
+                  : const Icon(Icons.ios_share),
             ),
           if (locked && widget.canEditBom)
             IconButton(
@@ -735,7 +753,6 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           : locked
           ? Column(
               children: [
-                _exportOptionsRow(),
                 _showAllItemsToggle(),
                 Expanded(
                   child:
