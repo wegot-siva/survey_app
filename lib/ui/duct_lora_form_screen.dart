@@ -63,6 +63,12 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
   // next one — see _save().
   String? _seriesServedError;
   String? _cableLengthError;
+  String? _blockError;
+  String? _accessibleForServiceError;
+  String? _rssiError;
+  String? _powerPointAvailableShieldedError;
+  String? _separateMcbForSeriesError;
+  String? _upsPowerSupplyError;
 
   /// Starts false; flips true when the Edit button is tapped. Irrelevant
   /// unless [widget.readOnly] — see [_viewOnly].
@@ -73,6 +79,17 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
   /// [IgnorePointer], not each field's `enabled` — so the fields keep their
   /// normal (not greyed-out) styling in view mode.
   bool get _viewOnly => widget.readOnly && !_editing;
+
+  /// [widget.site.blocks] deduplicated, preserving first-occurrence order.
+  /// Block names are free text with no uniqueness enforcement (see
+  /// ManageBlocksScreen), so a site can end up with the same label twice.
+  /// [DropdownButtonFormField] (which AppDropdownField wraps) requires its
+  /// `value` to match *exactly* one item — a duplicate label matches two
+  /// and crashes, which is what "Fill test data" hit by setting `_block` to
+  /// `widget.site.blocks.first` against a duplicate-containing list. Using
+  /// this everywhere the Block dropdown reads or sets a value keeps it
+  /// crash-proof regardless of what's actually stored.
+  List<String> get _uniqueBlocks => {...widget.site.blocks}.toList();
 
   @override
   void initState() {
@@ -183,29 +200,41 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
   /// if there isn't one yet, this fills what it can and says so.
   void _fillTestData() {
     setState(() {
+      if (_uniqueBlocks.isNotEmpty) _block = _uniqueBlocks.first;
       if (widget.availableSeries.isNotEmpty) {
         _seriesServed
           ..clear()
           ..add(widget.availableSeries.first);
         _seriesServedError = null;
       }
+      _accessibleForService = true;
+      _rssi.text = '1';
+      _powerPointAvailableShielded = true;
+      _separateMcbForSeries = false;
+      _upsPowerSupply = true;
       _cableLength.text = '1';
       _cableLengthError = null;
+      _blockError = null;
+      _accessibleForServiceError = null;
+      _rssiError = null;
+      _powerPointAvailableShieldedError = null;
+      _separateMcbForSeriesError = null;
+      _upsPowerSupplyError = null;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          widget.availableSeries.isEmpty
-              ? 'Cable length filled — add an inlet point with a Series '
-                    'first to also fill Series served.'
-              : 'Test data filled.',
-        ),
-      ),
-    );
+    final missing = <String>[
+      if (widget.availableSeries.isEmpty) 'Series served (add an inlet point with a Series first)',
+      if (_uniqueBlocks.isEmpty) 'Block (add a block to the site first)',
+    ];
+    if (missing.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Other fields filled — ${missing.join(', ')}.')),
+      );
+    }
   }
 
   Future<void> _save() async {
     final cableLength = double.tryParse(_cableLength.text.trim());
+    final rssi = _rssi.text.trim();
 
     setState(() {
       _seriesServedError = _seriesServed.isEmpty
@@ -214,8 +243,24 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
       _cableLengthError = (cableLength == null || cableLength <= 0)
           ? 'Required'
           : null;
+      _blockError = _block == null ? 'Required' : null;
+      _accessibleForServiceError =
+          _accessibleForService == null ? 'Required' : null;
+      _rssiError = rssi.isEmpty ? 'Required' : null;
+      _powerPointAvailableShieldedError =
+          _powerPointAvailableShielded == null ? 'Required' : null;
+      _separateMcbForSeriesError =
+          _separateMcbForSeries == null ? 'Required' : null;
+      _upsPowerSupplyError = _upsPowerSupply == null ? 'Required' : null;
     });
-    if (_seriesServedError != null || _cableLengthError != null) {
+    if (_seriesServedError != null ||
+        _cableLengthError != null ||
+        _blockError != null ||
+        _accessibleForServiceError != null ||
+        _rssiError != null ||
+        _powerPointAvailableShieldedError != null ||
+        _separateMcbForSeriesError != null ||
+        _upsPowerSupplyError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in the required fields.')),
       );
@@ -293,13 +338,14 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 AppDropdownField<String>(
-                  label: 'Block',
+                  label: 'Block *',
                   value: _block,
-                  items: widget.site.blocks,
+                  items: _uniqueBlocks,
                   itemLabel: (b) => b,
                   emptyHint:
                       'No blocks on this site — add them via the site first.',
                   onChanged: (v) => setState(() => _block = v),
+                  errorText: _blockError,
                 ),
                 MultiSelectChips<String>(
                   label: 'Series served *',
@@ -317,13 +363,14 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
                   errorText: _seriesServedError,
                 ),
                 YesNoField(
-                  label: 'Accessible for service',
+                  label: 'Accessible for service *',
                   value: _accessibleForService,
                   onChanged: (v) => setState(() => _accessibleForService = v),
+                  errorText: _accessibleForServiceError,
                 ),
                 AppTextField(
                   controller: _rssi,
-                  label: 'RSSI value (if TCL)',
+                  label: 'RSSI value (if TCL) *',
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                     signed: true,
@@ -331,22 +378,26 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.-]')),
                   ],
+                  errorText: _rssiError,
                 ),
                 YesNoField(
-                  label: 'Power point available / shielded',
+                  label: 'Power point available / shielded *',
                   value: _powerPointAvailableShielded,
                   onChanged: (v) =>
                       setState(() => _powerPointAvailableShielded = v),
+                  errorText: _powerPointAvailableShieldedError,
                 ),
                 YesNoField(
-                  label: 'Separate MCB for series (max 4)',
+                  label: 'Separate MCB for series (max 4) *',
                   value: _separateMcbForSeries,
                   onChanged: (v) => setState(() => _separateMcbForSeries = v),
+                  errorText: _separateMcbForSeriesError,
                 ),
                 YesNoField(
-                  label: 'UPS power supply',
+                  label: 'UPS power supply *',
                   value: _upsPowerSupply,
                   onChanged: (v) => setState(() => _upsPowerSupply = v),
+                  errorText: _upsPowerSupplyError,
                 ),
                 AppTextField(
                   controller: _cableLength,
