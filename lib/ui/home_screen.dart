@@ -386,7 +386,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case _SyncStatus.failure:
         return TextButton.icon(
           onPressed: _syncNow,
-          icon: Icon(Icons.cloud_off, color: scheme.error),
+          icon: Icon(Icons.sync_problem, color: scheme.error),
           label: Text(
             'Sync failed — tap to retry',
             style: TextStyle(color: scheme.error),
