@@ -44,6 +44,17 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
   /// convention as the Sites home screen.
   bool _searchOpen = false;
 
+  /// True once selection mode is entered (long-press a row, or the toolbar
+  /// toggle) — rows show a checkbox and tapping selects instead of opening
+  /// edit. Independent of [_searchOpen]: a search can stay applied while
+  /// selecting, narrowing which rows are visible to select from.
+  bool _selectionMode = false;
+
+  /// Ids of the currently checked rows — persists across a search text
+  /// change (a row scrolled out of the filtered view stays selected), and is
+  /// always empty when [_selectionMode] is false.
+  final Set<String> _selectedIds = {};
+
   /// [_items] (unchanged) narrowed by [_query], case-insensitive substring
   /// match on material name only. Filter only — never touches storage, sort
   /// order, or an individual row's own behavior (tap-to-edit, delete, etc.).
@@ -126,6 +137,118 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
     await _load();
   }
 
+  /// Enters selection mode — via the toolbar toggle ([initialId] null) or a
+  /// row long-press, which also pre-checks that row so the gesture itself
+  /// counts as the first selection.
+  void _enterSelectionMode([String? initialId]) {
+    setState(() {
+      _selectionMode = true;
+      if (initialId != null) _selectedIds.add(initialId);
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelected(String id) {
+    setState(() {
+      if (!_selectedIds.add(id)) _selectedIds.remove(id);
+    });
+  }
+
+  /// Tombstones exactly the checked rows via the same per-row
+  /// [SurveyRepository.deleteMaterialMasterItem] the single-row delete uses
+  /// — never a bulk/raw-SQL path — so each still gets its own audit entry
+  /// and its own pending-delete/dirty flags for the next sync, same as
+  /// today. Confirmation wording is deliberately distinct from [_clearAll]'s
+  /// so the two can never be confused for each other.
+  Future<void> _deleteSelected() async {
+    final ids = _selectedIds.toList(growable: false);
+    if (ids.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete ${ids.length} item${ids.length == 1 ? '' : 's'}?'),
+        content: const Text(
+          'The selected rows will be permanently removed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    for (final id in ids) {
+      await widget.repository.deleteMaterialMasterItem(
+        id,
+        changedByRole: widget.changedByRole,
+      );
+    }
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+    await _load();
+  }
+
+  /// Disaster-recovery action: tombstones every currently-active row (not
+  /// just what's visible under the current search filter), still one
+  /// [SurveyRepository.deleteMaterialMasterItem] call per row — same
+  /// tombstone-then-sync path as every other delete here, never a raw
+  /// DELETE/TRUNCATE. Kept behind its own confirmation dialog, entirely
+  /// separate from [_deleteSelected]'s and from selection mode, so it can
+  /// never fire from a selection-mode tap.
+  Future<void> _clearAll() async {
+    final ids = _items.map((i) => i.id).toList(growable: false);
+    if (ids.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear all Material Master items?'),
+        content: Text(
+          'This permanently removes all ${ids.length} active rows. '
+          'This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Clear all'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    for (final id in ids) {
+      await widget.repository.deleteMaterialMasterItem(
+        id,
+        changedByRole: widget.changedByRole,
+      );
+    }
+    await _load();
+  }
+
   static String _variantLabel(MaterialMasterItem item) {
     final parts = [
       item.sensorSize?.label,
@@ -164,7 +287,16 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: _searchOpen
+        leading: _selectionMode
+            ? IconButton(
+                tooltip: 'Cancel selection',
+                onPressed: _exitSelectionMode,
+                icon: const Icon(Icons.close),
+              )
+            : null,
+        title: _selectionMode
+            ? Text('${_selectedIds.length} selected')
+            : _searchOpen
             ? TextField(
                 controller: _searchController,
                 autofocus: true,
@@ -177,8 +309,30 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                   border: InputBorder.none,
                 ),
               )
-            : const Text('Material Master'),
-        actions: _searchOpen
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Material Master'),
+                  Text(
+                    '${_items.length} item${_items.length == 1 ? '' : 's'}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(
+                        context,
+                      ).appBarTheme.foregroundColor?.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ],
+              ),
+        actions: _selectionMode
+            ? [
+                IconButton(
+                  tooltip: 'Delete selected',
+                  onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ]
+            : _searchOpen
             ? [
                 IconButton(
                   tooltip: 'Close search',
@@ -187,6 +341,11 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                 ),
               ]
             : [
+                IconButton(
+                  tooltip: 'Select items',
+                  onPressed: _items.isEmpty ? null : () => _enterSelectionMode(),
+                  icon: const Icon(Icons.checklist),
+                ),
                 IconButton(
                   tooltip: 'Search materials',
                   onPressed: _openSearch,
@@ -197,13 +356,25 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                   onPressed: _openChangeLog,
                   icon: const Icon(Icons.history),
                 ),
+                PopupMenuButton<void>(
+                  tooltip: 'More',
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      enabled: _items.isNotEmpty,
+                      onTap: _clearAll,
+                      child: const Text('Clear all'),
+                    ),
+                  ],
+                ),
               ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addOrEdit(),
-        icon: const Icon(Icons.add),
-        label: const Text('Add material'),
-      ),
+      floatingActionButton: _selectionMode
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _addOrEdit(),
+              icon: const Icon(Icons.add),
+              label: const Text('Add material'),
+            ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _items.isEmpty
@@ -242,7 +413,12 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                     ),
                     for (final item in _filteredItems.where((i) => i.group == group))
                       ListTile(
-                        leading: const Icon(Icons.inventory_2_outlined),
+                        leading: _selectionMode
+                            ? Checkbox(
+                                value: _selectedIds.contains(item.id),
+                                onChanged: (_) => _toggleSelected(item.id),
+                              )
+                            : const Icon(Icons.inventory_2_outlined),
                         title: Text(
                           item.sku.isEmpty
                               ? item.materialName
@@ -251,12 +427,19 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                         subtitle: Text(
                           '${_variantLabel(item)}  •  ${_behaviorSummary(item)}',
                         ),
-                        onTap: () => _addOrEdit(item),
-                        trailing: IconButton(
-                          tooltip: 'Delete',
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () => _delete(item),
-                        ),
+                        onTap: _selectionMode
+                            ? () => _toggleSelected(item.id)
+                            : () => _addOrEdit(item),
+                        onLongPress: _selectionMode
+                            ? null
+                            : () => _enterSelectionMode(item.id),
+                        trailing: _selectionMode
+                            ? null
+                            : IconButton(
+                                tooltip: 'Delete',
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () => _delete(item),
+                              ),
                       ),
                     const Divider(height: 1),
                   ],
