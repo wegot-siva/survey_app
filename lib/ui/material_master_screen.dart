@@ -6,7 +6,12 @@ import 'material_master_audit_log_screen.dart';
 import 'material_master_form_screen.dart';
 
 /// Admin screen for the Material Master: add / edit / delete the per-sensor
-/// material kits the BoM engine reads at generation time.
+/// material kits the BoM engine reads at generation time. Scoped to exactly
+/// one [group] — the second level of navigation from
+/// [MaterialMasterGroupListScreen], which lists all seven groups with a live
+/// count each and pushes this screen (unchanged otherwise: same search,
+/// selection mode, and Clear all, just operating over one group's rows
+/// instead of the whole table) for whichever one is tapped.
 ///
 /// Gated behind the Admin role — the home screen only shows the entry point
 /// to Admin, so this screen never opens for another role in practice, but
@@ -17,6 +22,7 @@ class MaterialMasterScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.changedByRole,
+    required this.group,
   });
 
   final SurveyRepository repository;
@@ -24,6 +30,11 @@ class MaterialMasterScreen extends StatefulWidget {
   /// Label of the signed-in role (e.g. "Admin"), recorded against every
   /// change-log entry this screen's mutations write.
   final String changedByRole;
+
+  /// Which group this screen shows — set once by
+  /// [MaterialMasterGroupListScreen] and never changed after that; every row
+  /// here belongs to this group.
+  final MaterialGroup group;
 
   @override
   State<MaterialMasterScreen> createState() => _MaterialMasterScreenState();
@@ -84,7 +95,7 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
     final items = await widget.repository.getMaterialMasterItems();
     if (!mounted) return;
     setState(() {
-      _items = items;
+      _items = items.where((i) => i.group == widget.group).toList(growable: false);
       _loading = false;
     });
   }
@@ -204,10 +215,11 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
     await _load();
   }
 
-  /// Disaster-recovery action: tombstones every currently-active row (not
-  /// just what's visible under the current search filter), still one
-  /// [SurveyRepository.deleteMaterialMasterItem] call per row — same
-  /// tombstone-then-sync path as every other delete here, never a raw
+  /// Disaster-recovery action: tombstones every currently-active row in
+  /// [MaterialMasterScreen.group] (not just what's visible under the current
+  /// search filter — [_items] is already scoped to this group by [_load]),
+  /// still one [SurveyRepository.deleteMaterialMasterItem] call per row —
+  /// same tombstone-then-sync path as every other delete here, never a raw
   /// DELETE/TRUNCATE. Kept behind its own confirmation dialog, entirely
   /// separate from [_deleteSelected]'s and from selection mode, so it can
   /// never fire from a selection-mode tap.
@@ -217,10 +229,10 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Clear all Material Master items?'),
+        title: Text('Clear all ${widget.group.label} items?'),
         content: Text(
-          'This permanently removes all ${ids.length} active rows. '
-          'This cannot be undone.',
+          'This permanently removes all ${ids.length} active rows in '
+          '${widget.group.label}. This cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -313,7 +325,7 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('Material Master'),
+                  Text('${widget.group.code} — ${widget.group.label}'),
                   Text(
                     '${_items.length} item${_items.length == 1 ? '' : 's'}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -378,14 +390,14 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _items.isEmpty
-          ? const Center(
+          ? Center(
               child: Padding(
-                padding: EdgeInsets.all(24),
+                padding: const EdgeInsets.all(24),
                 child: Text(
-                  'No material rows yet.\n\n'
+                  'No ${widget.group.label} items yet.\n\n'
                   'The BoM engine reads every quantity from here — add a row '
-                  'per sensor variant (and group) to start generating BoMs. '
-                  'Unknown quantities can be left at 0 / TBD for now.',
+                  'to start generating BoMs for this group. Unknown '
+                  'quantities can be left at 0 / TBD for now.',
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -400,50 +412,41 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
                 ),
               ),
             )
-          : ListView(
-              children: [
-                for (final group in MaterialGroup.values)
-                  if (_filteredItems.any((i) => i.group == group)) ...[
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-                      child: Text(
-                        '${group.code} — ${group.label}',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ),
-                    for (final item in _filteredItems.where((i) => i.group == group))
-                      ListTile(
-                        leading: _selectionMode
-                            ? Checkbox(
-                                value: _selectedIds.contains(item.id),
-                                onChanged: (_) => _toggleSelected(item.id),
-                              )
-                            : const Icon(Icons.inventory_2_outlined),
-                        title: Text(
-                          item.sku.isEmpty
-                              ? item.materialName
-                              : '${item.materialName}  (${item.sku})',
+          : ListView.separated(
+              itemCount: _filteredItems.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final item = _filteredItems[index];
+                return ListTile(
+                  leading: _selectionMode
+                      ? Checkbox(
+                          value: _selectedIds.contains(item.id),
+                          onChanged: (_) => _toggleSelected(item.id),
+                        )
+                      : const Icon(Icons.inventory_2_outlined),
+                  title: Text(
+                    item.sku.isEmpty
+                        ? item.materialName
+                        : '${item.materialName}  (${item.sku})',
+                  ),
+                  subtitle: Text(
+                    '${_variantLabel(item)}  •  ${_behaviorSummary(item)}',
+                  ),
+                  onTap: _selectionMode
+                      ? () => _toggleSelected(item.id)
+                      : () => _addOrEdit(item),
+                  onLongPress: _selectionMode
+                      ? null
+                      : () => _enterSelectionMode(item.id),
+                  trailing: _selectionMode
+                      ? null
+                      : IconButton(
+                          tooltip: 'Delete',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _delete(item),
                         ),
-                        subtitle: Text(
-                          '${_variantLabel(item)}  •  ${_behaviorSummary(item)}',
-                        ),
-                        onTap: _selectionMode
-                            ? () => _toggleSelected(item.id)
-                            : () => _addOrEdit(item),
-                        onLongPress: _selectionMode
-                            ? null
-                            : () => _enterSelectionMode(item.id),
-                        trailing: _selectionMode
-                            ? null
-                            : IconButton(
-                                tooltip: 'Delete',
-                                icon: const Icon(Icons.delete_outline),
-                                onPressed: () => _delete(item),
-                              ),
-                      ),
-                    const Divider(height: 1),
-                  ],
-              ],
+                );
+              },
             ),
     );
   }

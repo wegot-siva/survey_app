@@ -13,7 +13,7 @@ import '../services/sync_service.dart';
 import 'approver_review_screen.dart';
 import 'assign_survey_screen.dart';
 import 'create_site_screen.dart';
-import 'material_master_screen.dart';
+import 'material_master_group_list_screen.dart';
 import 'site_hub_screen.dart';
 import 'theme/app_theme.dart';
 
@@ -218,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openMaterialMaster() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => MaterialMasterScreen(
+        builder: (_) => MaterialMasterGroupListScreen(
           repository: widget.repository,
           changedByRole: widget.session.currentRole?.label ?? 'Unknown',
         ),
