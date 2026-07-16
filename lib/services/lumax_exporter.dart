@@ -15,6 +15,13 @@ import 'bom_revision_engine.dart';
 /// under each — numbering restarts per group. Unit price/Total stay blank
 /// (filled downstream by office, same as Sun_BOM's ERP columns).
 ///
+/// The "Item" column falls back to [BomRunningTotalLine.materialName] when
+/// [BomRunningTotalLine.itemLabel] is blank — itemLabel is admin-set,
+/// optional, per-row data-entry (see [MaterialMasterItem.itemLabel]) that,
+/// in practice, is essentially never filled in, so reading it unconditionally
+/// left "Item" blank for nearly every row — visibly different from the app's
+/// own BoM view, which always shows a real name.
+///
 /// Reads the exact same [BomRunningTotalLine] input as [SunBomExporter] —
 /// same data source, different formatter. Pure formatting — never computes
 /// quantities.
@@ -129,7 +136,9 @@ class LumaxExporter {
       for (final line in groupLines) {
         sheet.appendRow([
           IntCellValue(no++),
-          TextCellValue(line.itemLabel),
+          TextCellValue(
+            line.itemLabel.isNotEmpty ? line.itemLabel : line.materialName,
+          ),
           TextCellValue(line.materialName),
           TextCellValue(_sizeLabel(line.sensorSize, line.sensorType)),
           _qtyCell(line.displayQty),

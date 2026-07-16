@@ -107,6 +107,23 @@ void main() {
     expect(rows[3][7], anyOf(isNull, isEmpty));
   });
 
+  test('Item column falls back to materialName when itemLabel is blank', () {
+    final bytes = exporter.buildXlsxBytes(
+      siteName: 'Site',
+      lines: [
+        line(
+          'Sensor A',
+          1,
+          materialName: 'Sensor Alpha',
+          sensorSize: SensorSize.dn25,
+          sensorType: SensorType.wired,
+        ),
+      ],
+    );
+    final rows = rowsOf(Excel.decodeBytes(bytes), 'DN25 Wired');
+    expect(rows[3][1], 'Sensor Alpha'); // "Item" column, not blank
+  });
+
   test('numbering restarts per group within a sheet', () {
     final bytes = exporter.buildXlsxBytes(
       siteName: 'Site',
