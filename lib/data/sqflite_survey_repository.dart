@@ -395,9 +395,14 @@ class SqfliteSurveyRepository implements SurveyRepository {
     String siteId, {
     bool dirtyOnly = false,
   }) async {
+    final conditions = <String>[
+      'site_id = ?',
+      'pending_delete = 0',
+      if (dirtyOnly) 'dirty = 1',
+    ];
     final rows = await _db.query(
       'duct_loras',
-      where: dirtyOnly ? 'site_id = ? AND dirty = 1' : 'site_id = ?',
+      where: conditions.join(' AND '),
       whereArgs: [siteId],
       orderBy: 'rowid',
     );
@@ -423,6 +428,34 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteDuctLora(String id) async {
+    await _db.transaction((txn) async {
+      await txn.update(
+        'duct_loras',
+        {'pending_delete': 1, 'dirty': 1},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await txn.delete(
+        'photos',
+        where: 'owner_type = ? AND owner_id = ?',
+        whereArgs: [PhotoOwner.ductLora, id],
+      );
+    });
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteDuctLoraIds(String siteId) async {
+    final rows = await _db.query(
+      'duct_loras',
+      columns: ['id'],
+      where: 'site_id = ? AND pending_delete = 1',
+      whereArgs: [siteId],
+    );
+    return rows.map((r) => r['id']! as String).toList(growable: false);
+  }
+
+  @override
+  Future<void> hardDeleteDuctLora(String id) async {
     await _db.delete('duct_loras', where: 'id = ?', whereArgs: [id]);
   }
 
@@ -443,9 +476,14 @@ class SqfliteSurveyRepository implements SurveyRepository {
     String siteId, {
     bool dirtyOnly = false,
   }) async {
+    final conditions = <String>[
+      'site_id = ?',
+      'pending_delete = 0',
+      if (dirtyOnly) 'dirty = 1',
+    ];
     final rows = await _db.query(
       'gateways',
-      where: dirtyOnly ? 'site_id = ? AND dirty = 1' : 'site_id = ?',
+      where: conditions.join(' AND '),
       whereArgs: [siteId],
       orderBy: 'rowid',
     );
@@ -471,6 +509,34 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteGateway(String id) async {
+    await _db.transaction((txn) async {
+      await txn.update(
+        'gateways',
+        {'pending_delete': 1, 'dirty': 1},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await txn.delete(
+        'photos',
+        where: 'owner_type = ? AND owner_id = ?',
+        whereArgs: [PhotoOwner.gateway, id],
+      );
+    });
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteGatewayIds(String siteId) async {
+    final rows = await _db.query(
+      'gateways',
+      columns: ['id'],
+      where: 'site_id = ? AND pending_delete = 1',
+      whereArgs: [siteId],
+    );
+    return rows.map((r) => r['id']! as String).toList(growable: false);
+  }
+
+  @override
+  Future<void> hardDeleteGateway(String id) async {
     await _db.delete('gateways', where: 'id = ?', whereArgs: [id]);
   }
 
@@ -714,6 +780,222 @@ class SqfliteSurveyRepository implements SurveyRepository {
     });
   }
 
+  // ---- Pull-sync (Phase 1) ----------------------------------------------
+  //
+  // Generalizes the pull-and-reconcile pattern [upsertMaterialMasterItemsFromRemote]
+  // pioneered to the highest-risk, most-frequently-edited core survey tables:
+  // sites, client_inputs, footers, source_points, inlet_points, duct_loras,
+  // gateways, bom_manual_entries. bom_snapshots/bom_revisions and their line
+  // tables (immutable once written) and engineers/survey_assignment_audit
+  // (separate decision pending) are deliberately not part of this phase.
+  //
+  // [remoteRows] are raw Supabase rows (see
+  // [SupabaseSurveyDataSource]'s `fetchX` methods) — column names already
+  // match the local schema 1:1 for every one of these tables (see
+  // supabase/schema.sql), so the only real conversion needed is boolean:
+  // Postgres returns a native bool, SQLite stores 0/1. [boolColumns] names
+  // exactly the columns needing that conversion; every other key passes
+  // through unchanged.
+  //
+  // An existing local row is UPDATEd, not REPLACEd — deliberately, so a
+  // column the remote payload doesn't carry (e.g. Site's archived/address/
+  // client_name/client_contact, which are Sales-only fields never pushed to
+  // Supabase at all) is left exactly as it was, never silently reset to its
+  // schema default. A brand-new row is INSERTed, so those same columns get
+  // their schema default (e.g. archived=0) — the correct starting point for
+  // a site pulled fresh from another device.
+  Future<void> _pullAndReconcile(
+    String table,
+    List<Map<String, dynamic>> remoteRows, {
+    required String idColumn,
+    required List<String> boolColumns,
+    bool hasPendingDelete = true,
+  }) async {
+    Map<String, Object?> toLocalRow(Map<String, dynamic> r) {
+      final row = Map<String, Object?>.from(r);
+      for (final column in boolColumns) {
+        if (row.containsKey(column)) row[column] = _boolToInt(row[column] as bool?);
+      }
+      return row;
+    }
+
+    final protectColumns = ['dirty', if (hasPendingDelete) 'pending_delete'];
+    bool isProtected(Map<String, Object?> row) {
+      final isDirty = (row['dirty'] as int?) == 1;
+      final isPendingDelete =
+          hasPendingDelete && (row['pending_delete'] as int?) == 1;
+      return isDirty || isPendingDelete;
+    }
+
+    await _db.transaction((txn) async {
+      for (final remoteRow in remoteRows) {
+        final id = remoteRow[idColumn] as String;
+        final existingRows = await txn.query(
+          table,
+          columns: protectColumns,
+          where: '$idColumn = ?',
+          whereArgs: [id],
+          limit: 1,
+        );
+        if (existingRows.isNotEmpty) {
+          if (isProtected(existingRows.first)) {
+            continue; // Unsynced local edit/delete — leave it, don't clobber.
+          }
+          await txn.update(
+            table,
+            {...toLocalRow(remoteRow), 'dirty': 0},
+            where: '$idColumn = ?',
+            whereArgs: [id],
+          );
+        } else {
+          await txn.insert(table, {...toLocalRow(remoteRow), 'dirty': 0});
+        }
+      }
+
+      // Reconciliation: a row that's active locally (not dirty, not already
+      // pending its own local delete) but absent from this complete remote
+      // fetch was deleted directly in Supabase — remove it here too. Skipped
+      // entirely when remoteRows is empty: a wholesale-empty result is far
+      // more likely to mean the fetch went wrong than that every row was
+      // genuinely deleted, and treating it as the latter would wipe the
+      // whole local table on a fluke.
+      if (remoteRows.isEmpty) return;
+      final remoteIds = remoteRows.map((r) => r[idColumn] as String).toSet();
+      final localRows = await txn.query(table, columns: [idColumn, ...protectColumns]);
+      for (final row in localRows) {
+        final id = row[idColumn]! as String;
+        if (remoteIds.contains(id)) continue;
+        if (isProtected(row)) continue;
+        await txn.delete(table, where: '$idColumn = ?', whereArgs: [id]);
+      }
+    });
+  }
+
+  @override
+  Future<void> upsertSitesFromRemote(List<Map<String, dynamic>> remoteRows) =>
+      _pullAndReconcile(
+        'sites',
+        remoteRows,
+        idColumn: 'id',
+        boolColumns: const ['bom_locked'],
+        hasPendingDelete: false,
+      );
+
+  @override
+  Future<void> upsertClientInputsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'client_inputs',
+    remoteRows,
+    idColumn: 'site_id',
+    boolColumns: const [
+      'finalised_plumbing_drawings',
+      'pressure_boosters',
+      'rework_required',
+      'aesthetic_guidelines',
+    ],
+    hasPendingDelete: false,
+  );
+
+  @override
+  Future<void> upsertFootersFromRemote(List<Map<String, dynamic>> remoteRows) =>
+      _pullAndReconcile(
+        'footers',
+        remoteRows,
+        idColumn: 'site_id',
+        boolColumns: const ['tcl_service'],
+        hasPendingDelete: false,
+      );
+
+  @override
+  Future<void> upsertSourcePointsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'source_points',
+    remoteRows,
+    idColumn: 'id',
+    boolColumns: const [
+      'rework',
+      'clearance_10x',
+      'pipe_full',
+      'valve_downstream',
+      'reducer_spec',
+      'downstream_outlet_above_pipe_fig1',
+      'air_vent_needed_fig2',
+      'reverse_flow',
+      'distance_from_motor_pump_fig3',
+      'no_flexible_pipe_within_20x',
+      'strainer_screen_filter',
+      'chamber_installation',
+      'antenna_required',
+      'transmitting_part_open_to_air',
+      'nrv_feasibility',
+    ],
+  );
+
+  @override
+  Future<void> upsertInletPointsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'inlet_points',
+    remoteRows,
+    idColumn: 'id',
+    boolColumns: const [
+      'rework',
+      'linear_distance_clearance_10x',
+      'reverse_flow',
+      'distance_from_motor_pump',
+      'strainer_screen_filter',
+      'conduit_clamping',
+      'civil_work_needed',
+    ],
+  );
+
+  @override
+  Future<void> upsertDuctLorasFromRemote(List<Map<String, dynamic>> remoteRows) =>
+      _pullAndReconcile(
+        'duct_loras',
+        // Remote still carries `placement_photo_remote_path` (pre-v8 photo
+        // capture, superseded by the shared `photos` table — see
+        // [_createDuctLorasTable]'s doc comment), but a fresh local install
+        // (v8+) never gets that column back, so it must be dropped here
+        // before reaching the local INSERT/UPDATE.
+        remoteRows
+            .map(
+              (r) => Map<String, dynamic>.from(r)..remove('placement_photo_remote_path'),
+            )
+            .toList(),
+        idColumn: 'id',
+        boolColumns: const [
+          'accessible_for_service',
+          'power_point_available_shielded',
+          'separate_mcb_for_series',
+          'ups_power_supply',
+        ],
+      );
+
+  @override
+  Future<void> upsertGatewaysFromRemote(List<Map<String, dynamic>> remoteRows) =>
+      _pullAndReconcile(
+        'gateways',
+        remoteRows,
+        idColumn: 'id',
+        boolColumns: const [
+          'wifi_interference_check',
+          'uninterrupted_power_source',
+        ],
+      );
+
+  @override
+  Future<void> upsertBomManualEntriesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'bom_manual_entries',
+    remoteRows,
+    idColumn: 'id',
+    boolColumns: const [],
+  );
+
   @override
   Future<List<MaterialMasterAuditEntry>> getMaterialMasterAuditLog({
     bool dirtyOnly = false,
@@ -852,9 +1134,14 @@ class SqfliteSurveyRepository implements SurveyRepository {
     String surveyId, {
     bool dirtyOnly = false,
   }) async {
+    final conditions = <String>[
+      'survey_id = ?',
+      'pending_delete = 0',
+      if (dirtyOnly) 'dirty = 1',
+    ];
     final rows = await _db.query(
       'bom_manual_entries',
-      where: dirtyOnly ? 'survey_id = ? AND dirty = 1' : 'survey_id = ?',
+      where: conditions.join(' AND '),
       whereArgs: [surveyId],
       orderBy: 'added_at, rowid',
     );
@@ -880,6 +1167,27 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteBomManualEntry(String id) async {
+    await _db.update(
+      'bom_manual_entries',
+      {'pending_delete': 1, 'dirty': 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteBomManualEntryIds(String surveyId) async {
+    final rows = await _db.query(
+      'bom_manual_entries',
+      columns: ['id'],
+      where: 'survey_id = ? AND pending_delete = 1',
+      whereArgs: [surveyId],
+    );
+    return rows.map((r) => r['id']! as String).toList(growable: false);
+  }
+
+  @override
+  Future<void> hardDeleteBomManualEntry(String id) async {
     await _db.delete('bom_manual_entries', where: 'id = ?', whereArgs: [id]);
   }
 

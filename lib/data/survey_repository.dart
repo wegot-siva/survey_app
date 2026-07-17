@@ -63,6 +63,26 @@ abstract class SurveyRepository {
   /// that row's push to Supabase has succeeded.
   Future<void> markClientInputsSynced(String siteId);
 
+  /// Merges Supabase's sites rows into local storage — new rows inserted,
+  /// existing ones updated (never replaced wholesale: a column the remote
+  /// payload doesn't carry, e.g. archived/address/client_name/client_contact,
+  /// is left exactly as it was), unless that local row has an unsynced edit
+  /// of its own. A local row absent from [remoteRows] was deleted directly in
+  /// Supabase and is reconciled away here too — skipped entirely when
+  /// [remoteRows] is empty, so a failed/partial fetch can never be mistaken
+  /// for "every site was deleted." [remoteRows] must always be a complete
+  /// fetch of the whole table (see [SupabaseSurveyDataSource.fetchSites]'s
+  /// pagination) — never a partial page. Blocks and Client inputs are
+  /// separate tables/pulls (see [upsertClientInputsFromRemote]), not touched
+  /// here.
+  Future<void> upsertSitesFromRemote(List<Map<String, dynamic>> remoteRows);
+
+  /// Same merge rule as [upsertSitesFromRemote], for Client inputs — keyed by
+  /// site_id (not its own id), one row per site.
+  Future<void> upsertClientInputsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
+
   // ---- Source points (a site has many) ------------------------------------
 
   /// [dirtyOnly] limits to points not yet pushed since their last local
@@ -93,6 +113,13 @@ abstract class SurveyRepository {
   /// Clears the sync-pending flag for source point [id]. Call once that
   /// row's push to Supabase has succeeded.
   Future<void> markSourcePointSynced(String id);
+
+  /// Same merge rule as [upsertSitesFromRemote], for source points across
+  /// every site — not scoped to one, so a complete fetch is required (see
+  /// [SupabaseSurveyDataSource.fetchSourcePoints]).
+  Future<void> upsertSourcePointsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
 
   // ---- Inlet points (a site has many) -------------------------------------
 
@@ -125,10 +152,18 @@ abstract class SurveyRepository {
   /// push to Supabase has succeeded.
   Future<void> markInletPointSynced(String id);
 
+  /// Same merge rule as [upsertSitesFromRemote], for inlet points across
+  /// every site.
+  Future<void> upsertInletPointsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
+
   // ---- Duct LoRa units (a site has many) ----------------------------------
 
   /// [dirtyOnly] limits to units not yet pushed since their last local
-  /// change — sync-only, see [markDuctLoraSynced].
+  /// change — sync-only, see [markDuctLoraSynced]. Never includes a unit
+  /// pending deletion (see [deleteDuctLora]) — deletion is immediate from
+  /// every normal read's point of view.
   Future<List<DuctLora>> getDuctLoras(String siteId, {bool dirtyOnly = false});
 
   /// Persists a new Duct LoRa unit, assigning it an id, and returns it.
@@ -136,16 +171,34 @@ abstract class SurveyRepository {
 
   Future<void> updateDuctLora(DuctLora ductLora);
 
+  /// Marks [id] for deletion (a tombstone, not a hard delete) so sync can
+  /// still push a remote delete for it — the row disappears from every
+  /// normal read immediately, but survives in storage until
+  /// [hardDeleteDuctLora] is called once that remote delete succeeds.
   Future<void> deleteDuctLora(String id);
+
+  /// Every Duct LoRa unit id currently pending deletion for [siteId] —
+  /// sync-only, see [deleteDuctLora] / [hardDeleteDuctLora].
+  Future<List<String>> getPendingDeleteDuctLoraIds(String siteId);
+
+  /// Physically removes a pending-delete row. Call only after that id's
+  /// remote delete has actually succeeded — see [getPendingDeleteDuctLoraIds].
+  Future<void> hardDeleteDuctLora(String id);
 
   /// Clears the sync-pending flag for Duct LoRa unit [id]. Call once that
   /// row's push to Supabase has succeeded.
   Future<void> markDuctLoraSynced(String id);
 
+  /// Same merge rule as [upsertSitesFromRemote], for Duct LoRa units across
+  /// every site.
+  Future<void> upsertDuctLorasFromRemote(List<Map<String, dynamic>> remoteRows);
+
   // ---- Gateways (a site has many) -----------------------------------------
 
   /// [dirtyOnly] limits to gateways not yet pushed since their last local
-  /// change — sync-only, see [markGatewaySynced].
+  /// change — sync-only, see [markGatewaySynced]. Never includes a gateway
+  /// pending deletion (see [deleteGateway]) — deletion is immediate from
+  /// every normal read's point of view.
   Future<List<Gateway>> getGateways(String siteId, {bool dirtyOnly = false});
 
   /// Persists a new gateway, assigning it an id, and returns it.
@@ -153,11 +206,27 @@ abstract class SurveyRepository {
 
   Future<void> updateGateway(Gateway gateway);
 
+  /// Marks [id] for deletion (a tombstone, not a hard delete) so sync can
+  /// still push a remote delete for it — the row disappears from every
+  /// normal read immediately, but survives in storage until
+  /// [hardDeleteGateway] is called once that remote delete succeeds.
   Future<void> deleteGateway(String id);
+
+  /// Every gateway id currently pending deletion for [siteId] — sync-only,
+  /// see [deleteGateway] / [hardDeleteGateway].
+  Future<List<String>> getPendingDeleteGatewayIds(String siteId);
+
+  /// Physically removes a pending-delete row. Call only after that id's
+  /// remote delete has actually succeeded — see [getPendingDeleteGatewayIds].
+  Future<void> hardDeleteGateway(String id);
 
   /// Clears the sync-pending flag for gateway [id]. Call once that row's push
   /// to Supabase has succeeded.
   Future<void> markGatewaySynced(String id);
+
+  /// Same merge rule as [upsertSitesFromRemote], for gateways across every
+  /// site.
+  Future<void> upsertGatewaysFromRemote(List<Map<String, dynamic>> remoteRows);
 
   // ---- Footer (one per site, like Client inputs) --------------------------
 
@@ -174,6 +243,10 @@ abstract class SurveyRepository {
   /// Clears the sync-pending flag for [siteId]'s Footer. Call once that
   /// row's push to Supabase has succeeded.
   Future<void> markFooterSynced(String siteId);
+
+  /// Same merge rule as [upsertSitesFromRemote], for Footers — keyed by
+  /// site_id (not its own id), one row per site.
+  Future<void> upsertFootersFromRemote(List<Map<String, dynamic>> remoteRows);
 
   // ---- Material Master (admin-editable reference data, not site-scoped) ---
   //
@@ -302,7 +375,9 @@ abstract class SurveyRepository {
 
   /// All manual entries for one survey, oldest first. [dirtyOnly] limits to
   /// entries not yet pushed since their last local change — sync-only, see
-  /// [markBomManualEntrySynced].
+  /// [markBomManualEntrySynced]. Never includes an entry pending deletion
+  /// (see [deleteBomManualEntry]) — deletion is immediate from every normal
+  /// read's point of view.
   Future<List<BomManualEntry>> getBomManualEntries(
     String surveyId, {
     bool dirtyOnly = false,
@@ -316,11 +391,30 @@ abstract class SurveyRepository {
   /// new addition.
   Future<void> updateBomManualEntry(BomManualEntry entry);
 
+  /// Marks [id] for deletion (a tombstone, not a hard delete) so sync can
+  /// still push a remote delete for it — the row disappears from every
+  /// normal read immediately, but survives in storage until
+  /// [hardDeleteBomManualEntry] is called once that remote delete succeeds.
   Future<void> deleteBomManualEntry(String id);
+
+  /// Every manual entry id currently pending deletion for [surveyId] —
+  /// sync-only, see [deleteBomManualEntry] / [hardDeleteBomManualEntry].
+  Future<List<String>> getPendingDeleteBomManualEntryIds(String surveyId);
+
+  /// Physically removes a pending-delete row. Call only after that id's
+  /// remote delete has actually succeeded — see
+  /// [getPendingDeleteBomManualEntryIds].
+  Future<void> hardDeleteBomManualEntry(String id);
 
   /// Clears the sync-pending flag for manual entry [id]. Call once that
   /// row's push to Supabase has succeeded.
   Future<void> markBomManualEntrySynced(String id);
+
+  /// Same merge rule as [upsertSitesFromRemote], for BoM manual entries
+  /// across every survey.
+  Future<void> upsertBomManualEntriesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
 
   // ---- BoM snapshots (Finalize — immutable, frozen BoM) --------------------
   //

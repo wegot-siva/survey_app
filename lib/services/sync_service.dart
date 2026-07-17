@@ -60,11 +60,14 @@ class SyncResult {
 /// every sync after that only pushes what actually changed. The UI never
 /// touches storage directly; it only calls [pushAll].
 ///
-/// Deletions (Source/Inlet Points only, so far) are the one exception to
-/// "push-only": a locally-deleted row is a tombstone (see
+/// Deletions (Source Points, Inlet Points, Duct LoRa units, Gateways, and BoM
+/// manual entries — plus Material Master, handled separately below) are the
+/// exception to "push-only": a locally-deleted row is a tombstone (see e.g.
 /// [SurveyRepository.deleteSourcePoint]) until its remote row is actually
-/// deleted too — see `getPendingDeleteSourcePointIds`/`hardDeleteSourcePoint`
-/// below — so a delete never leaves an orphaned row in Supabase.
+/// deleted too — see the matching `getPendingDeleteXxxIds`/`hardDeleteXxx`
+/// pair for each table below — so a delete never leaves an orphaned row in
+/// Supabase. Every other table here (client_inputs, footers, snapshots,
+/// revisions, ...) has no delete feature at all, so needs no tombstone.
 class SyncService {
   SyncService(this._repository, this._supabase, this._remote);
 
@@ -169,6 +172,13 @@ class SyncService {
         }
         inletPoints += ips.length;
 
+        for (final id in await _repository.getPendingDeleteDuctLoraIds(
+          site.id,
+        )) {
+          await _remote.deleteDuctLora(id);
+          await _repository.hardDeleteDuctLora(id);
+          ductLoras++;
+        }
         final dls = await _repository.getDuctLoras(site.id, dirtyOnly: true);
         for (final dl in dls) {
           await _remote.pushDuctLora(dl);
@@ -176,6 +186,13 @@ class SyncService {
         }
         ductLoras += dls.length;
 
+        for (final id in await _repository.getPendingDeleteGatewayIds(
+          site.id,
+        )) {
+          await _remote.deleteGateway(id);
+          await _repository.hardDeleteGateway(id);
+          gateways++;
+        }
         final gws = await _repository.getGateways(site.id, dirtyOnly: true);
         for (final gw in gws) {
           await _remote.pushGateway(gw);
@@ -192,6 +209,13 @@ class SyncService {
           }
         }
 
+        for (final id in await _repository.getPendingDeleteBomManualEntryIds(
+          site.id,
+        )) {
+          await _remote.deleteBomManualEntry(id);
+          await _repository.hardDeleteBomManualEntry(id);
+          bomManualEntries++;
+        }
         final manualEntries = await _repository.getBomManualEntries(
           site.id,
           dirtyOnly: true,
@@ -335,15 +359,11 @@ class SyncService {
   /// unless they have an unsynced local edit/delete of their own, and a row
   /// deleted directly in Supabase is reconciled away locally too).
   ///
-  /// Material Master is the one table in this file that needs a pull at
-  /// all: it's global reference data populated/edited centrally (e.g. bulk
-  /// SQL against the plumbing catalog), so a row added, edited, or deleted
-  /// directly in Supabase must still reach every device — unlike every
-  /// other table here, which is device-authored and reaches Supabase by
-  /// push alone. Deliberately kept separate from [pushAll] rather than
-  /// folded into its loop, so push behavior for every table (including
-  /// Material Master's own push) is completely unaffected by this method
-  /// existing.
+  /// Material Master was the first table in this file to need a pull, and
+  /// still has its own reasons to (global reference data populated/edited
+  /// centrally, e.g. bulk SQL against the plumbing catalog) — kept as its
+  /// own method, separate from [pullCoreSurveyData]'s "Phase 1" tables and
+  /// from [pushAll], so none of the three affect each other.
   ///
   /// Reuses [SyncResult] purely as a convenient result shape (`success`,
   /// `materialMasterItems` count, `message` on failure) — it does not mean a
@@ -379,6 +399,74 @@ class SyncService {
       );
     } catch (e) {
       return SyncResult(success: false, message: 'Material Master pull failed:\n\n$e');
+    }
+  }
+
+  /// Pulls the "Phase 1" core survey tables — sites, client_inputs, footers,
+  /// source_points, inlet_points, duct_loras, gateways, bom_manual_entries —
+  /// same merge-and-reconcile rule as [pullMaterialMasterItems], generalized
+  /// (see [SqfliteSurveyRepository]'s pull-reconcile helper for the shared
+  /// mechanics). bom_snapshots/bom_revisions and their line tables
+  /// (immutable once written) and engineers/survey_assignment_audit
+  /// (separate decision pending) are deliberately not part of this phase.
+  ///
+  /// Before this phase, every one of these tables was push-only — a survey
+  /// created or edited on one device would never reach any other device,
+  /// since nothing ever pulled it back down. Sites pull first and complete
+  /// before any other table's: every other table here FK's to sites, so a
+  /// child row pulled before its parent site exists locally would fail its
+  /// insert.
+  ///
+  /// Reuses [SyncResult] purely as a convenient result shape (`success`,
+  /// `message` on failure) — it does not mean a push happened, and the
+  /// per-table counts are left at their defaults (0): unlike
+  /// [pullMaterialMasterItems], there's no single meaningful count to report
+  /// across eight different tables.
+  Future<SyncResult> pullCoreSurveyData() async {
+    if (!_supabase.isConfigured) {
+      return const SyncResult(
+        success: false,
+        message: 'Supabase is not configured.',
+      );
+    }
+
+    await _supabase.initIfConfigured();
+    if (!_supabase.isInitialized) {
+      return const SyncResult(
+        success: false,
+        message: 'Supabase failed to initialize. Check your keys in .env.',
+      );
+    }
+
+    try {
+      await _repository.upsertSitesFromRemote(await _remote.fetchSites());
+      await _repository.upsertClientInputsFromRemote(
+        await _remote.fetchClientInputs(),
+      );
+      await _repository.upsertFootersFromRemote(await _remote.fetchFooters());
+      await _repository.upsertSourcePointsFromRemote(
+        await _remote.fetchSourcePoints(),
+      );
+      await _repository.upsertInletPointsFromRemote(
+        await _remote.fetchInletPoints(),
+      );
+      await _repository.upsertDuctLorasFromRemote(await _remote.fetchDuctLoras());
+      await _repository.upsertGatewaysFromRemote(await _remote.fetchGateways());
+      await _repository.upsertBomManualEntriesFromRemote(
+        await _remote.fetchBomManualEntries(),
+      );
+      return const SyncResult(success: true);
+    } on PostgrestException catch (e) {
+      return SyncResult(
+        success: false,
+        message: 'Core survey data pull failed (database):\n\n'
+            'message: ${e.message}\n'
+            'code: ${e.code}\n'
+            'details: ${e.details}\n'
+            'hint: ${e.hint}',
+      );
+    } catch (e) {
+      return SyncResult(success: false, message: 'Core survey data pull failed:\n\n$e');
     }
   }
 

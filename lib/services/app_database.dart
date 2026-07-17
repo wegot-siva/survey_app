@@ -10,7 +10,7 @@ import '../models/engineer_directory.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 21;
+const int _dbVersion = 22;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -267,6 +267,21 @@ Future<Database> openAppDatabase() async {
           'INTEGER NOT NULL DEFAULT 0',
         );
       }
+      // v21 -> v22: Duct LoRa / Gateway / BoM manual entry delete propagation
+      // — same pending_delete tombstone convention as source_points/
+      // inlet_points/material_master_items. Until now, deleteDuctLora/
+      // deleteGateway/deleteBomManualEntry hard-deleted the local row with no
+      // remote propagation at all, permanently orphaning any already-synced
+      // Supabase row. Nullable-equivalent (defaults 0), so every existing
+      // row is unaffected until an explicit delete sets it.
+      if (oldVersion < 22) {
+        for (final table in ['duct_loras', 'gateways', 'bom_manual_entries']) {
+          await db.execute(
+            'ALTER TABLE $table ADD COLUMN pending_delete '
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+        }
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -421,8 +436,11 @@ Future<void> _createInletPointsTable(Database db) async {
   ''');
 }
 
-/// Duct LoRa units table (v4). A site has many. `series_served` is a
-/// comma-separated set of series tokens (mirrors water_sources in client_inputs).
+/// Duct LoRa units table (v4, +pending_delete in v22). A site has many.
+/// `series_served` is a comma-separated set of series tokens (mirrors
+/// water_sources in client_inputs). `pending_delete` is a tombstone flag,
+/// same convention as source_points/inlet_points — see
+/// [SurveyRepository.deleteDuctLora].
 ///
 /// Fresh installs (v8+) never get the old `placement_photo_*` columns — that
 /// photo now lives in the shared `photos` table like every other photo field.
@@ -443,13 +461,16 @@ Future<void> _createDuctLorasTable(Database db) async {
       ups_power_supply               INTEGER,
       cable_length                   REAL,
       dirty                          INTEGER NOT NULL DEFAULT 1,
+      pending_delete                 INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
 }
 
-/// Gateways table (v4). A site has many. `blocks_covered` is a comma-separated
-/// set of block labels.
+/// Gateways table (v4, +pending_delete in v22). A site has many.
+/// `blocks_covered` is a comma-separated set of block labels.
+/// `pending_delete` is a tombstone flag, same convention as source_points/
+/// inlet_points — see [SurveyRepository.deleteGateway].
 Future<void> _createGatewaysTable(Database db) async {
   await db.execute('''
     CREATE TABLE gateways (
@@ -466,6 +487,7 @@ Future<void> _createGatewaysTable(Database db) async {
       uninterrupted_power_source INTEGER,
       mounting_hardware_needed   TEXT,
       dirty                      INTEGER NOT NULL DEFAULT 1,
+      pending_delete             INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -602,12 +624,14 @@ Future<void> _createMaterialMasterAuditTable(Database db) async {
 }
 
 /// BoM manual entries table (v10, +item_label/sensor_size/sensor_type in
-/// v13). A
+/// v13, +pending_delete in v22). A
 /// survey has many; FK'd to sites (cascade delete, like source/inlet points)
 /// since these are genuinely survey-scoped, unlike Material Master. Not
 /// linked to any material_master_items row by id — name/sku/unit are copied
 /// at the moment the picker's dropdown selection is made, so an entry
-/// survives that catalog row later changing or being deleted. `group_code`
+/// survives that catalog row later changing or being deleted. `pending_delete`
+/// is a tombstone flag, same convention as source_points/inlet_points — see
+/// [SurveyRepository.deleteBomManualEntry]. `group_code`
 /// avoids "group" (a reserved word in the remote Postgres schema) but,
 /// unlike material_master_items.group_code (lowercase enum name), stores the
 /// literal 'D' / 'E' / 'G' — the picker UI restricts it to just those three.
@@ -627,6 +651,7 @@ Future<void> _createBomManualEntriesTable(Database db) async {
       added_by      TEXT NOT NULL,
       added_at      TEXT NOT NULL,
       dirty         INTEGER NOT NULL DEFAULT 1,
+      pending_delete INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');

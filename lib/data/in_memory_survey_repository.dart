@@ -17,6 +17,7 @@ import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../models/survey_assignment_audit_entry.dart';
+import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 import '../models/survey_status.dart';
 import '../services/id_service.dart';
@@ -66,6 +67,9 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Set<String> _dirtyInletPointIds = {};
   final Set<String> _pendingDeleteSourcePointIds = {};
   final Set<String> _pendingDeleteInletPointIds = {};
+  final Set<String> _pendingDeleteDuctLoraIds = {};
+  final Set<String> _pendingDeleteGatewayIds = {};
+  final Set<String> _pendingDeleteBomManualEntryIds = {};
   final Set<String> _dirtyDuctLoraIds = {};
   final Set<String> _dirtyGatewayIds = {};
   final Set<String> _dirtyFooterSiteIds = {};
@@ -154,6 +158,75 @@ class InMemorySurveyRepository implements SurveyRepository {
     _dirtyClientInputsSiteIds.remove(siteId);
   }
 
+  /// Mirrors [SqfliteSurveyRepository]'s pull-reconcile: an unsynced local
+  /// edit is left untouched; blocks/clientInputs and the Sales-only fields
+  /// (archived/address/clientName/clientContact — never pushed to Supabase
+  /// at all) are carried over from the existing row, not reset, since the
+  /// remote payload never carries them.
+  @override
+  Future<void> upsertSitesFromRemote(List<Map<String, dynamic>> remoteRows) async {
+    for (final row in remoteRows) {
+      final id = row['id'] as String;
+      if (_dirtySiteIds.contains(id)) continue;
+      final existing = _sites[id];
+      _sites[id] = Site(
+        id: id,
+        name: (row['name'] as String?) ?? '',
+        blocks: existing?.blocks ?? const [],
+        clientInputs: existing?.clientInputs,
+        status: row['status'] as String?,
+        assignedTo: row['assigned_to'] as String?,
+        bomLocked: (row['bom_locked'] as bool?) ?? false,
+        archived: existing?.archived ?? false,
+        address: existing?.address ?? '',
+        clientName: existing?.clientName ?? '',
+        clientContact: existing?.clientContact ?? '',
+      );
+    }
+
+    if (remoteRows.isEmpty) return;
+    final remoteIds = remoteRows.map((r) => r['id'] as String).toSet();
+    for (final id in _sites.keys.toList()) {
+      if (remoteIds.contains(id)) continue;
+      if (_dirtySiteIds.contains(id)) continue;
+      _sites.remove(id);
+    }
+  }
+
+  @override
+  Future<void> upsertClientInputsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    for (final row in remoteRows) {
+      final siteId = row['site_id'] as String;
+      if (_dirtyClientInputsSiteIds.contains(siteId)) continue;
+      final site = _sites[siteId];
+      if (site == null) continue; // parent site not pulled yet
+      _sites[siteId] = site.copyWith(clientInputs: _clientInputsFromRemoteRow(row));
+    }
+
+    if (remoteRows.isEmpty) return;
+    final remoteSiteIds = remoteRows.map((r) => r['site_id'] as String).toSet();
+    for (final entry in _sites.entries.toList()) {
+      final site = entry.value;
+      if (site.clientInputs == null) continue;
+      if (remoteSiteIds.contains(entry.key)) continue;
+      if (_dirtyClientInputsSiteIds.contains(entry.key)) continue;
+      _sites[entry.key] = Site(
+        id: site.id,
+        name: site.name,
+        blocks: site.blocks,
+        status: site.status,
+        assignedTo: site.assignedTo,
+        bomLocked: site.bomLocked,
+        archived: site.archived,
+        address: site.address,
+        clientName: site.clientName,
+        clientContact: site.clientContact,
+      );
+    }
+  }
+
   @override
   Future<List<SourcePoint>> getSourcePoints(
     String siteId, {
@@ -211,6 +284,46 @@ class InMemorySurveyRepository implements SurveyRepository {
   @override
   Future<void> markSourcePointSynced(String id) async {
     _dirtySourcePointIds.remove(id);
+  }
+
+  /// Mirrors [SqfliteSurveyRepository]'s generic pull-reconcile helper, for
+  /// every id-keyed, site/survey-scoped table this phase adds pull-sync to
+  /// (source_points, inlet_points, duct_loras, gateways, bom_manual_entries)
+  /// — an unsynced local edit or pending delete is left untouched, and a
+  /// local row absent from a complete [remoteRows] fetch is removed.
+  void _upsertFromRemoteById<T>({
+    required Map<String, T> store,
+    required Set<String> dirtyIds,
+    required Set<String> pendingDeleteIds,
+    required List<Map<String, dynamic>> remoteRows,
+    required T Function(Map<String, dynamic>) fromRow,
+  }) {
+    for (final row in remoteRows) {
+      final id = row['id'] as String;
+      if (dirtyIds.contains(id) || pendingDeleteIds.contains(id)) continue;
+      store[id] = fromRow(row);
+    }
+
+    if (remoteRows.isEmpty) return;
+    final remoteIds = remoteRows.map((r) => r['id'] as String).toSet();
+    for (final id in store.keys.toList()) {
+      if (remoteIds.contains(id)) continue;
+      if (dirtyIds.contains(id) || pendingDeleteIds.contains(id)) continue;
+      store.remove(id);
+    }
+  }
+
+  @override
+  Future<void> upsertSourcePointsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    _upsertFromRemoteById<SourcePoint>(
+      store: _sourcePoints,
+      dirtyIds: _dirtySourcePointIds,
+      pendingDeleteIds: _pendingDeleteSourcePointIds,
+      remoteRows: remoteRows,
+      fromRow: _sourcePointFromRemoteRow,
+    );
   }
 
   @override
@@ -273,6 +386,19 @@ class InMemorySurveyRepository implements SurveyRepository {
   }
 
   @override
+  Future<void> upsertInletPointsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    _upsertFromRemoteById<InletPoint>(
+      store: _inletPoints,
+      dirtyIds: _dirtyInletPointIds,
+      pendingDeleteIds: _pendingDeleteInletPointIds,
+      remoteRows: remoteRows,
+      fromRow: _inletPointFromRemoteRow,
+    );
+  }
+
+  @override
   Future<List<DuctLora>> getDuctLoras(
     String siteId, {
     bool dirtyOnly = false,
@@ -280,6 +406,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       .where(
         (d) =>
             d.siteId == siteId &&
+            !_pendingDeleteDuctLoraIds.contains(d.id) &&
             (!dirtyOnly || _dirtyDuctLoraIds.contains(d.id)),
       )
       .toList(growable: false);
@@ -300,13 +427,45 @@ class InMemorySurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteDuctLora(String id) async {
+    _pendingDeleteDuctLoraIds.add(id);
+    _dirtyDuctLoraIds.add(id);
+    _photos.removeWhere(
+      (_, p) => p.ownerType == PhotoOwner.ductLora && p.ownerId == id,
+    );
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteDuctLoraIds(String siteId) async =>
+      _ductLoras.values
+          .where(
+            (d) => d.siteId == siteId && _pendingDeleteDuctLoraIds.contains(d.id),
+          )
+          .map((d) => d.id)
+          .toList(growable: false);
+
+  @override
+  Future<void> hardDeleteDuctLora(String id) async {
     _ductLoras.remove(id);
+    _pendingDeleteDuctLoraIds.remove(id);
     _dirtyDuctLoraIds.remove(id);
   }
 
   @override
   Future<void> markDuctLoraSynced(String id) async {
     _dirtyDuctLoraIds.remove(id);
+  }
+
+  @override
+  Future<void> upsertDuctLorasFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    _upsertFromRemoteById<DuctLora>(
+      store: _ductLoras,
+      dirtyIds: _dirtyDuctLoraIds,
+      pendingDeleteIds: _pendingDeleteDuctLoraIds,
+      remoteRows: remoteRows,
+      fromRow: _ductLoraFromRemoteRow,
+    );
   }
 
   @override
@@ -317,6 +476,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       .where(
         (g) =>
             g.siteId == siteId &&
+            !_pendingDeleteGatewayIds.contains(g.id) &&
             (!dirtyOnly || _dirtyGatewayIds.contains(g.id)),
       )
       .toList(growable: false);
@@ -337,13 +497,45 @@ class InMemorySurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteGateway(String id) async {
+    _pendingDeleteGatewayIds.add(id);
+    _dirtyGatewayIds.add(id);
+    _photos.removeWhere(
+      (_, p) => p.ownerType == PhotoOwner.gateway && p.ownerId == id,
+    );
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteGatewayIds(String siteId) async =>
+      _gateways.values
+          .where(
+            (g) => g.siteId == siteId && _pendingDeleteGatewayIds.contains(g.id),
+          )
+          .map((g) => g.id)
+          .toList(growable: false);
+
+  @override
+  Future<void> hardDeleteGateway(String id) async {
     _gateways.remove(id);
+    _pendingDeleteGatewayIds.remove(id);
     _dirtyGatewayIds.remove(id);
   }
 
   @override
   Future<void> markGatewaySynced(String id) async {
     _dirtyGatewayIds.remove(id);
+  }
+
+  @override
+  Future<void> upsertGatewaysFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    _upsertFromRemoteById<Gateway>(
+      store: _gateways,
+      dirtyIds: _dirtyGatewayIds,
+      pendingDeleteIds: _pendingDeleteGatewayIds,
+      remoteRows: remoteRows,
+      fromRow: _gatewayFromRemoteRow,
+    );
   }
 
   @override
@@ -365,6 +557,25 @@ class InMemorySurveyRepository implements SurveyRepository {
   @override
   Future<void> markFooterSynced(String siteId) async {
     _dirtyFooterSiteIds.remove(siteId);
+  }
+
+  @override
+  Future<void> upsertFootersFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    for (final row in remoteRows) {
+      final siteId = row['site_id'] as String;
+      if (_dirtyFooterSiteIds.contains(siteId)) continue;
+      _footers[siteId] = _footerFromRemoteRow(row);
+    }
+
+    if (remoteRows.isEmpty) return;
+    final remoteSiteIds = remoteRows.map((r) => r['site_id'] as String).toSet();
+    for (final siteId in _footers.keys.toList()) {
+      if (remoteSiteIds.contains(siteId)) continue;
+      if (_dirtyFooterSiteIds.contains(siteId)) continue;
+      _footers.remove(siteId);
+    }
   }
 
   @override
@@ -581,6 +792,7 @@ class InMemorySurveyRepository implements SurveyRepository {
             .where(
               (e) =>
                   e.surveyId == surveyId &&
+                  !_pendingDeleteBomManualEntryIds.contains(e.id) &&
                   (!dirtyOnly || _dirtyBomManualEntryIds.contains(e.id)),
             )
             .toList()
@@ -604,13 +816,44 @@ class InMemorySurveyRepository implements SurveyRepository {
 
   @override
   Future<void> deleteBomManualEntry(String id) async {
+    _pendingDeleteBomManualEntryIds.add(id);
+    _dirtyBomManualEntryIds.add(id);
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteBomManualEntryIds(String surveyId) async =>
+      _bomManualEntries.values
+          .where(
+            (e) =>
+                e.surveyId == surveyId &&
+                _pendingDeleteBomManualEntryIds.contains(e.id),
+          )
+          .map((e) => e.id)
+          .toList(growable: false);
+
+  @override
+  Future<void> hardDeleteBomManualEntry(String id) async {
     _bomManualEntries.remove(id);
+    _pendingDeleteBomManualEntryIds.remove(id);
     _dirtyBomManualEntryIds.remove(id);
   }
 
   @override
   Future<void> markBomManualEntrySynced(String id) async {
     _dirtyBomManualEntryIds.remove(id);
+  }
+
+  @override
+  Future<void> upsertBomManualEntriesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    _upsertFromRemoteById<BomManualEntry>(
+      store: _bomManualEntries,
+      dirtyIds: _dirtyBomManualEntryIds,
+      pendingDeleteIds: _pendingDeleteBomManualEntryIds,
+      remoteRows: remoteRows,
+      fromRow: _bomManualEntryFromRemoteRow,
+    );
   }
 
   @override
@@ -903,4 +1146,207 @@ bool _photoUnchanged(SurveyPhoto existing, SurveyPhoto updated) {
       existing.position == updated.position &&
       existing.localPath == updated.localPath &&
       existing.remotePath == updated.remotePath;
+}
+
+// ---- Pull-sync (Phase 1): raw remote row -> Dart model -----------------
+//
+// Same field/column mapping as SqfliteSurveyRepository's local `_xFromRow`
+// functions — the only difference is booleans: Postgres returns a native
+// bool, so these read `row['x'] as bool?` directly instead of converting
+// from a local SQLite 0/1 int.
+
+T? _enumByName<T extends Enum>(List<T> values, String? name) {
+  if (name == null) return null;
+  for (final value in values) {
+    if (value.name == name) return value;
+  }
+  return null;
+}
+
+Set<WaterSource> _parseWaterSources(String? raw) {
+  if (raw == null || raw.isEmpty) return const {};
+  final result = <WaterSource>{};
+  for (final name in raw.split(',')) {
+    final value = _enumByName(WaterSource.values, name);
+    if (value != null) result.add(value);
+  }
+  return result;
+}
+
+Set<String> _splitStrings(String? raw) {
+  if (raw == null || raw.isEmpty) return const {};
+  return raw.split(',').where((s) => s.isNotEmpty).toSet();
+}
+
+/// Mirrors sqflite's `_materialGroupFromCode` — restricted to the D/E/G
+/// range bom_manual_entries actually uses, falling back to D on anything
+/// unrecognized.
+MaterialGroup _materialGroupFromCode(String? code) {
+  for (final group in kBomManualEntryGroups) {
+    if (group.code == code) return group;
+  }
+  return MaterialGroup.d;
+}
+
+ClientInputs _clientInputsFromRemoteRow(Map<String, dynamic> r) {
+  return ClientInputs(
+    siteName: (r['site_name'] as String?) ?? '',
+    informationSource: _enumByName(
+      InformationSource.values,
+      r['information_source'] as String?,
+    ),
+    clientPocName: (r['client_poc_name'] as String?) ?? '',
+    clientPocContact: (r['client_poc_contact'] as String?) ?? '',
+    goalOfInstallation: (r['goal_of_installation'] as String?) ?? '',
+    waterSources: _parseWaterSources(r['water_sources'] as String?),
+    ohtHns: _enumByName(OhtHns.values, r['oht_hns'] as String?),
+    finalisedPlumbingDrawings: r['finalised_plumbing_drawings'] as bool?,
+    pointsIdentified: r['points_identified'] as int?,
+    maxAndContinuousPressure: (r['max_and_continuous_pressure'] as String?) ?? '',
+    pressureBoosters: r['pressure_boosters'] as bool?,
+    materialsAndBrandGuidelines:
+        (r['materials_and_brand_guidelines'] as String?) ?? '',
+    reworkRequired: r['rework_required'] as bool?,
+    reworkDetails: (r['rework_details'] as String?) ?? '',
+    ageOfPlumbingLines: (r['age_of_plumbing_lines'] as String?) ?? '',
+    aestheticGuidelines: r['aesthetic_guidelines'] as bool?,
+    aestheticDetails: (r['aesthetic_details'] as String?) ?? '',
+  );
+}
+
+Footer _footerFromRemoteRow(Map<String, dynamic> r) {
+  return Footer(
+    tdsPpm: (r['tds_ppm'] as num?)?.toDouble(),
+    tssPpm: (r['tss_ppm'] as num?)?.toDouble(),
+    tclService: r['tcl_service'] as bool?,
+    tclServiceDetails: (r['tcl_service_details'] as String?) ?? '',
+    generalRemarks: (r['general_remarks'] as String?) ?? '',
+    surveyDate: DateTime.tryParse((r['survey_date'] as String?) ?? ''),
+    surveyorName: (r['surveyor_name'] as String?) ?? '',
+  );
+}
+
+SourcePoint _sourcePointFromRemoteRow(Map<String, dynamic> r) {
+  return SourcePoint(
+    id: r['id'] as String,
+    siteId: r['site_id'] as String,
+    block: r['block'] as String?,
+    apartment: (r['apartment'] as String?) ?? '',
+    inletDescription: (r['inlet_description'] as String?) ?? '',
+    sensorSize: _enumByName(SensorSize.values, r['sensor_size'] as String?),
+    sensorOd: _enumByName(SensorOd.values, r['sensor_od'] as String?),
+    pipeSize: _enumByName(PipeSize.values, r['pipe_size'] as String?),
+    pipeType: _enumByName(PipeType.values, r['pipe_type'] as String?),
+    qty: r['qty'] as int?,
+    sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
+    rework: r['rework'] as bool?,
+    reworkDetails: (r['rework_details'] as String?) ?? '',
+    flowDirection: _enumByName(
+      FlowDirection.values,
+      r['flow_direction'] as String?,
+    ),
+    clearance10x: r['clearance_10x'] as bool?,
+    pipeFull: r['pipe_full'] as bool?,
+    valveDownstream: r['valve_downstream'] as bool?,
+    reducerSpec: r['reducer_spec'] as bool?,
+    reducerSpecDetails: (r['reducer_spec_details'] as String?) ?? '',
+    downstreamOutletAbovePipeFig1: r['downstream_outlet_above_pipe_fig1'] as bool?,
+    airVentNeededFig2: r['air_vent_needed_fig2'] as bool?,
+    reverseFlow: r['reverse_flow'] as bool?,
+    distanceFromMotorPumpFig3: r['distance_from_motor_pump_fig3'] as bool?,
+    noFlexiblePipeWithin20x: r['no_flexible_pipe_within_20x'] as bool?,
+    maxAndContinuousPressureBar:
+        (r['max_and_continuous_pressure_bar'] as num?)?.toDouble(),
+    strainerScreenFilter: r['strainer_screen_filter'] as bool?,
+    chamberInstallation: r['chamber_installation'] as bool?,
+    antennaRequired: r['antenna_required'] as bool?,
+    transmittingPartOpenToAir: r['transmitting_part_open_to_air'] as bool?,
+    nrvFeasibility: r['nrv_feasibility'] as bool?,
+  );
+}
+
+InletPoint _inletPointFromRemoteRow(Map<String, dynamic> r) {
+  return InletPoint(
+    id: r['id'] as String,
+    siteId: r['site_id'] as String,
+    block: r['block'] as String?,
+    apartmentBhk: (r['apartment_bhk'] as String?) ?? '',
+    sensorSize: _enumByName(SensorSize.values, r['sensor_size'] as String?),
+    series: (r['series'] as String?) ?? '',
+    sensorOd: _enumByName(SensorOd.values, r['sensor_od'] as String?),
+    pipeSize: _enumByName(PipeSize.values, r['pipe_size'] as String?),
+    pipeType: _enumByName(PipeType.values, r['pipe_type'] as String?),
+    qty: r['qty'] as int?,
+    sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
+    rework: r['rework'] as bool?,
+    reworkDetails: (r['rework_details'] as String?) ?? '',
+    linearDistanceClearance10x: r['linear_distance_clearance_10x'] as bool?,
+    reverseFlow: r['reverse_flow'] as bool?,
+    ohtHns: _enumByName(OhtHns.values, r['oht_hns'] as String?),
+    distanceFromMotorPump: r['distance_from_motor_pump'] as bool?,
+    maxAndContinuousPressureBar:
+        (r['max_and_continuous_pressure_bar'] as num?)?.toDouble(),
+    strainerScreenFilter: r['strainer_screen_filter'] as bool?,
+    flowDirection: _enumByName(
+      FlowDirection.values,
+      r['flow_direction'] as String?,
+    ),
+    accessMode: _enumByName(AccessMode.values, r['access_mode'] as String?),
+    cableRunLength: _enumByName(
+      CableRunLength.values,
+      r['cable_run_length'] as String?,
+    ),
+    conduitClamping: r['conduit_clamping'] as bool?,
+    civilWorkNeeded: r['civil_work_needed'] as bool?,
+    civilWorkDetails: (r['civil_work_details'] as String?) ?? '',
+  );
+}
+
+DuctLora _ductLoraFromRemoteRow(Map<String, dynamic> r) {
+  return DuctLora(
+    id: r['id'] as String,
+    siteId: r['site_id'] as String,
+    block: r['block'] as String?,
+    seriesServed: _splitStrings(r['series_served'] as String?),
+    accessibleForService: r['accessible_for_service'] as bool?,
+    rssiIfTcl: (r['rssi_if_tcl'] as num?)?.toDouble(),
+    powerPointAvailableShielded: r['power_point_available_shielded'] as bool?,
+    separateMcbForSeries: r['separate_mcb_for_series'] as bool?,
+    upsPowerSupply: r['ups_power_supply'] as bool?,
+    cableLength: (r['cable_length'] as num?)?.toDouble(),
+  );
+}
+
+Gateway _gatewayFromRemoteRow(Map<String, dynamic> r) {
+  return Gateway(
+    id: r['id'] as String,
+    siteId: r['site_id'] as String,
+    placement: _enumByName(GatewayPlacement.values, r['placement'] as String?),
+    locationDescription: (r['location_description'] as String?) ?? '',
+    blocksCovered: _splitStrings(r['blocks_covered'] as String?),
+    quantity: r['quantity'] as int?,
+    uplinkType: _enumByName(UplinkType.values, r['uplink_type'] as String?),
+    wifiInterferenceCheck: r['wifi_interference_check'] as bool?,
+    wifiInterferenceDetails: (r['wifi_interference_details'] as String?) ?? '',
+    simCoverage: _enumByName(SimCoverage.values, r['sim_coverage'] as String?),
+    uninterruptedPowerSource: r['uninterrupted_power_source'] as bool?,
+    mountingHardwareNeeded: (r['mounting_hardware_needed'] as String?) ?? '',
+  );
+}
+
+BomManualEntry _bomManualEntryFromRemoteRow(Map<String, dynamic> r) {
+  return BomManualEntry(
+    id: r['id'] as String,
+    surveyId: r['survey_id'] as String,
+    materialName: (r['material_name'] as String?) ?? '',
+    sku: (r['sku'] as String?) ?? '',
+    itemLabel: (r['item_label'] as String?) ?? '',
+    sensorSize: _enumByName(SensorSize.values, r['sensor_size'] as String?),
+    sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
+    unit: (r['unit'] as String?) ?? '',
+    qty: (r['qty'] as num?)?.toDouble() ?? 0,
+    group: _materialGroupFromCode(r['group_code'] as String?),
+    addedBy: (r['added_by'] as String?) ?? '',
+    addedAt: DateTime.tryParse((r['added_at'] as String?) ?? '') ?? DateTime(1970),
+  );
 }

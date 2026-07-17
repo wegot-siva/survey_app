@@ -22,12 +22,17 @@ import '../models/source_point.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 
-/// Remote (Supabase) reads/writes for survey data. Push-only for almost
-/// every table — the one exception is Material Master
-/// ([fetchMaterialMasterItems]), which also needs a pull: it's global
-/// reference data populated centrally (e.g. a bulk SQL import of the
-/// plumbing catalog), so it must reach every device, not just the one that
-/// entered it.
+/// Remote (Supabase) reads/writes for survey data.
+///
+/// Push-only tables (bom_snapshots/bom_revisions and their line tables,
+/// engineers, survey_assignment_audit): reachable only from the device that
+/// authored them, deliberately deferred — see [SyncService] for why. Every
+/// other table also has a pull (`fetchX`) — sites, client_inputs, footers,
+/// source_points, inlet_points, duct_loras, gateways, bom_manual_entries,
+/// plus Material Master (global reference data, pulled since the earliest
+/// slice). A pulled row reaches every device, not just the one that entered
+/// it, and a row deleted directly in Supabase is reconciled away locally too
+/// — see [SqfliteSurveyRepository]'s pull-reconcile helper.
 ///
 /// Upserts are idempotent — keyed by the same UUIDs used locally — so repeating
 /// a sync converges to the same rows instead of duplicating them.
@@ -97,9 +102,21 @@ class SupabaseSurveyDataSource {
     await _client.from('duct_loras').upsert(_ductLoraToRemoteRow(d));
   }
 
+  /// Deletes a Duct LoRa unit by id (idempotent — a no-op if it was never
+  /// pushed, or already deleted remotely).
+  Future<void> deleteDuctLora(String id) async {
+    await _client.from('duct_loras').delete().eq('id', id);
+  }
+
   /// Upserts a gateway by its id (idempotent). Parent site must exist.
   Future<void> pushGateway(Gateway g) async {
     await _client.from('gateways').upsert(_gatewayToRemoteRow(g));
+  }
+
+  /// Deletes a gateway by id (idempotent — a no-op if it was never pushed, or
+  /// already deleted remotely).
+  Future<void> deleteGateway(String id) async {
+    await _client.from('gateways').delete().eq('id', id);
   }
 
   /// Upserts the per-site footer (idempotent, keyed by site_id). Parent site
@@ -140,20 +157,63 @@ class SupabaseSurveyDataSource {
   /// enforces a smaller cap than requested; stops only on a genuinely empty
   /// page, so it can never mistake a capped page for the end of the table.
   Future<List<MaterialMasterItem>> fetchMaterialMasterItems() async {
+    return (await _fetchAllRows(
+      'material_master_items',
+    )).map((r) => _materialMasterItemFromRemoteRow(r)).toList();
+  }
+
+  /// Fetches every row of [table], paginated the same way
+  /// [fetchMaterialMasterItems] always has — see that method's doc for why
+  /// pagination is explicit rather than trusted to a single `.select()`, and
+  /// why the caller (here, [SurveyRepository]'s `upsertXFromRemote` methods)
+  /// must always receive the complete table, never a partial page, before
+  /// reconciling local deletes against it. Shared by every "Phase 1" pull —
+  /// sites, client_inputs, footers, source_points, inlet_points, duct_loras,
+  /// gateways, bom_manual_entries — returning raw rows rather than a typed
+  /// model, since [SqfliteSurveyRepository]'s pull-reconcile helper only ever
+  /// needs to write these columns straight into the matching local table
+  /// (see its own doc for the one real conversion needed: Postgres booleans
+  /// -> local SQLite 0/1).
+  Future<List<Map<String, dynamic>>> _fetchAllRows(String table) async {
     const pageSize = 500;
-    final all = <MaterialMasterItem>[];
+    final all = <Map<String, dynamic>>[];
     var offset = 0;
     while (true) {
-      final page = await _client
-          .from('material_master_items')
-          .select()
-          .range(offset, offset + pageSize - 1);
+      final page = await _client.from(table).select().range(offset, offset + pageSize - 1);
       if (page.isEmpty) break;
-      all.addAll(page.map((r) => _materialMasterItemFromRemoteRow(r)));
+      all.addAll(page.map((r) => Map<String, dynamic>.from(r)));
       offset += page.length;
     }
     return all;
   }
+
+  /// Every site row (id/name/status/assigned_to/bom_locked only — blocks and
+  /// client_inputs are separate tables/pulls; archived/address/client_name/
+  /// client_contact are Sales-only fields never pushed to Supabase in the
+  /// first place, so they're simply absent from every remote row — see
+  /// [SqfliteSurveyRepository]'s pull-reconcile helper for why that's safe).
+  Future<List<Map<String, dynamic>>> fetchSites() => _fetchAllRows('sites');
+
+  /// Every Client inputs row, keyed by site_id (not its own id).
+  Future<List<Map<String, dynamic>>> fetchClientInputs() =>
+      _fetchAllRows('client_inputs');
+
+  /// Every Footer row, keyed by site_id (not its own id).
+  Future<List<Map<String, dynamic>>> fetchFooters() => _fetchAllRows('footers');
+
+  Future<List<Map<String, dynamic>>> fetchSourcePoints() =>
+      _fetchAllRows('source_points');
+
+  Future<List<Map<String, dynamic>>> fetchInletPoints() =>
+      _fetchAllRows('inlet_points');
+
+  Future<List<Map<String, dynamic>>> fetchDuctLoras() =>
+      _fetchAllRows('duct_loras');
+
+  Future<List<Map<String, dynamic>>> fetchGateways() => _fetchAllRows('gateways');
+
+  Future<List<Map<String, dynamic>>> fetchBomManualEntries() =>
+      _fetchAllRows('bom_manual_entries');
 
   /// Upserts a Material Master change-log entry by its id (idempotent). Not
   /// site-scoped, and not FK'd to the material row either (a delete's own
@@ -202,6 +262,12 @@ class SupabaseSurveyDataSource {
     await _client
         .from('bom_manual_entries')
         .upsert(_bomManualEntryToRemoteRow(entry));
+  }
+
+  /// Deletes a BoM manual entry by id (idempotent — a no-op if it was never
+  /// pushed, or already deleted remotely).
+  Future<void> deleteBomManualEntry(String id) async {
+    await _client.from('bom_manual_entries').delete().eq('id', id);
   }
 
   /// Upserts a BoM snapshot by its id (idempotent). The parent site must

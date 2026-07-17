@@ -83,14 +83,27 @@ class _HomeScreenState extends State<HomeScreen> {
     _load();
     // Material Master is global reference data populated centrally (e.g. a
     // bulk SQL import of the plumbing catalog into Supabase) rather than
-    // authored on-device, so — unlike every other table, which only ever
-    // pushes — it needs a pull to actually reach this device. Fired here on
-    // every login/startup (this screen is only ever built fresh right after
-    // one of those) so a centrally-added row shows up without waiting for an
-    // explicit manual Sync tap. Fire-and-forget: a failure (offline, not
-    // configured) silently no-ops — see [SyncService.pullMaterialMasterItems]
-    // — and the manual Sync button below retries the same pull anyway.
+    // authored on-device, so it needs a pull to actually reach this device.
+    // Fired here on every login/startup (this screen is only ever built
+    // fresh right after one of those) so a centrally-added row shows up
+    // without waiting for an explicit manual Sync tap. Fire-and-forget: a
+    // failure (offline, not configured) silently no-ops — see
+    // [SyncService.pullMaterialMasterItems] — and the manual Sync button
+    // below retries the same pull anyway.
     unawaited(widget.syncService.pullMaterialMasterItems());
+    // Same reasoning, for the "Phase 1" core survey tables (sites,
+    // client_inputs, footers, source/inlet points, duct_loras, gateways,
+    // bom_manual_entries) — see [SyncService.pullCoreSurveyData]. These were
+    // push-only before this phase, so a survey created/edited on another
+    // device would never have reached this one otherwise. Refreshes this
+    // screen's own site list once the pull lands, since sites are exactly
+    // what it displays — unlike the Material Master pull above, which
+    // nothing on this screen shows.
+    unawaited(
+      widget.syncService.pullCoreSurveyData().then((_) {
+        if (mounted) _load();
+      }),
+    );
     // Catches the recurring "built without --dart-define-from-file=.env"
     // mistake at launch instead of a confusing sync-time error later — see
     // scripts/build_debug.ps1 / scripts/run_debug.ps1.
@@ -281,13 +294,15 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _syncNow() async {
     setState(() => _syncStatus = _SyncStatus.syncing);
 
-    // Pull before push: Material Master rows added centrally in Supabase
-    // since the last sync land locally first, so this run's push (and
-    // anything the user does right after tapping Sync) sees them. A pull
-    // failure here doesn't fail the whole sync — it's folded into the
-    // message only when it actually found something, and the push below
-    // still runs and reports on its own terms either way.
+    // Pull before push: Material Master rows added centrally in Supabase,
+    // and core survey data (sites, source/inlet points, ...) added/edited on
+    // another device, since the last sync both land locally first, so this
+    // run's push (and anything the user does right after tapping Sync) sees
+    // them. A pull failure here doesn't fail the whole sync — it's folded
+    // into the message only when it actually found something, and the push
+    // below still runs and reports on its own terms either way.
     final pullResult = await widget.syncService.pullMaterialMasterItems();
+    final coreResult = await widget.syncService.pullCoreSurveyData();
     final result = await widget.syncService.pushAll();
     if (!mounted) return;
 
@@ -300,6 +315,11 @@ class _HomeScreenState extends State<HomeScreen> {
       _syncStatusRevertTimer = Timer(const Duration(seconds: 45), () {
         if (mounted) setState(() => _syncStatus = _SyncStatus.idle);
       });
+      // Refreshes this screen's own site list — a site pulled from another
+      // device (or one archived/reassigned remotely) wouldn't otherwise show
+      // up here until the next navigation away and back.
+      await _load();
+      if (!mounted) return;
       final records = _syncRecordTotal(result);
       final photos = result.photos;
       final pulled = pullResult.success ? pullResult.materialMasterItems : 0;
@@ -308,7 +328,8 @@ class _HomeScreenState extends State<HomeScreen> {
           content: Text(
             'All synced — $records record${records == 1 ? '' : 's'} and '
             '$photos photo${photos == 1 ? '' : 's'} backed up'
-            '${pulled > 0 ? ', $pulled Material Master row${pulled == 1 ? '' : 's'} pulled' : ''}.',
+            '${pulled > 0 ? ', $pulled Material Master row${pulled == 1 ? '' : 's'} pulled' : ''}'
+            '${coreResult.success ? '' : ' (core data pull failed — tap Sync again)'}.',
           ),
         ),
       );
