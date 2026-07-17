@@ -3,13 +3,15 @@ import 'package:flutter/material.dart';
 import '../models/bom_line.dart';
 import '../models/material_master_item.dart';
 
-/// Group A (WEGOTAqua sensors) — fully auto-computed from survey data by
-/// BomEngine. Read-only: no add/edit action exists here under any
-/// circumstance, since sensor lines are never hand-entered.
+/// Group A (WEGOTAqua sensors) — fully auto-computed by BomEngine, which
+/// matches each sensor variant the survey uses against Material Master's
+/// group_code='A' catalog (see BomEngine._generateGroupA). Read-only: no
+/// add/edit action exists here under any circumstance, since sensor lines
+/// are never hand-entered — a missing or conflicting catalog match instead
+/// shows up as a banner on the Generate BoM screen, not a line here.
 ///
-/// Hides zero-qty lines by default (BomEngine emits every Material Master
-/// row regardless of computed quantity, so most rows are zero) — same
-/// "Show all" toggle the old flat BoM view offered per group.
+/// Hides zero-qty lines by default — same "Show all" toggle the old flat
+/// BoM view offered per group.
 class BomGroupASectionScreen extends StatefulWidget {
   const BomGroupASectionScreen({super.key, required this.lines});
 

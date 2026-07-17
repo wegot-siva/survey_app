@@ -87,12 +87,50 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
     super.dispose();
   }
 
+  /// Group A rows are matched by sensor size + type alone (see
+  /// BomEngine._generateGroupA) — two active rows for the same combination
+  /// would be an unresolvable conflict the moment a BoM is generated, so
+  /// this is rejected here instead of surfacing as a Generate BoM banner
+  /// after the fact. Only applies to group A with both size and type set
+  /// (a wildcard row can't collide the same way); the row being edited is
+  /// excluded from the check against itself.
+  Future<MaterialMasterItem?> _conflictingGroupARow() async {
+    if (_group != MaterialGroup.a || _sensorSize == null || _sensorType == null) {
+      return null;
+    }
+    final existing = await widget.repository.getMaterialMasterItems();
+    for (final m in existing) {
+      if (m.id == (widget.existing?.id ?? '')) continue;
+      if (m.group == MaterialGroup.a &&
+          m.sensorSize == _sensorSize &&
+          m.sensorType == _sensorType) {
+        return m;
+      }
+    }
+    return null;
+  }
+
   Future<void> _save() async {
     final name = _materialName.text.trim();
     final unit = _unit.text.trim();
     if (name.isEmpty || unit.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Material name and unit are required.')),
+      );
+      return;
+    }
+
+    final conflict = await _conflictingGroupARow();
+    if (conflict != null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'A Group A row for ${_sensorSize!.label} ${_sensorType!.label} '
+            'already exists ("${conflict.materialName}") — edit that row '
+            'instead of creating a duplicate.',
+          ),
+        ),
       );
       return;
     }

@@ -82,6 +82,14 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   bool _exporting = false;
   bool _finalizing = false;
 
+  /// Sensor variants the survey needs a Group A catalog match for, with
+  /// zero or 2+ active Material Master rows matching — see
+  /// [BomEngine.generate]. Non-empty blocks Finalize (see [canFinalize] in
+  /// build) and drives the banner shown above the section list; no other
+  /// group's incompleteness is tracked this way.
+  List<GroupASensorVariant> _groupAMissingVariants = const [];
+  List<GroupAConflict> _groupAConflicts = const [];
+
   // Set once a survey has been finalized. Non-null means the review screen
   // shows this frozen data instead of a live recompute, and the Export action
   // becomes available (export reads the snapshot + revision running total).
@@ -153,12 +161,13 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     );
     final ductLoras = await widget.repository.getDuctLoras(widget.site.id);
 
-    final bom = const BomEngine().generate(
+    final generated = const BomEngine().generate(
       materials: autoMaterials,
       sourcePoints: sourcePoints,
       inletPoints: inletPoints,
       ductLoras: ductLoras,
     );
+    final bom = generated.lines;
     // Fetched here (rather than lazily per section) so the section-list
     // overview can show each group's running count without a per-tile fetch.
     final manualEntries = await widget.repository.getBomManualEntries(
@@ -201,6 +210,8 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     setState(() {
       _bom = bom;
       _materialMasterEmpty = materials.isEmpty;
+      _groupAMissingVariants = generated.groupAMissingVariants;
+      _groupAConflicts = generated.groupAConflicts;
       _manualEntries = manualEntries;
       _snapshot = snapshot;
       _snapshotLines = snapshotLines;
@@ -637,7 +648,14 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     final bom = _bom;
     final locked = _snapshot != null;
     final hasNoMaterials = !locked && bom != null && _materialMasterEmpty;
-    final canFinalize = !_loading && !locked && !hasNoMaterials && !widget.readOnly;
+    final hasGroupAIssues =
+        _groupAMissingVariants.isNotEmpty || _groupAConflicts.isNotEmpty;
+    final canFinalize =
+        !_loading &&
+        !locked &&
+        !hasNoMaterials &&
+        !hasGroupAIssues &&
+        !widget.readOnly;
     final runningTotal = _runningTotal;
     final visibleRunningTotal = _visibleRunningTotal(runningTotal);
     final visibleSnapshotLines = _visibleSnapshotLines(_snapshotLines);
@@ -797,6 +815,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                if (hasGroupAIssues) _groupAIssuesBanner(),
                 for (final group in MaterialGroup.values)
                   _BomSectionTile(
                     group: group,
@@ -805,6 +824,65 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                   ),
               ],
             ),
+    );
+  }
+
+  /// Names every Group A sensor variant currently blocking Finalize — a
+  /// missing catalog entry, or 2+ conflicting ones — never a generic
+  /// "catalog incomplete" message. Only Group A's incompleteness is
+  /// surfaced this way; no other group blocks Finalize.
+  Widget _groupAIssuesBanner() {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: scheme.onErrorContainer),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Group A catalog issues — Finalize is blocked until these '
+                  'are fixed in Material Master.',
+                  style: TextStyle(
+                    color: scheme.onErrorContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          for (final variant in _groupAMissingVariants)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Missing Group A catalog entry for: ${variant.label} — add '
+                'it in Material Master.',
+                style: TextStyle(color: scheme.onErrorContainer),
+              ),
+            ),
+          for (final conflict in _groupAConflicts)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Multiple Group A catalog entries for: '
+                '${conflict.variant.label} '
+                '(${conflict.matchingMaterialNames.join(', ')}) — remove or '
+                'merge the duplicate in Material Master.',
+                style: TextStyle(color: scheme.onErrorContainer),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
