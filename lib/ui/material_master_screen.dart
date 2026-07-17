@@ -5,6 +5,12 @@ import '../models/material_master_item.dart';
 import 'material_master_audit_log_screen.dart';
 import 'material_master_form_screen.dart';
 
+/// Entries in the AppBar's overflow menu — Search stays a directly visible
+/// icon; everything else (including the already-destructive-styled Clear
+/// all) moves in here to keep the AppBar from getting crowded. See
+/// [_MaterialMasterScreenState.build]'s normal-mode actions.
+enum _MoreMenuAction { selectItems, changeLog, clearAll }
+
 /// Admin screen for the Material Master: add / edit / delete the per-sensor
 /// material kits the BoM engine reads at generation time. Scoped to exactly
 /// one [group] — the second level of navigation from
@@ -354,26 +360,36 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
               ]
             : [
                 IconButton(
-                  tooltip: 'Select items',
-                  onPressed: _items.isEmpty ? null : () => _enterSelectionMode(),
-                  icon: const Icon(Icons.checklist),
-                ),
-                IconButton(
                   tooltip: 'Search materials',
                   onPressed: _openSearch,
                   icon: const Icon(Icons.search),
                 ),
-                IconButton(
-                  tooltip: 'Change log',
-                  onPressed: _openChangeLog,
-                  icon: const Icon(Icons.history),
-                ),
-                PopupMenuButton<void>(
+                PopupMenuButton<_MoreMenuAction>(
                   tooltip: 'More',
+                  onSelected: (action) {
+                    switch (action) {
+                      case _MoreMenuAction.selectItems:
+                        _enterSelectionMode();
+                      case _MoreMenuAction.changeLog:
+                        _openChangeLog();
+                      case _MoreMenuAction.clearAll:
+                        _clearAll();
+                    }
+                  },
                   itemBuilder: (context) => [
                     PopupMenuItem(
+                      value: _MoreMenuAction.selectItems,
                       enabled: _items.isNotEmpty,
-                      onTap: _clearAll,
+                      child: const Text('Select items'),
+                    ),
+                    const PopupMenuItem(
+                      value: _MoreMenuAction.changeLog,
+                      child: Text('Change log'),
+                    ),
+                    const PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: _MoreMenuAction.clearAll,
+                      enabled: _items.isNotEmpty,
                       child: const Text('Clear all'),
                     ),
                   ],
