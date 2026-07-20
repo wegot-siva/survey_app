@@ -13,6 +13,7 @@ import '../services/sync_service.dart';
 import 'approver_review_screen.dart';
 import 'assign_survey_screen.dart';
 import 'create_site_screen.dart';
+import 'edit_site_details_screen.dart';
 import 'material_master_group_list_screen.dart';
 import 'site_hub_screen.dart';
 import 'theme/app_theme.dart';
@@ -20,6 +21,18 @@ import 'theme/app_theme.dart';
 /// State of the AppBar's Sync control — drives its icon/label/color. Session
 /// only: resets to [idle] on app restart (see [_HomeScreenState._syncStatus]).
 enum _SyncStatus { idle, syncing, success, failure }
+
+/// Entries in the AppBar's overflow menu — Search and Sync stay directly
+/// visible (Sync via [_syncStatusButton], not a menu entry); everything else
+/// moves in here to keep the AppBar from getting crowded, same pattern as
+/// Material Master's own AppBar. Each item is individually conditional
+/// (role/build-type gated) in [_HomeScreenState.build] — new admin actions
+/// added later go here too, rather than back onto the AppBar itself.
+enum _HomeMoreMenuAction { materialMaster, testConnection, logout }
+
+/// Which quick action a Site card's long-press bottom sheet resolved to —
+/// null means the user tapped Cancel or dismissed it.
+enum _SiteQuickAction { edit, delete }
 
 /// Lists all sites and offers a button to create a new one.
 class HomeScreen extends StatefulWidget {
@@ -224,6 +237,103 @@ class _HomeScreenState extends State<HomeScreen> {
           siteId: site.id,
         ),
       ),
+    );
+    await _load();
+  }
+
+  /// Sales, Admin, and Approver can edit/delete a site from here — same role
+  /// scope as Site Hub's own "Manage site" menu (`canReassignRole` there).
+  /// Engineer never gets this: they execute assigned surveys, not manage them.
+  bool get _canManageSites =>
+      widget.session.currentRole == UserRole.sales ||
+      widget.session.currentRole == UserRole.admin ||
+      widget.session.currentRole == UserRole.approver;
+
+  /// Long-press quick actions for a Site card — Edit/Delete/Cancel. Mirrors
+  /// Site Hub's "Manage site" overflow menu, just reachable without opening
+  /// the site first.
+  Future<void> _showSiteActions(Site site) async {
+    final action = await showModalBottomSheet<_SiteQuickAction>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Edit Site'),
+              onTap: () => Navigator.of(context).pop(_SiteQuickAction.edit),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Delete Site'),
+              onTap: () => Navigator.of(context).pop(_SiteQuickAction.delete),
+            ),
+            ListTile(
+              leading: const Icon(Icons.close),
+              title: const Text('Cancel'),
+              onTap: () => Navigator.of(context).pop(),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case _SiteQuickAction.edit:
+        await _openEditSiteDetails(site);
+      case _SiteQuickAction.delete:
+        await _deleteSite(site);
+      case null:
+        break;
+    }
+  }
+
+  Future<void> _openEditSiteDetails(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            EditSiteDetailsScreen(repository: widget.repository, site: site),
+      ),
+    );
+    await _load();
+  }
+
+  /// Soft-delete only — sets [Site.archived] so the site drops off every
+  /// active list, but its row and every FK'd survey/BoM/photo record are
+  /// left exactly as they are. [Site.archived] is a local-only field (never
+  /// pushed to Supabase — see [SqfliteSurveyRepository._pullAndReconcile]'s
+  /// doc), so this can never orphan a synced remote row; the site itself
+  /// keeps syncing normally, it just stops showing up in [getSites]'s
+  /// default (non-archived) result. Same mechanism as Site Hub's own
+  /// "Delete site" action — not a new one.
+  Future<void> _deleteSite(Site site) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete site?'),
+        content: const Text(
+          'This hides it from all site lists. Survey data, BoM, and photos '
+          'are kept — nothing is permanently deleted.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await widget.repository.updateSite(site.copyWith(archived: true));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Site deleted.')),
     );
     await _load();
   }
@@ -628,6 +738,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ? const Icon(Icons.check_circle, color: Colors.green)
           : const Icon(Icons.chevron_right),
       onTap: () => _openSite(site),
+      onLongPress: _canManageSites ? () => _showSiteActions(site) : null,
     );
   }
 
@@ -675,27 +786,42 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPressed: _openSearch,
                   icon: const Icon(Icons.search),
                 ),
-                if (widget.session.currentRole == UserRole.admin)
-                  IconButton(
-                    tooltip: 'Material Master',
-                    onPressed: _openMaterialMaster,
-                    icon: const Icon(Icons.inventory_2_outlined),
-                  ),
-                // Developer diagnostic — compiled out of release builds
-                // entirely. This is a build-type concern (dev vs field), not
-                // a role/permission one, so kDebugMode is the right gate,
-                // not an admin-role check.
-                if (kDebugMode)
-                  IconButton(
-                    tooltip: 'Test Supabase connection',
-                    onPressed: _testSupabase,
-                    icon: const Icon(Icons.cloud_outlined),
-                  ),
                 _syncStatusButton(),
-                IconButton(
-                  tooltip: 'Log out',
-                  onPressed: _logout,
-                  icon: const Icon(Icons.logout),
+                PopupMenuButton<_HomeMoreMenuAction>(
+                  tooltip: 'More',
+                  onSelected: (action) {
+                    switch (action) {
+                      case _HomeMoreMenuAction.materialMaster:
+                        _openMaterialMaster();
+                      case _HomeMoreMenuAction.testConnection:
+                        _testSupabase();
+                      case _HomeMoreMenuAction.logout:
+                        _logout();
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    if (widget.session.currentRole == UserRole.admin)
+                      const PopupMenuItem(
+                        value: _HomeMoreMenuAction.materialMaster,
+                        child: Text('Material Master'),
+                      ),
+                    // Developer diagnostic — compiled out of release builds
+                    // entirely. This is a build-type concern (dev vs field),
+                    // not a role/permission one, so kDebugMode is the right
+                    // gate, not an admin-role check.
+                    if (kDebugMode)
+                      const PopupMenuItem(
+                        value: _HomeMoreMenuAction.testConnection,
+                        child: Text('Test Supabase connection'),
+                      ),
+                    if (widget.session.currentRole == UserRole.admin ||
+                        kDebugMode)
+                      const PopupMenuDivider(),
+                    const PopupMenuItem(
+                      value: _HomeMoreMenuAction.logout,
+                      child: Text('Log out'),
+                    ),
+                  ],
                 ),
               ],
       ),
@@ -776,6 +902,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               (isApprover && site.status == SurveyStatus.submitted)
                               ? _openReview(site)
                               : _openSite(site),
+                          onLongPress: _canManageSites
+                              ? () => _showSiteActions(site)
+                              : null,
                         );
                       },
                     ),
