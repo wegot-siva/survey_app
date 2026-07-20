@@ -4,11 +4,12 @@ import '../models/bom_line.dart';
 import '../models/material_master_item.dart';
 
 /// Group A (WEGOTAqua sensors) — fully auto-computed by BomEngine, which
-/// matches each sensor variant the survey uses against Material Master's
-/// group_code='A' catalog (see BomEngine._generateGroupA). Read-only: no
+/// sums each source/inlet point's directly-referenced Material Master
+/// group_code='A' row (see BomEngine._generateGroupA). Read-only: no
 /// add/edit action exists here under any circumstance, since sensor lines
-/// are never hand-entered — a missing or conflicting catalog match instead
-/// shows up as a banner on the Generate BoM screen, not a line here.
+/// are never hand-entered — a point whose reference doesn't resolve to an
+/// active material instead shows up as a banner on the Generate BoM screen,
+/// not a line here.
 ///
 /// Hides zero-qty lines by default — same "Show all" toggle the old flat
 /// BoM view offered per group.

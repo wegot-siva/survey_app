@@ -82,13 +82,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
   bool _exporting = false;
   bool _finalizing = false;
 
-  /// Sensor variants the survey needs a Group A catalog match for, with
-  /// zero or 2+ active Material Master rows matching — see
-  /// [BomEngine.generate]. Non-empty blocks Finalize (see [canFinalize] in
-  /// build) and drives the banner shown above the section list; no other
-  /// group's incompleteness is tracked this way.
-  List<GroupASensorVariant> _groupAMissingVariants = const [];
-  List<GroupAConflict> _groupAConflicts = const [];
+  /// Source/inlet points whose sensor selection doesn't resolve to a
+  /// currently-active Group A material — see [BomEngine.generate].
+  /// Non-empty blocks Finalize (see [canFinalize] in build) and drives the
+  /// banner shown above the section list; no other group's incompleteness
+  /// is tracked this way.
+  List<GroupAUnresolvedPoint> _groupAUnresolvedPoints = const [];
 
   // Set once a survey has been finalized. Non-null means the review screen
   // shows this frozen data instead of a live recompute, and the Export action
@@ -210,8 +209,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     setState(() {
       _bom = bom;
       _materialMasterEmpty = materials.isEmpty;
-      _groupAMissingVariants = generated.groupAMissingVariants;
-      _groupAConflicts = generated.groupAConflicts;
+      _groupAUnresolvedPoints = generated.groupAUnresolvedPoints;
       _manualEntries = manualEntries;
       _snapshot = snapshot;
       _snapshotLines = snapshotLines;
@@ -648,8 +646,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     final bom = _bom;
     final locked = _snapshot != null;
     final hasNoMaterials = !locked && bom != null && _materialMasterEmpty;
-    final hasGroupAIssues =
-        _groupAMissingVariants.isNotEmpty || _groupAConflicts.isNotEmpty;
+    final hasGroupAIssues = _groupAUnresolvedPoints.isNotEmpty;
     final canFinalize =
         !_loading &&
         !locked &&
@@ -827,10 +824,10 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
     );
   }
 
-  /// Names every Group A sensor variant currently blocking Finalize — a
-  /// missing catalog entry, or 2+ conflicting ones — never a generic
-  /// "catalog incomplete" message. Only Group A's incompleteness is
-  /// surfaced this way; no other group blocks Finalize.
+  /// Names every source/inlet point currently blocking Finalize because its
+  /// sensor selection doesn't resolve to an active Group A material — never
+  /// a generic "catalog incomplete" message. Only Group A's incompleteness
+  /// is surfaced this way; no other group blocks Finalize.
   Widget _groupAIssuesBanner() {
     final scheme = Theme.of(context).colorScheme;
     return Container(
@@ -851,8 +848,8 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Group A catalog issues — Finalize is blocked until these '
-                  'are fixed in Material Master.',
+                  'Group A sensor selection issues — Finalize is blocked '
+                  'until these points are reopened and a material is picked.',
                   style: TextStyle(
                     color: scheme.onErrorContainer,
                     fontWeight: FontWeight.w600,
@@ -861,23 +858,12 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
               ),
             ],
           ),
-          for (final variant in _groupAMissingVariants)
+          for (final point in _groupAUnresolvedPoints)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'Missing Group A catalog entry for: ${variant.label} — add '
-                'it in Material Master.',
-                style: TextStyle(color: scheme.onErrorContainer),
-              ),
-            ),
-          for (final conflict in _groupAConflicts)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                'Multiple Group A catalog entries for: '
-                '${conflict.variant.label} '
-                '(${conflict.matchingMaterialNames.join(', ')}) — remove or '
-                'merge the duplicate in Material Master.',
+                'No active Group A material selected for ${point.description} '
+                '— reopen it and pick one.',
                 style: TextStyle(color: scheme.onErrorContainer),
               ),
             ),

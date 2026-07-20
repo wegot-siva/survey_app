@@ -571,3 +571,23 @@ alter table public.material_master_items
 
 alter table public.material_master_items
   add column if not exists deleted_at text;
+
+-- ---------------------------------------------------------------------------
+-- Group A direct material selection — source/inlet point sensor entry
+-- becomes a reference to a specific active Group A material_master_items
+-- row (by id) instead of abstract sensor_size + sensor_type matching.
+-- `on delete set null`: if the referenced material is later hard-deleted,
+-- the point reverts to unassigned rather than a dangling id — the app's
+-- BomEngine already treats a null/unresolved material_id as needing
+-- re-selection before Finalize. sensor_size/sensor_type columns are
+-- unchanged: they stay as auto-populated snapshots of the selected
+-- material's own values, still read by the generic FIXED-row filter and the
+-- wired-sensor DERIVED aggregate, both unrelated to material_id.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.source_points
+  add column if not exists material_id text references public.material_master_items (id) on delete set null;
+
+alter table public.inlet_points
+  add column if not exists material_id text references public.material_master_items (id) on delete set null;

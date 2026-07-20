@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/survey_repository.dart';
+import '../models/material_master_item.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import '../models/survey_options.dart';
@@ -10,9 +11,9 @@ import 'photo_markup_screen.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
-/// Add or edit a single source point. Apartment, sensor size, sensor type,
-/// and qty are mandatory (see `_save`); every other field is optional
-/// (partial saves).
+/// Add or edit a single source point. Apartment, sensor (a Group A material
+/// reference), and qty are mandatory (see `_save`); every other field is
+/// optional (partial saves).
 class SourcePointFormScreen extends StatefulWidget {
   const SourcePointFormScreen({
     super.key,
@@ -55,11 +56,22 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
   late final TextEditingController _pressure;
 
   String? _block;
-  SensorSize? _sensorSize;
+
+  /// The active Group A material this point's sensor selection references —
+  /// the source of truth for [_sensorSize]/[_sensorType] below (see their
+  /// getters). Resolved from [SourcePoint.materialId] once [_groupAMaterials]
+  /// finishes loading; stays null (blocking save) until re-picked if that id
+  /// no longer resolves to an active row.
+  MaterialMasterItem? _selectedMaterial;
+  List<MaterialMasterItem> _groupAMaterials = const [];
+  bool _loadingMaterials = true;
+
+  SensorSize? get _sensorSize => _selectedMaterial?.sensorSize;
+  SensorType? get _sensorType => _selectedMaterial?.sensorType;
+
   SensorOd? _sensorOd;
   PipeSize? _pipeSize;
   PipeType? _pipeType;
-  SensorType? _sensorType;
   FlowDirection? _flowDirection;
 
   bool? _rework;
@@ -87,8 +99,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
   // Mandatory-field errors, set on a failed save attempt and cleared on the
   // next one — see _save().
   String? _apartmentError;
-  String? _sensorSizeError;
-  String? _sensorTypeError;
+  String? _materialError;
   String? _qtyError;
   String? _blockError;
   String? _sensorOdError;
@@ -133,6 +144,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
     // further down.
     final e = widget.existing ?? widget.duplicateFrom;
     if (widget.existing != null) _loadPhotos(widget.existing!.id);
+    _loadGroupAMaterials(e?.materialId);
 
     _apartment = TextEditingController(text: e?.apartment ?? '');
     _inletDescription = TextEditingController(text: e?.inletDescription ?? '');
@@ -149,11 +161,9 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
     _block = (e?.block != null && widget.site.blocks.contains(e!.block))
         ? e.block
         : null;
-    _sensorSize = e?.sensorSize;
     _sensorOd = e?.sensorOd;
     _pipeSize = e?.pipeSize;
     _pipeType = e?.pipeType;
-    _sensorType = e?.sensorType;
     _flowDirection = e?.flowDirection;
 
     _rework = e?.rework;
@@ -197,6 +207,35 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
     _reducerSpecDetails.dispose();
     _pressure.dispose();
     super.dispose();
+  }
+
+  /// Loads the active Group A catalog and, if [currentMaterialId] resolves
+  /// to one of those rows, preselects it — so editing an existing point
+  /// shows its current sensor rather than forcing a re-pick every time. If
+  /// it doesn't resolve (never assigned, or the row is no longer active),
+  /// [_selectedMaterial] stays null and the field shows as unselected,
+  /// requiring the user to pick one before saving.
+  Future<void> _loadGroupAMaterials(String? currentMaterialId) async {
+    final all = await widget.repository.getMaterialMasterItems();
+    if (!mounted) return;
+    final groupA = all.where((m) => m.group == MaterialGroup.a).toList();
+    setState(() {
+      _groupAMaterials = groupA;
+      _loadingMaterials = false;
+      for (final m in groupA) {
+        if (m.id == currentMaterialId) {
+          _selectedMaterial = m;
+          break;
+        }
+      }
+    });
+  }
+
+  void _onMaterialChanged(MaterialMasterItem? item) {
+    setState(() {
+      _selectedMaterial = item;
+      _materialError = null;
+    });
   }
 
   Future<void> _loadPhotos(String ownerId) async {
@@ -301,12 +340,11 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
     setState(() {
       _apartment.text = 'Test Apartment';
       if (widget.site.blocks.isNotEmpty) _block = widget.site.blocks.first;
-      _sensorSize = SensorSize.values.first;
+      if (_groupAMaterials.isNotEmpty) _selectedMaterial = _groupAMaterials.first;
       _sensorOd = SensorOd.values.first;
       _pipeSize = PipeSize.values.first;
       _pipeType = PipeType.values.first;
       _qty.text = '1';
-      _sensorType = SensorType.values.first;
       _rework = false;
       _flowDirection = FlowDirection.values.first;
       _clearance10x = true;
@@ -327,8 +365,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
         _nrvFeasibility = true;
       }
       _apartmentError = null;
-      _sensorSizeError = null;
-      _sensorTypeError = null;
+      _materialError = null;
       _qtyError = null;
       _blockError = null;
       _sensorOdError = null;
@@ -352,12 +389,16 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
       _transmittingPartOpenToAirError = null;
       _nrvFeasibilityError = null;
     });
-    if (widget.site.blocks.isEmpty) {
+    final unfillable = [
+      if (widget.site.blocks.isEmpty) 'Block (add a block to the site)',
+      if (_groupAMaterials.isEmpty)
+        'Sensor (add a Group A material in Material Master)',
+    ];
+    if (unfillable.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Other fields filled — add a block to the site first to '
-                'also fill Block.',
+            'Other fields filled — could not fill: ${unfillable.join('; ')}.',
           ),
         ),
       );
@@ -372,8 +413,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
 
     setState(() {
       _apartmentError = apartment.isEmpty ? 'Required' : null;
-      _sensorSizeError = _sensorSize == null ? 'Required' : null;
-      _sensorTypeError = _sensorType == null ? 'Required' : null;
+      _materialError = _selectedMaterial == null ? 'Required' : null;
       _qtyError = (qty == null || qty <= 0) ? 'Required' : null;
       _blockError = _block == null ? 'Required' : null;
       _sensorOdError = _sensorOd == null ? 'Required' : null;
@@ -424,8 +464,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
           : null;
     });
     if (_apartmentError != null ||
-        _sensorSizeError != null ||
-        _sensorTypeError != null ||
+        _materialError != null ||
         _qtyError != null ||
         _blockError != null ||
         _sensorOdError != null ||
@@ -464,6 +503,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
       block: _block,
       apartment: apartment,
       inletDescription: _inletDescription.text.trim(),
+      materialId: _selectedMaterial?.id,
       sensorSize: _sensorSize,
       sensorOd: _sensorOd,
       pipeSize: _pipeSize,
@@ -571,14 +611,22 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
                   maxLines: 2,
                 ),
 
-                AppDropdownField<SensorSize>(
-                  label: 'Sensor size *',
-                  value: _sensorSize,
-                  items: SensorSize.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _sensorSize = v),
-                  errorText: _sensorSizeError,
-                ),
+                _loadingMaterials
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    : AppDropdownField<MaterialMasterItem>(
+                        label: 'Sensor (Group A material) *',
+                        value: _selectedMaterial,
+                        items: _groupAMaterials,
+                        itemLabel: (m) => m.materialName,
+                        emptyHint:
+                            'No Group A materials yet — add one in Material '
+                            'Master first.',
+                        onChanged: _onMaterialChanged,
+                        errorText: _materialError,
+                      ),
                 AppDropdownField<SensorOd>(
                   label: 'Sensor OD *',
                   value: _sensorOd,
@@ -610,15 +658,6 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   errorText: _qtyError,
                 ),
-                AppDropdownField<SensorType>(
-                  label: 'Sensor type *',
-                  value: _sensorType,
-                  items: SensorType.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _sensorType = v),
-                  errorText: _sensorTypeError,
-                ),
-
                 YesNoField(
                   label: 'Rework *',
                   value: _rework,

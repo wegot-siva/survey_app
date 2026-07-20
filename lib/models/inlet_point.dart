@@ -10,6 +10,7 @@ class InletPoint {
     required this.siteId,
     this.block,
     this.apartmentBhk = '',
+    this.materialId,
     this.sensorSize,
     this.series = '',
     this.sensorOd,
@@ -38,6 +39,15 @@ class InletPoint {
 
   final String? block;
   final String apartmentBhk;
+
+  /// Group A material_master_items row this point's sensor selection
+  /// references — the source of truth for [sensorSize]/[sensorType] below,
+  /// which are auto-populated from that row at selection time (not
+  /// independently editable). Null on a point never (re-)assigned a sensor
+  /// via the material dropdown, or one whose previously-picked material is
+  /// no longer active — see [BomEngine]'s Group A matching, which requires
+  /// this to resolve to an active row before generating a line.
+  final String? materialId;
 
   final SensorSize? sensorSize;
   final String series;
@@ -71,6 +81,7 @@ class InletPoint {
     siteId: siteId,
     block: block,
     apartmentBhk: apartmentBhk,
+    materialId: materialId,
     sensorSize: sensorSize,
     series: series,
     sensorOd: sensorOd,
@@ -105,6 +116,7 @@ class InletPoint {
     siteId: siteId,
     block: block,
     apartmentBhk: apartmentBhk,
+    materialId: materialId,
     sensorSize: sensorSize,
     series: series,
     sensorOd: sensorOd,

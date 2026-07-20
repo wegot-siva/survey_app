@@ -10,7 +10,7 @@ import '../models/engineer_directory.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 22;
+const int _dbVersion = 23;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -282,6 +282,23 @@ Future<Database> openAppDatabase() async {
           );
         }
       }
+      // v22 -> v23: Group A direct material selection. Source/inlet point
+      // sensor entry becomes a reference to a specific active Group A
+      // material_master_items row (by id) instead of abstract SensorSize +
+      // SensorType matching — see BomEngine's Group A logic. ON DELETE SET
+      // NULL: if the referenced material is later hard-deleted, the point
+      // reverts to unassigned rather than leaving a dangling id, which
+      // BomEngine's Group A matching already treats as needing re-selection.
+      if (oldVersion < 23) {
+        await db.execute(
+          'ALTER TABLE source_points ADD COLUMN material_id TEXT '
+          'REFERENCES material_master_items (id) ON DELETE SET NULL',
+        );
+        await db.execute(
+          'ALTER TABLE inlet_points ADD COLUMN material_id TEXT '
+          'REFERENCES material_master_items (id) ON DELETE SET NULL',
+        );
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -334,12 +351,12 @@ Future<Database> openAppDatabase() async {
         )
       ''');
 
+      await _createMaterialMasterItemsTable(db);
       await _createSourcePointsTable(db);
       await _createInletPointsTable(db);
       await _createDuctLorasTable(db);
       await _createGatewaysTable(db);
       await _createFootersTable(db);
-      await _createMaterialMasterItemsTable(db);
       await _createPhotosTable(db);
       await _createMaterialMasterAuditTable(db);
       await _createBomManualEntriesTable(db);
@@ -356,8 +373,14 @@ Future<Database> openAppDatabase() async {
   );
 }
 
-/// Source points table (v2). A site has many; booleans stored as INTEGER 0/1,
-/// enums as their `.name`, pressure as REAL.
+/// Source points table (v2, +material_id in v23). A site has many; booleans
+/// stored as INTEGER 0/1, enums as their `.name`, pressure as REAL.
+/// `material_id` references the active Group A material_master_items row
+/// this point's sensor selection points to (ON DELETE SET NULL — see the
+/// v22->v23 migration comment); `sensor_size`/`sensor_type` stay as
+/// auto-populated snapshots of that row's own values, read by BomEngine's
+/// generic FIXED-row filter and wired-sensor DERIVED aggregate, which are
+/// unrelated to and unaffected by material_id.
 Future<void> _createSourcePointsTable(Database db) async {
   await db.execute('''
     CREATE TABLE source_points (
@@ -366,6 +389,7 @@ Future<void> _createSourcePointsTable(Database db) async {
       block                             TEXT,
       apartment                         TEXT,
       inlet_description                 TEXT,
+      material_id                       TEXT,
       sensor_size                       TEXT,
       sensor_od                         TEXT,
       pipe_size                         TEXT,
@@ -393,14 +417,16 @@ Future<void> _createSourcePointsTable(Database db) async {
       nrv_feasibility                   INTEGER,
       dirty                             INTEGER NOT NULL DEFAULT 1,
       pending_delete                    INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE,
+      FOREIGN KEY (material_id) REFERENCES material_master_items (id) ON DELETE SET NULL
     )
   ''');
 }
 
-/// Inlet points table (v3). A site has many. Distinct from source points:
-/// no source-only checks (pipe full, valve, reducer, etc.); adds series,
-/// access mode, cable run length and conduit/civil-work fields.
+/// Inlet points table (v3, +material_id in v23). A site has many. Distinct
+/// from source points: no source-only checks (pipe full, valve, reducer,
+/// etc.); adds series, access mode, cable run length and conduit/civil-work
+/// fields. See [_createSourcePointsTable]'s doc for `material_id`.
 Future<void> _createInletPointsTable(Database db) async {
   await db.execute('''
     CREATE TABLE inlet_points (
@@ -408,6 +434,7 @@ Future<void> _createInletPointsTable(Database db) async {
       site_id                       TEXT NOT NULL,
       block                         TEXT,
       apartment_bhk                 TEXT,
+      material_id                   TEXT,
       sensor_size                   TEXT,
       series                        TEXT,
       sensor_od                     TEXT,
@@ -431,7 +458,8 @@ Future<void> _createInletPointsTable(Database db) async {
       civil_work_details            TEXT,
       dirty                         INTEGER NOT NULL DEFAULT 1,
       pending_delete                INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+      FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE,
+      FOREIGN KEY (material_id) REFERENCES material_master_items (id) ON DELETE SET NULL
     )
   ''');
 }

@@ -11,6 +11,7 @@ class SourcePoint {
     this.block,
     this.apartment = '',
     this.inletDescription = '',
+    this.materialId,
     this.sensorSize,
     this.sensorOd,
     this.pipeSize,
@@ -44,6 +45,15 @@ class SourcePoint {
   final String? block;
   final String apartment;
   final String inletDescription;
+
+  /// Group A material_master_items row this point's sensor selection
+  /// references — the source of truth for [sensorSize]/[sensorType] below,
+  /// which are auto-populated from that row at selection time (not
+  /// independently editable). Null on a point never (re-)assigned a sensor
+  /// via the material dropdown, or one whose previously-picked material is
+  /// no longer active — see [BomEngine]'s Group A matching, which requires
+  /// this to resolve to an active row before generating a line.
+  final String? materialId;
 
   final SensorSize? sensorSize;
   final SensorOd? sensorOd;
@@ -88,6 +98,7 @@ class SourcePoint {
     block: block,
     apartment: apartment,
     inletDescription: inletDescription,
+    materialId: materialId,
     sensorSize: sensorSize,
     sensorOd: sensorOd,
     pipeSize: pipeSize,
@@ -129,6 +140,7 @@ class SourcePoint {
     block: block,
     apartment: apartment,
     inletDescription: '',
+    materialId: materialId,
     sensorSize: sensorSize,
     sensorOd: sensorOd,
     pipeSize: pipeSize,

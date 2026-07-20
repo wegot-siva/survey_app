@@ -15,6 +15,7 @@ void main() {
   const engine = BomEngine();
 
   SourcePoint sourcePoint({
+    String? materialId,
     SensorSize? sensorSize,
     SensorType? sensorType,
     int? qty,
@@ -22,6 +23,7 @@ void main() {
   }) => SourcePoint(
     id: 'sp',
     siteId: 'site',
+    materialId: materialId,
     sensorSize: sensorSize,
     sensorType: sensorType,
     qty: qty,
@@ -29,6 +31,7 @@ void main() {
   );
 
   InletPoint inletPoint({
+    String? materialId,
     SensorSize? sensorSize,
     SensorType? sensorType,
     int? qty,
@@ -36,6 +39,7 @@ void main() {
   }) => InletPoint(
     id: 'ip',
     siteId: 'site',
+    materialId: materialId,
     sensorSize: sensorSize,
     sensorType: sensorType,
     qty: qty,
@@ -341,8 +345,8 @@ void main() {
     }
   });
 
-  group('Group A — catalog-driven, matched by sensor size + type', () {
-    test('exactly one matching active row generates a line from its own data', () {
+  group('Group A — catalog-driven, matched by material reference', () {
+    test('a point referencing an active material generates a line from its own data', () {
       final materials = [
         groupARow(
           id: 'a1',
@@ -355,98 +359,97 @@ void main() {
       ];
       final result = engine.generate(
         materials: materials,
-        sourcePoints: [
-          sourcePoint(sensorSize: SensorSize.dn25, sensorType: SensorType.wired, qty: 3),
-        ],
-        inletPoints: [
-          inletPoint(sensorSize: SensorSize.dn25, sensorType: SensorType.wired, qty: 2),
-        ],
+        sourcePoints: [sourcePoint(materialId: 'a1', qty: 3)],
+        inletPoints: [inletPoint(materialId: 'a1', qty: 2)],
         ductLoras: const [],
       );
 
-      expect(result.groupAMissingVariants, isEmpty);
-      expect(result.groupAConflicts, isEmpty);
+      expect(result.groupAUnresolvedPoints, isEmpty);
       final line = result.lines[MaterialGroup.a]!.single;
       expect(line.materialName, 'WEGOTAqua UFS DN25');
       expect(line.sku, 'SKU-25W');
       expect(line.quantity, 7.5); // (3+2) * 1.5 — from the catalog row, not hardcoded
     });
 
-    test('a variant with zero matches is reported missing, not silently dropped', () {
+    test('a point with no material reference is reported unresolved, not silently dropped', () {
       final result = engine.generate(
         materials: const [],
-        sourcePoints: [
-          sourcePoint(sensorSize: SensorSize.dn40, sensorType: SensorType.wired, qty: 5),
-        ],
+        sourcePoints: [sourcePoint(qty: 5)],
         inletPoints: const [],
         ductLoras: const [],
       );
 
       expect(result.lines[MaterialGroup.a], isEmpty);
-      expect(result.groupAConflicts, isEmpty);
-      expect(result.groupAMissingVariants, [
-        const GroupASensorVariant(SensorSize.dn40, SensorType.wired),
-      ]);
+      expect(result.groupAUnresolvedPoints, hasLength(1));
+      expect(result.groupAUnresolvedPoints.single.pointType, 'Source point');
       expect(result.hasBlockingGroupAIssues, isTrue);
     });
 
-    test('2+ matching active rows for the same variant is a conflict, never guessed', () {
+    test('a point referencing a material that is no longer active is reported unresolved', () {
+      // 'a1' isn't in `materials` — as if the row was deleted after this
+      // point was assigned it.
+      final result = engine.generate(
+        materials: const [],
+        sourcePoints: [sourcePoint(materialId: 'a1', qty: 5)],
+        inletPoints: const [],
+        ductLoras: const [],
+      );
+
+      expect(result.lines[MaterialGroup.a], isEmpty);
+      expect(result.groupAUnresolvedPoints, hasLength(1));
+      expect(result.hasBlockingGroupAIssues, isTrue);
+    });
+
+    test('two points referencing two different materials is never a conflict', () {
       final materials = [
         groupARow(
-          id: 'dup1',
+          id: 'a1',
           sensorSize: SensorSize.dn25,
           sensorType: SensorType.wired,
-          materialName: 'WEGOTAqua UFS DN25 (old)',
+          materialName: 'WEGOTAqua UFS DN25',
         ),
         groupARow(
-          id: 'dup2',
+          id: 'a2',
           sensorSize: SensorSize.dn25,
           sensorType: SensorType.wired,
-          materialName: 'WEGOTAqua UFS DN25 (new)',
+          materialName: 'WEGOTAqua UFS DN25 (alt brand)',
         ),
       ];
       final result = engine.generate(
         materials: materials,
         sourcePoints: [
-          sourcePoint(sensorSize: SensorSize.dn25, sensorType: SensorType.wired, qty: 3),
+          sourcePoint(materialId: 'a1', qty: 3),
+          sourcePoint(materialId: 'a2', qty: 2),
         ],
         inletPoints: const [],
         ductLoras: const [],
       );
 
-      expect(result.lines[MaterialGroup.a], isEmpty);
-      expect(result.groupAMissingVariants, isEmpty);
-      expect(result.groupAConflicts, hasLength(1));
-      final conflict = result.groupAConflicts.single;
-      expect(conflict.variant, const GroupASensorVariant(SensorSize.dn25, SensorType.wired));
-      expect(conflict.matchingMaterialNames, [
-        'WEGOTAqua UFS DN25 (old)',
-        'WEGOTAqua UFS DN25 (new)',
-      ]);
-      expect(result.hasBlockingGroupAIssues, isTrue);
+      // Same nominal size/type, two different actual products picked —
+      // both are legitimate, independent lines, not a conflict: the whole
+      // point of matching by reference is that this is allowed.
+      expect(result.groupAUnresolvedPoints, isEmpty);
+      expect(result.lines[MaterialGroup.a], hasLength(2));
+      expect(
+        result.lines[MaterialGroup.a]!.map((l) => l.quantity),
+        containsAll([3.0, 2.0]),
+      );
     });
 
-    test('a Group A row for a variant the survey never uses causes no issue at all', () {
+    test('a Group A row no point references causes no issue at all', () {
       final materials = [
-        groupARow(id: 'a1', sensorSize: SensorSize.dn100, sensorType: SensorType.wireless),
+        groupARow(id: 'a1', sensorSize: SensorSize.dn25, sensorType: SensorType.wired),
+        groupARow(id: 'unused', sensorSize: SensorSize.dn100, sensorType: SensorType.wireless),
       ];
       final result = engine.generate(
         materials: materials,
-        sourcePoints: [
-          sourcePoint(sensorSize: SensorSize.dn25, sensorType: SensorType.wired, qty: 2),
-        ],
+        sourcePoints: [sourcePoint(materialId: 'a1', qty: 2)],
         inletPoints: const [],
         ductLoras: const [],
       );
 
-      // DN25/Wired has no catalog row -> missing; DN100/Wireless is never
-      // required since the survey has no such point, so it's neither a
-      // line nor an issue.
-      expect(result.groupAMissingVariants, [
-        const GroupASensorVariant(SensorSize.dn25, SensorType.wired),
-      ]);
-      expect(result.groupAConflicts, isEmpty);
-      expect(result.lines[MaterialGroup.a], isEmpty);
+      expect(result.groupAUnresolvedPoints, isEmpty);
+      expect(result.lines[MaterialGroup.a], hasLength(1));
     });
 
     test('editing a catalog row changes the generated line with no code change', () {
@@ -460,9 +463,7 @@ void main() {
       final before = engine
           .generate(
             materials: [row],
-            sourcePoints: [
-              sourcePoint(sensorSize: SensorSize.dn25, sensorType: SensorType.wired, qty: 4),
-            ],
+            sourcePoints: [sourcePoint(materialId: 'a1', qty: 4)],
             inletPoints: const [],
             ductLoras: const [],
           )
@@ -485,9 +486,7 @@ void main() {
       final after = engine
           .generate(
             materials: [edited],
-            sourcePoints: [
-              sourcePoint(sensorSize: SensorSize.dn25, sensorType: SensorType.wired, qty: 4),
-            ],
+            sourcePoints: [sourcePoint(materialId: 'a1', qty: 4)],
             inletPoints: const [],
             ductLoras: const [],
           )

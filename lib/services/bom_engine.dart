@@ -7,72 +7,46 @@ import '../models/material_master_item.dart';
 import '../models/source_point.dart';
 import '../models/survey_options.dart';
 
-/// One sensor variant (size + type) the survey's Source/Inlet counts require
-/// a Group A catalog match for — used for both
-/// [BomGenerationResult.groupAMissingVariants] (zero matches) and
-/// [GroupAConflict] (2+ matches).
-class GroupASensorVariant {
-  const GroupASensorVariant(this.sensorSize, this.sensorType);
+/// A source/inlet point whose sensor selection doesn't resolve to a
+/// currently-active Group A material_master_items row — either it was never
+/// assigned one (materialId null, e.g. a point still on the old size/type
+/// entry mechanism) or the material it referenced has since been
+/// deactivated/removed. [BomEngine] never guesses which material a point
+/// like this should count toward, so no [BomLine] is generated for it — it's
+/// surfaced here instead, via [BomGenerationResult.groupAUnresolvedPoints].
+class GroupAUnresolvedPoint {
+  const GroupAUnresolvedPoint({required this.pointType, required this.label});
 
-  final SensorSize sensorSize;
-  final SensorType sensorType;
+  /// e.g. "Source point" or "Inlet point".
+  final String pointType;
 
-  /// e.g. "DN40 Wired" — matches the wording the Generate BoM screen's
-  /// banner names each missing/conflicting variant with.
-  String get label => '${sensorSize.label} ${sensorType.label}';
+  /// Best-effort human label for the point (block/apartment), so the
+  /// Generate BoM screen's banner can name exactly which point needs
+  /// reopening and re-picking, not just an abstract category.
+  final String label;
 
-  @override
-  bool operator ==(Object other) =>
-      other is GroupASensorVariant &&
-      other.sensorSize == sensorSize &&
-      other.sensorType == sensorType;
-
-  @override
-  int get hashCode => Object.hash(sensorSize, sensorType);
-}
-
-/// A sensor variant with 2+ active Group A material_master_items rows
-/// matching it — [BomEngine] refuses to guess which one is right, so no
-/// [BomLine] is generated for this variant until an admin removes/merges the
-/// duplicate in Material Master.
-class GroupAConflict {
-  const GroupAConflict({
-    required this.variant,
-    required this.matchingMaterialNames,
-  });
-
-  final GroupASensorVariant variant;
-
-  /// Every conflicting row's [MaterialMasterItem.materialName], named in
-  /// full so the admin doesn't have to go hunting for which rows collide.
-  final List<String> matchingMaterialNames;
+  String get description => '$pointType ($label)';
 }
 
 /// [BomEngine.generate]'s full result: the per-group lines the rest of the
-/// app already expects, plus Group A's catalog-matching health — the two
-/// lists that must block Finalize (see [hasBlockingGroupAIssues]). No other
-/// group's incompleteness is ever tracked here; this exists solely because
-/// Group A's restored catalog-matching can't be allowed to silently omit or
-/// silently guess at a sensor variant.
+/// app already expects, plus Group A's unresolved points — the list that
+/// must block Finalize (see [hasBlockingGroupAIssues]). No other group's
+/// incompleteness is ever tracked here; this exists solely because Group A's
+/// material-reference matching can't be allowed to silently omit a point
+/// whose sensor was never (re-)assigned.
 class BomGenerationResult {
   const BomGenerationResult({
     required this.lines,
-    required this.groupAMissingVariants,
-    required this.groupAConflicts,
+    required this.groupAUnresolvedPoints,
   });
 
   final Map<MaterialGroup, List<BomLine>> lines;
 
-  /// Sensor variants present in the survey's Source/Inlet counts with zero
-  /// matching active (non-deleted) Group A material_master_items rows.
-  final List<GroupASensorVariant> groupAMissingVariants;
+  /// Source/inlet points whose materialId doesn't resolve to a currently
+  /// active Group A material_master_items row.
+  final List<GroupAUnresolvedPoint> groupAUnresolvedPoints;
 
-  /// Sensor variants present in the survey's Source/Inlet counts with 2+
-  /// matching active Group A material_master_items rows.
-  final List<GroupAConflict> groupAConflicts;
-
-  bool get hasBlockingGroupAIssues =>
-      groupAMissingVariants.isNotEmpty || groupAConflicts.isNotEmpty;
+  bool get hasBlockingGroupAIssues => groupAUnresolvedPoints.isNotEmpty;
 }
 
 /// Computes a BoM from Material Master rows + a site's survey data.
@@ -84,13 +58,14 @@ class BomGenerationResult {
 /// below) turn into numbers.
 ///
 /// Group A (WEGOTAqua sensors) doesn't use the generic FIXED/DERIVED/
-/// VARIABLE dispatch every other group's rows go through — instead, for each
-/// sensor variant the survey's Source/Inlet counts actually contain, it looks
-/// up the matching active group_code='A' row directly (by sensor size +
-/// type) and reads that row's materialName/sku/unit/quantityPerSensor. A
-/// variant with zero or 2+ matches never gets a guessed [BomLine] — it's
-/// surfaced instead via [BomGenerationResult.groupAMissingVariants] /
-/// [groupAConflicts], which the caller must block Finalize on.
+/// VARIABLE dispatch every other group's rows go through — instead, each
+/// Source/Inlet point directly references the specific active group_code='A'
+/// row it was assigned via the material dropdown (materialId), and that
+/// row's own materialName/sku/unit/quantityPerSensor is read straight off of
+/// it. A point whose reference doesn't resolve to a currently-active Group A
+/// row never gets a guessed [BomLine] — it's surfaced instead via
+/// [BomGenerationResult.groupAUnresolvedPoints], which the caller must block
+/// Finalize on.
 class BomEngine {
   const BomEngine();
 
@@ -113,7 +88,7 @@ class BomEngine {
       for (final group in MaterialGroup.values) group: <BomLine>[],
     };
 
-    final groupAResult = _generateGroupA(sensorCounts, materials);
+    final groupAResult = _generateGroupA(sourcePoints, inletPoints, materials);
     result[MaterialGroup.a] = groupAResult.lines;
 
     for (final item in materials) {
@@ -147,81 +122,79 @@ class BomEngine {
 
     return BomGenerationResult(
       lines: result,
-      groupAMissingVariants: groupAResult.missing,
-      groupAConflicts: groupAResult.conflicts,
+      groupAUnresolvedPoints: groupAResult.unresolved,
     );
   }
 
-  /// For every (size, type) variant the survey's own counts actually
-  /// contain (regardless of whether the summed count is 0 — a point that
-  /// declares the variant still needs a catalog match): looks up active
-  /// group_code='A' rows matching that exact size + type.
+  /// For every Source/Inlet point: resolves its materialId against the
+  /// active group_code='A' rows and folds its qty into that material's
+  /// running total. A point whose materialId is null or doesn't match any
+  /// currently-active row is collected into [unresolved] instead — never
+  /// silently dropped, and never guessed at.
   ///
-  /// - Exactly one match: emits a [BomLine] from that row's own
-  ///   materialName/sku/unit/quantityPerSensor — quantity = survey count ×
-  ///   quantityPerSensor.
-  /// - Zero matches: no line — the variant is collected into [missing]
-  ///   instead of being silently dropped.
-  /// - 2+ matches: no line — collected into [conflicts], naming every
-  ///   colliding row, rather than guessing which one is right.
-  ///
-  /// Variants sorted by [SensorSize]/[SensorType] declaration order, so the
-  /// banner listing [missing]/[conflicts] reads in a stable, predictable
-  /// order every time.
-  ({List<BomLine> lines, List<GroupASensorVariant> missing, List<GroupAConflict> conflicts})
+  /// One [BomLine] per referenced material (not per point), reading that
+  /// row's own materialName/sku/unit/quantityPerSensor — quantity = summed
+  /// point count × quantityPerSensor. Two points can legitimately reference
+  /// two different materials for what looks like the same nominal size, and
+  /// that's not a conflict: the engineer picked the specific product
+  /// actually installed at each point, which is the whole point of matching
+  /// by reference instead of by abstract size + type.
+  ({List<BomLine> lines, List<GroupAUnresolvedPoint> unresolved})
   _generateGroupA(
-    Map<(SensorSize, SensorType), int> sensorCounts,
+    List<SourcePoint> sourcePoints,
+    List<InletPoint> inletPoints,
     List<MaterialMasterItem> materials,
   ) {
-    final groupAMaterials = materials.where((m) => m.group == MaterialGroup.a);
+    final groupAMaterials = {
+      for (final m in materials.where((m) => m.group == MaterialGroup.a))
+        m.id: m,
+    };
 
-    final lines = <BomLine>[];
-    final missing = <GroupASensorVariant>[];
-    final conflicts = <GroupAConflict>[];
+    final materialCounts = <String, int>{};
+    final unresolved = <GroupAUnresolvedPoint>[];
 
-    final requiredVariants = sensorCounts.keys.toList()
-      ..sort((a, b) {
-        final sizeCompare = SensorSize.values
-            .indexOf(a.$1)
-            .compareTo(SensorSize.values.indexOf(b.$1));
-        if (sizeCompare != 0) return sizeCompare;
-        return SensorType.values.indexOf(a.$2).compareTo(SensorType.values.indexOf(b.$2));
-      });
-
-    for (final (size, type) in requiredVariants) {
-      final count = sensorCounts[(size, type)] ?? 0;
-      final matches = groupAMaterials
-          .where((m) => m.sensorSize == size && m.sensorType == type)
-          .toList();
-
-      if (matches.isEmpty) {
-        missing.add(GroupASensorVariant(size, type));
-      } else if (matches.length > 1) {
-        conflicts.add(
-          GroupAConflict(
-            variant: GroupASensorVariant(size, type),
-            matchingMaterialNames: matches.map((m) => m.materialName).toList(),
-          ),
-        );
-      } else {
-        final row = matches.single;
-        lines.add(
-          BomLine(
-            group: MaterialGroup.a,
-            materialName: row.materialName,
-            sku: row.sku,
-            itemLabel: row.itemLabel,
-            variantLabel: '${size.label} · ${type.label}',
-            sensorSize: size,
-            sensorType: type,
-            quantity: count * row.quantityPerSensor,
-            unit: row.unit,
-          ),
-        );
+    void process(String pointType, String label, String? materialId, int? qty) {
+      if (materialId == null || !groupAMaterials.containsKey(materialId)) {
+        unresolved.add(GroupAUnresolvedPoint(pointType: pointType, label: label));
+        return;
       }
+      materialCounts[materialId] = (materialCounts[materialId] ?? 0) + (qty ?? 0);
     }
 
-    return (lines: lines, missing: missing, conflicts: conflicts);
+    for (final sp in sourcePoints) {
+      process('Source point', _pointLabel(sp.block, sp.apartment), sp.materialId, sp.qty);
+    }
+    for (final ip in inletPoints) {
+      process('Inlet point', _pointLabel(ip.block, ip.apartmentBhk), ip.materialId, ip.qty);
+    }
+
+    final lines = <BomLine>[
+      for (final entry in materialCounts.entries)
+        BomLine(
+          group: MaterialGroup.a,
+          materialName: groupAMaterials[entry.key]!.materialName,
+          sku: groupAMaterials[entry.key]!.sku,
+          itemLabel: groupAMaterials[entry.key]!.itemLabel,
+          variantLabel: _variantLabel(groupAMaterials[entry.key]!),
+          sensorSize: groupAMaterials[entry.key]!.sensorSize,
+          sensorType: groupAMaterials[entry.key]!.sensorType,
+          quantity: entry.value * groupAMaterials[entry.key]!.quantityPerSensor,
+          unit: groupAMaterials[entry.key]!.unit,
+        ),
+    ]..sort((a, b) => a.materialName.compareTo(b.materialName));
+
+    return (lines: lines, unresolved: unresolved);
+  }
+
+  /// Best-effort human label for a point — block + apartment/BHK, whichever
+  /// is set — so [GroupAUnresolvedPoint] can name exactly which point needs
+  /// reopening, not just an abstract category.
+  String _pointLabel(String? block, String apartment) {
+    final parts = [
+      if (block != null && block.isNotEmpty) 'Block $block',
+      if (apartment.isNotEmpty) apartment,
+    ];
+    return parts.isEmpty ? 'unlabeled' : parts.join(' — ');
   }
 
   double _quantityFor(
