@@ -622,22 +622,39 @@ create table if not exists public.profiles (
 -- fresh Auth user is never left without a matching profile. full_name/role
 -- are read from the new user's metadata if the Dashboard's "User Metadata"
 -- field was filled in (e.g. {"full_name": "Ravi Kumar", "role": "engineer"});
--- otherwise falls back to the email and 'engineer' so the insert can never
--- fail the NOT NULL/check constraints above — a failing trigger would abort
--- the auth.users insert itself, since both run in the same transaction.
--- Whatever the fallback lands on, an Admin can always correct full_name/role
--- afterwards directly in the Table Editor (this slice's verification step).
+-- otherwise full_name falls back to the email and role to 'engineer' so the
+-- insert can never fail the NOT NULL/check constraints above — a failing
+-- trigger would abort the auth.users insert itself, since both run in the
+-- same transaction.
+--
+-- active defaults to false whenever role metadata wasn't actually supplied
+-- (Slice 2c fix — was unconditionally true). Before this, a forgotten
+-- "User Metadata" field silently produced a fully active account under the
+-- 'engineer' fallback role rather than failing loudly — exactly what
+-- happened to the first sales/approver test accounts, which sat as live
+-- (if narrowly-scoped) engineer accounts until Slice 2c's own RLS
+-- verification caught the mismatch by accident. Now that same mistake
+-- makes the account inert instead: _resolveProfile (SupabaseAuthRepository)
+-- already rejects an inactive account at sign-in, so a misconfigured
+-- account fails to sign in at all rather than silently working under the
+-- wrong role. An account created *with* role metadata is unaffected —
+-- still active immediately, no new step for the normal path. Whatever an
+-- incomplete account lands on, an Admin can always correct full_name/role/
+-- active afterwards directly in the Table Editor.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer set search_path = public
 as $$
+declare
+  meta_role text := new.raw_user_meta_data ->> 'role';
 begin
-  insert into public.profiles (id, full_name, role)
+  insert into public.profiles (id, full_name, role, active)
   values (
     new.id,
     coalesce(new.raw_user_meta_data ->> 'full_name', new.email),
-    coalesce(new.raw_user_meta_data ->> 'role', 'engineer')
+    coalesce(meta_role, 'engineer'),
+    meta_role is not null
   );
   return new;
 end;
@@ -788,7 +805,16 @@ security definer
 set search_path = public
 as $$
 begin
-  if public.is_admin() then
+  -- auth.uid() is null outside a real PostgREST-authenticated request — the
+  -- SQL Editor, Table Editor, a migration script, or any other direct
+  -- connection (all of which already bypass RLS entirely as the table
+  -- owner/superuser; a trigger doesn't inherit that bypass automatically,
+  -- since triggers always fire regardless of RLS bypass status, so it needs
+  -- its own explicit check here). This rule only ever means to constrain a
+  -- real signed-in non-admin's own app requests, never trusted direct DB
+  -- access — without this, correcting a test account's role via Table
+  -- Editor would trip the same exception below.
+  if auth.uid() is null or public.is_admin() then
     return new;
   end if;
   if new.role is distinct from old.role or new.active is distinct from old.active then
@@ -823,5 +849,167 @@ create trigger prevent_self_role_escalation
 -- request already carries an authenticated session; anon access here would
 -- just mean anyone holding the publishable key (baked into the APK) could
 -- read/write profiles with no session at all.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 2c: real RLS for sites, blocks, client_inputs.
+--
+-- Replaces every "dev all" placeholder on these three tables with the
+-- actual permission model: Engineer sees/edits only their own assigned
+-- site; Sales, Approver, and Admin all see and edit every site (Sales has
+-- no created_by column to scope by, and isn't getting one — confirmed
+-- decision; Approver gets edit rights here too, not view-only — also a
+-- confirmed decision, distinct from the app UI's own separate readOnly
+-- flag on Approver's review screen, which is unaffected by this and still
+-- applies at the UI layer).
+--
+-- is_site_manager() bundles the three full-access roles into one reusable
+-- check (SECURITY DEFINER, same reasoning as is_admin() in Slice 2b — its
+-- internal profiles lookup bypasses RLS entirely, so no self-referential
+-- fragility). can_access_site(id) bundles "is a site manager, OR is the
+-- engineer this specific site is assigned to" — this is the exact rule
+-- blocks/client_inputs need to inherit from their parent site via EXISTS,
+-- and is written now so Slice 2d's five site-cascading tables
+-- (source_points, inlet_points, duct_loras, gateways, footers) can reuse it
+-- unchanged rather than re-deriving the same join.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.is_site_manager()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role in ('sales', 'approver', 'admin')
+  );
+$$;
+
+create or replace function public.can_access_site(target_site_id text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.sites
+    where id = target_site_id
+      and (assigned_to_user_id = auth.uid() or public.is_site_manager())
+  );
+$$;
+
+-- ---- sites ------------------------------------------------------------
+
+drop policy if exists "dev all - sites" on public.sites;
+
+drop policy if exists "engineer selects own assigned sites" on public.sites;
+create policy "engineer selects own assigned sites" on public.sites
+  for select to authenticated
+  using (assigned_to_user_id = auth.uid());
+
+drop policy if exists "site managers select all sites" on public.sites;
+create policy "site managers select all sites" on public.sites
+  for select to authenticated
+  using (public.is_site_manager());
+
+-- Row-level gate only: an engineer may UPDATE a row iff it's currently
+-- assigned to them (`using`) AND it's still assigned to them afterward
+-- (`with check`) — which already blocks them from reassigning a site away
+-- from themselves (assigned_to_user_id changing would fail `with check`
+-- for anyone who isn't a site manager). It does NOT stop them changing
+-- `name` or the display-string `assigned_to` while leaving
+-- `assigned_to_user_id` untouched, though — column-level restriction needs
+-- the trigger below, same reasoning as profiles' role/active in Slice 2b.
+drop policy if exists "update sites" on public.sites;
+create policy "update sites" on public.sites
+  for update to authenticated
+  using (assigned_to_user_id = auth.uid() or public.is_site_manager())
+  with check (assigned_to_user_id = auth.uid() or public.is_site_manager());
+
+create or replace function public.prevent_engineer_site_reassignment()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- auth.uid() is null outside a real PostgREST-authenticated request — see
+  -- the matching guard/comment on prevent_self_role_escalation (Slice 2b)
+  -- for why this needs its own explicit check: without it, any direct SQL
+  -- Editor/Table Editor write to sites (e.g. test setup, ad-hoc admin
+  -- fixes) trips the exception below even though it's trusted, not-an-
+  -- engineer access.
+  if auth.uid() is null or public.is_site_manager() then
+    return new;
+  end if;
+  -- Engineer: only status/bom_locked (survey progress — set by the app's
+  -- own "start work"/"submit"/finalize actions) may change on their own
+  -- assigned site. name/assigned_to/assigned_to_user_id stay Sales/
+  -- Approver/Admin-only, even though row-level ownership above already let
+  -- the UPDATE reach this row at all.
+  if new.name is distinct from old.name
+      or new.assigned_to is distinct from old.assigned_to
+      or new.assigned_to_user_id is distinct from old.assigned_to_user_id then
+    raise exception 'Engineers may only update survey progress fields on their own site, not its identity or assignment.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists prevent_engineer_site_reassignment on public.sites;
+create trigger prevent_engineer_site_reassignment
+  before update on public.sites
+  for each row execute function public.prevent_engineer_site_reassignment();
+
+-- INSERT: Sales/Approver/Admin only — an Engineer never creates a survey,
+-- only works an already-assigned one.
+drop policy if exists "site managers insert sites" on public.sites;
+create policy "site managers insert sites" on public.sites
+  for insert to authenticated
+  with check (public.is_site_manager());
+
+-- DELETE: no policy at all, for anyone — RLS default-denies with no
+-- matching permissive policy. The app never hard-deletes a site; Sales'
+-- "Delete site" sets the local-only `archived` flag (never pushed to
+-- Supabase in the first place — see _pullAndReconcile's doc), so there is
+-- no legitimate DELETE to allow here.
+
+-- ---- blocks, client_inputs ---------------------------------------------
+--
+-- Both inherit sites' access exactly via can_access_site(site_id), and both
+-- use `for all` (not just SELECT/UPDATE) because of how the app actually
+-- writes them: blocks has no stable per-row id in the domain model, so
+-- every edit deletes the site's full block set and reinserts it (needs
+-- DELETE + INSERT, not UPDATE at all); client_inputs is upserted
+-- (`site_id` is its primary key), which PostgREST/Postgres can resolve as
+-- either an INSERT or an UPDATE per row depending on whether it already
+-- exists, so both policies are needed for a single upsert() call to work
+-- regardless of which path Postgres takes. Neither table has an identity/
+-- assignment column of its own, so — unlike sites — no additional
+-- column-level trigger is needed: every field on both tables is exactly
+-- the kind of "survey progress" data an assigned Engineer should be able
+-- to freely read and write.
+
+drop policy if exists "dev all - blocks" on public.blocks;
+drop policy if exists "access blocks via site" on public.blocks;
+create policy "access blocks via site" on public.blocks
+  for all to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "dev all - client_inputs" on public.client_inputs;
+drop policy if exists "access client_inputs via site" on public.client_inputs;
+create policy "access client_inputs via site" on public.client_inputs
+  for all to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+-- anon is deliberately not granted anywhere above — same reasoning as
+-- Slice 2b's profiles policies.
 -- Re-runnable / idempotent.
 -- ---------------------------------------------------------------------------
