@@ -1013,3 +1013,78 @@ create policy "access client_inputs via site" on public.client_inputs
 -- Slice 2b's profiles policies.
 -- Re-runnable / idempotent.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 2d: real RLS for source_points, inlet_points,
+-- duct_loras, gateways, footers.
+--
+-- All five cascade from sites via site_id (footers' site_id is its own
+-- primary key, same shape as client_inputs; the other four are a regular
+-- FK column) — same access rule as Slice 2c's blocks/client_inputs,
+-- reusing can_access_site(site_id) unchanged rather than re-deriving it.
+-- `for all` (not just SELECT/UPDATE/INSERT) for the same reason blocks
+-- needed it in 2c: source_points/inlet_points/duct_loras/gateways delete
+-- via the pending_delete tombstone convention (an UPDATE to set the flag,
+-- then a real DELETE once sync confirms the remote side is gone —
+-- see SqfliteSurveyRepository's deleteSourcePoint/deleteInletPoint/
+-- deleteDuctLora/deleteGateway and SyncService.pushAll's matching
+-- getPendingDeleteXIds/hardDeleteX pairs), so DELETE needs to be permitted
+-- too, not just the three read/write operations. footers has no delete
+-- feature at all, but including it costs nothing and keeps all five
+-- tables' policies identical rather than special-casing one.
+--
+-- duct_loras/gateways' delete-propagation (tombstone, not a bare local
+-- hard-delete) was flagged as a gap earlier this session but is already
+-- fixed — confirmed directly against current code, not assumed: both
+-- deleteDuctLora/deleteGateway already set pending_delete/dirty exactly
+-- like deleteSourcePoint/deleteInletPoint, and pushAll already has the
+-- matching getPendingDeleteDuctLoraIds/hardDeleteDuctLora and
+-- getPendingDeleteGatewayIds/hardDeleteGateway pairs. Nothing new needed
+-- here beyond RLS.
+--
+-- reconcileDeletes on all five tables' pull already defaults to false
+-- (Slice 2b-prereq) — confirmed none of their upsertXFromRemote callers
+-- pass true, so absence-based local deletion is already off; this slice
+-- doesn't need to touch that.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+drop policy if exists "dev all - source_points" on public.source_points;
+drop policy if exists "access source_points via site" on public.source_points;
+create policy "access source_points via site" on public.source_points
+  for all to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "dev all - inlet_points" on public.inlet_points;
+drop policy if exists "access inlet_points via site" on public.inlet_points;
+create policy "access inlet_points via site" on public.inlet_points
+  for all to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "dev all - duct_loras" on public.duct_loras;
+drop policy if exists "access duct_loras via site" on public.duct_loras;
+create policy "access duct_loras via site" on public.duct_loras
+  for all to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "dev all - gateways" on public.gateways;
+drop policy if exists "access gateways via site" on public.gateways;
+create policy "access gateways via site" on public.gateways
+  for all to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "dev all - footers" on public.footers;
+drop policy if exists "access footers via site" on public.footers;
+create policy "access footers via site" on public.footers
+  for all to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+-- anon is deliberately not granted anywhere above — same reasoning as
+-- Slice 2b's profiles policies.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
