@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data/supabase_survey_data_source.dart';
@@ -117,6 +118,7 @@ class SyncService {
         await action();
         return true;
       } catch (e) {
+        debugPrint('sync: $label failed: $e');
         failures.add('$label: $e');
         return false;
       }
@@ -411,17 +413,30 @@ class SyncService {
       }
 
       // Generic photos (slice 2): upload any pending files, then push
-      // metadata for whichever photo rows are dirty.
+      // metadata for whichever photo rows are dirty. The upload and the
+      // metadata push both happen inside the same pushRow call (unlike the
+      // old split that called _withUploadedGenericPhoto outside pushRow) so
+      // a Storage failure on one photo is isolated exactly like every other
+      // row's failure here, instead of throwing out past pushRow and
+      // aborting the rest of this sync run via the outer try/catch below.
       var photos = 0;
       for (final photo in await _repository.getAllPhotos(dirtyOnly: true)) {
-        final pushed = await _withUploadedGenericPhoto(photo);
-        if (pushed.remotePath != null) {
-          final ok = await pushRow('photos/${pushed.id}', () async {
-            await _remote.pushPhoto(pushed);
-            await _repository.markPhotoSynced(pushed.id);
-          });
-          if (ok) photos++;
-        }
+        debugPrint(
+          'sync: photo ${photo.id} local=${photo.localPath} '
+          'remote=${photo.remotePath} site=${photo.siteId} '
+          'owner=${photo.ownerType}/${photo.ownerId}',
+        );
+        final ok = await pushRow('photos/${photo.id}', () async {
+          final pushed = await _withUploadedGenericPhoto(photo);
+          if (pushed.remotePath == null) {
+            throw StateError(
+              'no local file at ${pushed.localPath} to upload for photo ${pushed.id}',
+            );
+          }
+          await _remote.pushPhoto(pushed);
+          await _repository.markPhotoSynced(pushed.id);
+        });
+        if (ok) photos++;
       }
 
       return SyncResult(
@@ -603,15 +618,25 @@ class SyncService {
 
   /// If [photo] has a locally-captured file not yet uploaded, uploads it to
   /// Storage, records the remote key locally (write-back, so we don't
-  /// re-upload on the next sync), and returns the updated photo. A missing
-  /// local file (already uploaded, or moved) is skipped, not an error.
+  /// re-upload on the next sync), and returns the updated photo. Already-
+  /// uploaded photos (remotePath set) are returned unchanged without
+  /// touching the filesystem. A missing local file on a never-uploaded photo
+  /// is returned unchanged too (remotePath still null) — the caller treats
+  /// that as a failure for this row rather than silently dropping it.
   Future<SurveyPhoto> _withUploadedGenericPhoto(SurveyPhoto photo) async {
     final localPath = photo.localPath;
     if (localPath == null || photo.remotePath != null) return photo;
-    if (!await File(localPath).exists()) return photo;
+    if (!await File(localPath).exists()) {
+      debugPrint(
+        'sync: photo ${photo.id} has no file at $localPath — cannot upload',
+      );
+      return photo;
+    }
 
     final objectKey = 'photos/${photo.id}.jpg';
+    debugPrint('sync: photo ${photo.id} uploading $localPath -> $objectKey');
     await _remote.uploadPhoto(localPath, objectKey);
+    debugPrint('sync: photo ${photo.id} upload complete');
     final updated = photo.withRemotePath(objectKey);
     await _repository.updatePhoto(updated);
     return updated;

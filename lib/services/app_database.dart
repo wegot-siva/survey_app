@@ -10,7 +10,7 @@ import '../models/engineer_directory.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 25;
+const int _dbVersion = 26;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -347,6 +347,45 @@ Future<Database> openAppDatabase() async {
           'ALTER TABLE bom_manual_entries ADD COLUMN added_by_user_id TEXT',
         );
       }
+      // v25 -> v26: Roles & Assignment Slice 2e — photos gets a direct
+      // site_id, denormalized from whichever table its (owner_type,
+      // owner_id) chain points to, so RLS can gate it the same
+      // can_access_site way as every other site-cascading table instead of
+      // needing a per-owner-type join. client_inputs/footer already use
+      // the site's own id as owner_id (see PhotoOwner); the other four
+      // owner types need one hop through their own table's site_id.
+      // Backfills every existing row; a photo whose owner no longer exists
+      // (should be rare — every delete path already removes its own
+      // photos transactionally) is left with a null site_id rather than
+      // guessed at. Every write site already has the owning Site in scope,
+      // so this is always set going forward — see SurveyPhoto.siteId.
+      if (oldVersion < 26) {
+        await db.execute('ALTER TABLE photos ADD COLUMN site_id TEXT');
+        await db.execute('''
+          UPDATE photos SET site_id = owner_id
+          WHERE owner_type IN ('client_inputs', 'footer')
+        ''');
+        await db.execute('''
+          UPDATE photos SET site_id = (
+            SELECT site_id FROM source_points WHERE source_points.id = photos.owner_id
+          ) WHERE owner_type = 'source_point'
+        ''');
+        await db.execute('''
+          UPDATE photos SET site_id = (
+            SELECT site_id FROM inlet_points WHERE inlet_points.id = photos.owner_id
+          ) WHERE owner_type = 'inlet_point'
+        ''');
+        await db.execute('''
+          UPDATE photos SET site_id = (
+            SELECT site_id FROM gateways WHERE gateways.id = photos.owner_id
+          ) WHERE owner_type = 'gateway'
+        ''');
+        await db.execute('''
+          UPDATE photos SET site_id = (
+            SELECT site_id FROM duct_loras WHERE duct_loras.id = photos.owner_id
+          ) WHERE owner_type = 'duct_lora'
+        ''');
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -588,9 +627,13 @@ Future<void> _createFootersTable(Database db) async {
   ''');
 }
 
-/// Photos table (v7). Polymorphic + slot-based, serving every photo field
-/// across source/inlet/gateway/footer. Not FK-scoped (owner_type + owner_id is
-/// a polymorphic link). Local path set on capture; remote path on upload.
+/// Photos table (v7, +site_id in v26). Polymorphic + slot-based, serving
+/// every photo field across source/inlet/gateway/footer/duct_lora/
+/// client_inputs. Not FK-scoped (owner_type + owner_id is a polymorphic
+/// link) — site_id is a plain denormalized column, not a FK, since a fresh
+/// install has no existing rows to backfill and every future write already
+/// sets it directly (see SurveyPhoto.siteId). Local path set on capture;
+/// remote path on upload.
 Future<void> _createPhotosTable(Database db) async {
   await db.execute('''
     CREATE TABLE photos (
@@ -601,6 +644,7 @@ Future<void> _createPhotosTable(Database db) async {
       position    INTEGER NOT NULL DEFAULT 0,
       local_path  TEXT,
       remote_path TEXT,
+      site_id     TEXT,
       dirty       INTEGER NOT NULL DEFAULT 1
     )
   ''');

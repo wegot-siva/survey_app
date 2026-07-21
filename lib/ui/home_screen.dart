@@ -459,8 +459,9 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _syncStatus = _SyncStatus.failure);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text(
-            "Couldn't sync. Check your connection and try again.",
+          content: Text(
+            result.message ??
+                "Couldn't sync. Check your connection and try again.",
           ),
           action: SnackBarAction(label: 'Retry', onPressed: _syncNow),
         ),

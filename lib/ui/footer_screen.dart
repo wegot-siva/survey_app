@@ -157,6 +157,7 @@ class _FooterScreenState extends State<FooterScreen> {
           position: i,
           localPath: draft.localPath,
           remotePath: draft.remotePath,
+          siteId: widget.site.id,
         ),
       );
     }

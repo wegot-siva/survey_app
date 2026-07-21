@@ -1088,3 +1088,428 @@ create policy "access footers via site" on public.footers
 -- Slice 2b's profiles policies.
 -- Re-runnable / idempotent.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 2e: real RLS for photos.
+--
+-- photos has no direct site reference — only a polymorphic (owner_type,
+-- owner_id) link (source_point | inlet_point | gateway | footer |
+-- duct_lora | client_inputs), so a correct RLS policy would otherwise need
+-- to branch per owner_type and, for four of the six, join through that
+-- owner's own table to reach site_id. Denormalizing a direct site_id
+-- column instead (same reasoning already used for sites.assigned_to_user_id
+-- and every attribution field) keeps this table on the exact same
+-- can_access_site(site_id) rule as every other site-cascading table, no
+-- special-casing. client_inputs/footer already use the site's own id as
+-- owner_id, so their site_id is that value directly; the other four need
+-- one hop through their own table. Backfills every existing row; a photo
+-- whose owner no longer exists (should be rare — every delete path already
+-- removes its own photos transactionally) is left with a null site_id
+-- rather than guessed at — such a row becomes invisible under RLS to
+-- everyone, including Admin, until reconciled by hand. `on delete cascade`
+-- matches every other child-of-sites table here (source_points,
+-- inlet_points, ...), not the `on delete set null` used for
+-- assigned_to_user_id/attribution fields — those reference profiles
+-- (an account going away shouldn't take a site with it), this references
+-- sites itself (a site going away should take its photos with it, same as
+-- every other child row already does).
+--
+-- Every write site already has the owning Site in scope (every photo-
+-- capturing form receives a [Site]), so this is always set going forward
+-- — see SurveyPhoto.siteId / app_database.dart's local v25->v26 migration
+-- for the matching local-side backfill.
+--
+-- Only SELECT/INSERT/UPDATE get policies, not `for all` like the other
+-- site-cascading tables in Slices 2c/2d — confirmed directly against
+-- current code that no app path ever issues a remote DELETE on photos, so
+-- there's nothing legitimate for a DELETE policy to allow; RLS
+-- default-denies a command with no matching permissive policy.
+--
+-- The survey-photos Storage bucket itself (where the actual image bytes
+-- live) is explicitly out of scope here — its own "dev all" policies are
+-- Slice 2h, which depends on this table's site_id being correct first.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.photos
+  add column if not exists site_id text references public.sites (id) on delete cascade;
+
+update public.photos set site_id = owner_id
+where owner_type in ('client_inputs', 'footer') and site_id is null;
+
+update public.photos set site_id = source_points.site_id
+from public.source_points
+where photos.owner_type = 'source_point'
+  and photos.owner_id = source_points.id
+  and photos.site_id is null;
+
+update public.photos set site_id = inlet_points.site_id
+from public.inlet_points
+where photos.owner_type = 'inlet_point'
+  and photos.owner_id = inlet_points.id
+  and photos.site_id is null;
+
+update public.photos set site_id = gateways.site_id
+from public.gateways
+where photos.owner_type = 'gateway'
+  and photos.owner_id = gateways.id
+  and photos.site_id is null;
+
+update public.photos set site_id = duct_loras.site_id
+from public.duct_loras
+where photos.owner_type = 'duct_lora'
+  and photos.owner_id = duct_loras.id
+  and photos.site_id is null;
+
+drop policy if exists "dev all - photos" on public.photos;
+
+drop policy if exists "select photos via site" on public.photos;
+create policy "select photos via site" on public.photos
+  for select to authenticated
+  using (public.can_access_site(site_id));
+
+drop policy if exists "insert photos via site" on public.photos;
+create policy "insert photos via site" on public.photos
+  for insert to authenticated
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "update photos via site" on public.photos;
+create policy "update photos via site" on public.photos
+  for update to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+-- DELETE: no policy at all — see the doc block above for why.
+
+-- anon is deliberately not granted anywhere above — same reasoning as
+-- Slice 2b's profiles policies.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 2f: real RLS for BoM data, plus the missing
+-- bom_manual_edit_snapshots / bom_manual_edit_snapshot_lines tables.
+--
+-- bom_manual_edit_snapshots and bom_manual_edit_snapshot_lines never existed
+-- remotely — every "Edit BoM" action (see BomPreviewScreen.canEditBom,
+-- restricted in the app to Admin/Approver) has been syncing to nowhere since
+-- that feature shipped: SyncService already pushes both tables and
+-- SupabaseSurveyDataSource already has pushBomManualEditSnapshot(Line), all
+-- silently failing per-row (relation does not exist) every sync. Column sets
+-- below are copied exactly from app_database.dart's
+-- _createBomManualEditSnapshotsTable / _createBomManualEditSnapshotLinesTable
+-- (minus the local-only `dirty` column) — this is a wire-format contract
+-- with SupabaseSurveyDataSource's _bomManualEditSnapshot(Line)ToRemoteRow,
+-- not a free design choice. Note there's no edited_by_user_id (unlike
+-- finalized_by_user_id / created_by_user_id on the other BoM tables) —
+-- the local schema and Dart model never grew one, so real-user attribution
+-- for manual edits is a pre-existing gap, not something this slice
+-- introduces or is scoped to fix.
+--
+-- Access model for all 7 tables (5 pre-existing + 2 new):
+--   * SELECT: can_access_site() via survey_id (or two-hop through the
+--     parent row for the three line/child tables) — Engineer sees their own
+--     site, Sales/Approver/Admin see everything. Same shape as every
+--     site-cascading table since Slice 2c.
+--   * INSERT/UPDATE on bom_manual_entries, bom_snapshots, bom_snapshot_lines:
+--     same can_access_site() — no narrower rule requested for these; an
+--     Engineer building/finalizing their own site's BoM is exactly the
+--     existing app flow.
+--   * INSERT/UPDATE on bom_revisions, bom_revision_lines: narrower —
+--     can_create_bom_revision() — only the survey's assigned Engineer or
+--     Admin (D6: not Sales, not Approver, even though they can SELECT/view).
+--   * INSERT/UPDATE on bom_manual_edit_snapshots,
+--     bom_manual_edit_snapshot_lines: narrower still — can_edit_bom() —
+--     only Admin/Approver, matching canEditBom in the app (site_hub_screen.
+--     dart / approver_review_screen.dart). No site-membership check beyond
+--     the role itself: Admin/Approver already have blanket site access via
+--     is_site_manager(), same as everywhere else.
+--   * UPDATE is granted with the same predicate as INSERT on every one of
+--     these tables even though the app treats each row as immutable after
+--     creation (never edits content) — every push goes through .upsert(),
+--     so a sync interrupted after the remote insert succeeded but before the
+--     local dirty flag cleared retries as an UPDATE (ON CONFLICT DO UPDATE)
+--     of byte-identical content next time. Without an UPDATE policy that
+--     retry would fail forever. This mirrors the "for all" grants every
+--     earlier slice used for the same reason — it's not a new allowance for
+--     genuine edits.
+--   * DELETE: bom_manual_entries is the one table here with a real delete
+--     path (BomGroupManualSectionScreen — removing a manual line before
+--     finalize; confirmed via SupabaseSurveyDataSource.deleteBomManualEntry
+--     and its pending_delete tombstone push in SyncService) — scoped the
+--     same as its other commands. The other 6 tables have no delete
+--     anywhere in the app (confirmed: SupabaseSurveyDataSource defines no
+--     delete method for any of them) — no DELETE policy at all, reflecting
+--     that immutability directly instead of leaving it as an unenforced
+--     convention.
+--
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.bom_manual_edit_snapshots (
+  id               text primary key,
+  survey_id        text not null references public.sites (id) on delete cascade,
+  version          integer not null,
+  based_on_version integer not null,
+  edited_by        text not null,
+  edited_at        text not null,
+  reason           text
+);
+
+create index if not exists bom_manual_edit_snapshots_survey_idx
+  on public.bom_manual_edit_snapshots (survey_id);
+
+create table if not exists public.bom_manual_edit_snapshot_lines (
+  id          text primary key,
+  snapshot_id text not null references public.bom_manual_edit_snapshots (id) on delete cascade,
+  sku         text,
+  item_name   text not null,
+  description text,
+  unit        text not null,
+  qty         double precision not null,
+  group_code  text not null
+);
+
+create index if not exists bom_manual_edit_snapshot_lines_snapshot_idx
+  on public.bom_manual_edit_snapshot_lines (snapshot_id);
+
+alter table public.bom_manual_edit_snapshots      enable row level security;
+alter table public.bom_manual_edit_snapshot_lines enable row level security;
+
+-- ---- helper functions ------------------------------------------------
+
+-- Two-hop visibility: a bom_snapshot_lines/bom_revision_lines/
+-- bom_manual_edit_snapshot_lines row is visible iff its parent row's own
+-- site is. SECURITY DEFINER so the lookup on the parent table runs
+-- independent of (and isn't circularly gated by) that table's own RLS.
+create or replace function public.can_access_bom_snapshot(target_snapshot_id text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.bom_snapshots
+    where id = target_snapshot_id
+      and public.can_access_site(survey_id)
+  );
+$$;
+
+create or replace function public.can_access_bom_revision(target_revision_id text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.bom_revisions
+    where id = target_revision_id
+      and public.can_access_site(survey_id)
+  );
+$$;
+
+create or replace function public.can_access_bom_manual_edit_snapshot(target_snapshot_id text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.bom_manual_edit_snapshots
+    where id = target_snapshot_id
+      and public.can_access_site(survey_id)
+  );
+$$;
+
+-- D6: a bom_revision may only be created by the survey's assigned Engineer
+-- or Admin — narrower than can_access_site() (which also passes for
+-- Sales/Approver, who may SELECT revisions but not create them).
+create or replace function public.can_create_bom_revision(target_site_id text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.sites
+    where id = target_site_id
+      and (assigned_to_user_id = auth.uid() or public.is_admin())
+  );
+$$;
+
+-- Same D6 rule, one hop down for bom_revision_lines — the revision's own
+-- creator (or Admin), not just anyone who can see the revision.
+create or replace function public.can_create_bom_revision_line(target_revision_id text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.bom_revisions
+    where id = target_revision_id
+      and public.can_create_bom_revision(survey_id)
+  );
+$$;
+
+-- "Edit BoM" (bom_manual_edit_snapshots/lines) is Admin/Approver only in the
+-- app (BomPreviewScreen.canEditBom) — both roles already have blanket site
+-- access via is_site_manager(), so this is a role check alone, no site_id
+-- parameter needed.
+create or replace function public.can_edit_bom()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role in ('admin', 'approver')
+  );
+$$;
+
+-- ---- bom_manual_entries ------------------------------------------------
+
+drop policy if exists "dev all - bom_manual_entries" on public.bom_manual_entries;
+
+drop policy if exists "select bom_manual_entries via site" on public.bom_manual_entries;
+create policy "select bom_manual_entries via site" on public.bom_manual_entries
+  for select to authenticated
+  using (public.can_access_site(survey_id));
+
+drop policy if exists "insert bom_manual_entries via site" on public.bom_manual_entries;
+create policy "insert bom_manual_entries via site" on public.bom_manual_entries
+  for insert to authenticated
+  with check (public.can_access_site(survey_id));
+
+drop policy if exists "update bom_manual_entries via site" on public.bom_manual_entries;
+create policy "update bom_manual_entries via site" on public.bom_manual_entries
+  for update to authenticated
+  using (public.can_access_site(survey_id))
+  with check (public.can_access_site(survey_id));
+
+drop policy if exists "delete bom_manual_entries via site" on public.bom_manual_entries;
+create policy "delete bom_manual_entries via site" on public.bom_manual_entries
+  for delete to authenticated
+  using (public.can_access_site(survey_id));
+
+-- ---- bom_snapshots / bom_snapshot_lines (no DELETE — see doc block) ----
+
+drop policy if exists "dev all - bom_snapshots" on public.bom_snapshots;
+
+drop policy if exists "select bom_snapshots via site" on public.bom_snapshots;
+create policy "select bom_snapshots via site" on public.bom_snapshots
+  for select to authenticated
+  using (public.can_access_site(survey_id));
+
+drop policy if exists "insert bom_snapshots via site" on public.bom_snapshots;
+create policy "insert bom_snapshots via site" on public.bom_snapshots
+  for insert to authenticated
+  with check (public.can_access_site(survey_id));
+
+drop policy if exists "update bom_snapshots via site" on public.bom_snapshots;
+create policy "update bom_snapshots via site" on public.bom_snapshots
+  for update to authenticated
+  using (public.can_access_site(survey_id))
+  with check (public.can_access_site(survey_id));
+
+drop policy if exists "dev all - bom_snapshot_lines" on public.bom_snapshot_lines;
+
+drop policy if exists "select bom_snapshot_lines via snapshot" on public.bom_snapshot_lines;
+create policy "select bom_snapshot_lines via snapshot" on public.bom_snapshot_lines
+  for select to authenticated
+  using (public.can_access_bom_snapshot(snapshot_id));
+
+drop policy if exists "insert bom_snapshot_lines via snapshot" on public.bom_snapshot_lines;
+create policy "insert bom_snapshot_lines via snapshot" on public.bom_snapshot_lines
+  for insert to authenticated
+  with check (public.can_access_bom_snapshot(snapshot_id));
+
+drop policy if exists "update bom_snapshot_lines via snapshot" on public.bom_snapshot_lines;
+create policy "update bom_snapshot_lines via snapshot" on public.bom_snapshot_lines
+  for update to authenticated
+  using (public.can_access_bom_snapshot(snapshot_id))
+  with check (public.can_access_bom_snapshot(snapshot_id));
+
+-- ---- bom_revisions / bom_revision_lines (D6 narrower INSERT/UPDATE) ----
+
+drop policy if exists "dev all - bom_revisions" on public.bom_revisions;
+
+drop policy if exists "select bom_revisions via site" on public.bom_revisions;
+create policy "select bom_revisions via site" on public.bom_revisions
+  for select to authenticated
+  using (public.can_access_site(survey_id));
+
+drop policy if exists "insert bom_revisions by assigned engineer" on public.bom_revisions;
+create policy "insert bom_revisions by assigned engineer" on public.bom_revisions
+  for insert to authenticated
+  with check (public.can_create_bom_revision(survey_id));
+
+drop policy if exists "update bom_revisions by assigned engineer" on public.bom_revisions;
+create policy "update bom_revisions by assigned engineer" on public.bom_revisions
+  for update to authenticated
+  using (public.can_create_bom_revision(survey_id))
+  with check (public.can_create_bom_revision(survey_id));
+
+drop policy if exists "dev all - bom_revision_lines" on public.bom_revision_lines;
+
+drop policy if exists "select bom_revision_lines via revision" on public.bom_revision_lines;
+create policy "select bom_revision_lines via revision" on public.bom_revision_lines
+  for select to authenticated
+  using (public.can_access_bom_revision(revision_id));
+
+drop policy if exists "insert bom_revision_lines by assigned engineer" on public.bom_revision_lines;
+create policy "insert bom_revision_lines by assigned engineer" on public.bom_revision_lines
+  for insert to authenticated
+  with check (public.can_create_bom_revision_line(revision_id));
+
+drop policy if exists "update bom_revision_lines by assigned engineer" on public.bom_revision_lines;
+create policy "update bom_revision_lines by assigned engineer" on public.bom_revision_lines
+  for update to authenticated
+  using (public.can_create_bom_revision_line(revision_id))
+  with check (public.can_create_bom_revision_line(revision_id));
+
+-- ---- bom_manual_edit_snapshots / _lines (Admin/Approver-only write) ----
+
+drop policy if exists "select bom_manual_edit_snapshots via site" on public.bom_manual_edit_snapshots;
+create policy "select bom_manual_edit_snapshots via site" on public.bom_manual_edit_snapshots
+  for select to authenticated
+  using (public.can_access_site(survey_id));
+
+drop policy if exists "insert bom_manual_edit_snapshots by editor" on public.bom_manual_edit_snapshots;
+create policy "insert bom_manual_edit_snapshots by editor" on public.bom_manual_edit_snapshots
+  for insert to authenticated
+  with check (public.can_edit_bom());
+
+drop policy if exists "update bom_manual_edit_snapshots by editor" on public.bom_manual_edit_snapshots;
+create policy "update bom_manual_edit_snapshots by editor" on public.bom_manual_edit_snapshots
+  for update to authenticated
+  using (public.can_edit_bom())
+  with check (public.can_edit_bom());
+
+drop policy if exists "select bom_manual_edit_snapshot_lines via snapshot" on public.bom_manual_edit_snapshot_lines;
+create policy "select bom_manual_edit_snapshot_lines via snapshot" on public.bom_manual_edit_snapshot_lines
+  for select to authenticated
+  using (public.can_access_bom_manual_edit_snapshot(snapshot_id));
+
+drop policy if exists "insert bom_manual_edit_snapshot_lines by editor" on public.bom_manual_edit_snapshot_lines;
+create policy "insert bom_manual_edit_snapshot_lines by editor" on public.bom_manual_edit_snapshot_lines
+  for insert to authenticated
+  with check (public.can_edit_bom());
+
+drop policy if exists "update bom_manual_edit_snapshot_lines by editor" on public.bom_manual_edit_snapshot_lines;
+create policy "update bom_manual_edit_snapshot_lines by editor" on public.bom_manual_edit_snapshot_lines
+  for update to authenticated
+  using (public.can_edit_bom())
+  with check (public.can_edit_bom());
+
+-- anon is deliberately not granted anywhere above — same reasoning as
+-- Slice 2b's profiles policies.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------

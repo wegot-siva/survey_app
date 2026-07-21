@@ -485,6 +485,7 @@ Map<String, Object?> _photoToRemoteRow(SurveyPhoto p) {
     'position': p.position,
     // Local path is device-specific and never pushed.
     'remote_path': p.remotePath,
+    'site_id': p.siteId,
   };
 }
 

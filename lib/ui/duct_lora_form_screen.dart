@@ -187,6 +187,7 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
           position: i,
           localPath: draft.localPath,
           remotePath: draft.remotePath,
+          siteId: widget.site.id,
         ),
       );
     }

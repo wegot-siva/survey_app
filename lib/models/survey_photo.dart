@@ -16,6 +16,7 @@ class SurveyPhoto {
     this.position = 0,
     this.localPath,
     this.remotePath,
+    this.siteId,
   });
 
   /// Empty string means "not yet persisted" (the repository assigns an id).
@@ -27,6 +28,18 @@ class SurveyPhoto {
   final String? localPath;
   final String? remotePath;
 
+  /// The site this photo belongs to — denormalized (Roles & Assignment
+  /// Slice 2e) so RLS can gate photos the same way as every other
+  /// site-cascading table (via can_access_site), without needing a
+  /// per-owner-type join through source_points/inlet_points/gateways/
+  /// duct_loras just to find it. Every write site already has the site in
+  /// context (every photo-capturing form receives its [Site]), so this is
+  /// always set going forward. Nullable only for the rare row a one-time
+  /// backfill couldn't resolve (e.g. a genuinely orphaned photo whose owner
+  /// record no longer exists) — such a row is invisible under RLS to
+  /// everyone, including Admin, until reconciled by hand.
+  final String? siteId;
+
   SurveyPhoto copyWithId(String newId) => SurveyPhoto(
     id: newId,
     ownerType: ownerType,
@@ -35,6 +48,7 @@ class SurveyPhoto {
     position: position,
     localPath: localPath,
     remotePath: remotePath,
+    siteId: siteId,
   );
 
   /// Returns a copy carrying the Storage object key of a just-uploaded photo.
@@ -46,6 +60,7 @@ class SurveyPhoto {
     position: position,
     localPath: localPath,
     remotePath: path,
+    siteId: siteId,
   );
 }
 

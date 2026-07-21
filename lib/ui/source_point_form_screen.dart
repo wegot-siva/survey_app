@@ -308,6 +308,7 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
             position: i,
             localPath: draft.localPath,
             remotePath: draft.remotePath,
+            siteId: widget.site.id,
           ),
         );
       }

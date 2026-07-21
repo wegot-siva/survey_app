@@ -294,6 +294,7 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
             position: i,
             localPath: draft.localPath,
             remotePath: draft.remotePath,
+            siteId: widget.site.id,
           ),
         );
       }

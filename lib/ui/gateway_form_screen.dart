@@ -184,6 +184,7 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
           position: i,
           localPath: draft.localPath,
           remotePath: draft.remotePath,
+          siteId: widget.site.id,
         ),
       );
     }

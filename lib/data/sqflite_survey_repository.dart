@@ -2050,6 +2050,7 @@ Map<String, Object?> _photoToRow(SurveyPhoto p) {
     'position': p.position,
     'local_path': p.localPath,
     'remote_path': p.remotePath,
+    'site_id': p.siteId,
     'dirty': 1,
   };
 }
@@ -2063,7 +2064,8 @@ bool _photoRowUnchanged(
       existing['slot'] == updated['slot'] &&
       existing['position'] == updated['position'] &&
       existing['local_path'] == updated['local_path'] &&
-      existing['remote_path'] == updated['remote_path'];
+      existing['remote_path'] == updated['remote_path'] &&
+      existing['site_id'] == updated['site_id'];
 }
 
 SurveyPhoto _photoFromRow(Map<String, Object?> r) {
@@ -2075,6 +2077,7 @@ SurveyPhoto _photoFromRow(Map<String, Object?> r) {
     position: (r['position'] as int?) ?? 0,
     localPath: r['local_path'] as String?,
     remotePath: r['remote_path'] as String?,
+    siteId: r['site_id'] as String?,
   );
 }
 

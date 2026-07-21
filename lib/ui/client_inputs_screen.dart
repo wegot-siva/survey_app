@@ -211,6 +211,7 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
           position: i,
           localPath: draft.localPath,
           remotePath: draft.remotePath,
+          siteId: widget.site.id,
         ),
       );
     }
