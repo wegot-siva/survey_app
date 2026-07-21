@@ -1513,3 +1513,94 @@ create policy "update bom_manual_edit_snapshot_lines by editor" on public.bom_ma
 -- Slice 2b's profiles policies.
 -- Re-runnable / idempotent.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 2g: real RLS for material_master_items and
+-- material_master_audit.
+--
+-- material_master_items is the one table in this whole schema where SELECT
+-- stays unconditional for every authenticated role, not scoped by site or
+-- role: every device needs the complete active catalog for on-device BoM
+-- generation (auto Group A matching, cascade/flat pickers —
+-- BomEngine/pickers themselves untouched by this slice). It's also the one
+-- table whose pull (SqfliteSurveyRepository.upsertMaterialMasterItemsFromRemote,
+-- confirmed NOT routed through the shared _pullAndReconcile helper and its
+-- reconcileDeletes flag — it's unconditional there by design) treats a row
+-- absent from the fetch as deleted and removes it locally. That reconcile
+-- logic depends on the fetch being genuinely complete for whoever runs it —
+-- narrowing SELECT for any role here would make Material Master rows
+-- silently vanish from that role's device on next sync. This slice leaves
+-- that pull code untouched and keeps SELECT unconditional specifically so
+-- reconcileDeletes stays correct; it isn't a gap to close.
+--
+-- Write access is Admin-only for both tables — confirmed against the app,
+-- not assumed: home_screen.dart only shows the "Material Master" menu entry
+-- `if (widget.session.currentRole == UserRole.admin)`, so it's the sole
+-- entry point that can ever create/edit/delete a material_master_items row
+-- or, as a side effect of those same repository calls
+-- (SqfliteSurveyRepository's _writeMaterialMasterAudit, called from the
+-- create/update/delete paths directly, not a DB trigger), write a
+-- material_master_audit row. Both tables' delete path is a genuine SQL
+-- DELETE (deleteMaterialMasterItem) via the same pending_delete tombstone
+-- convention as every other table — material_master_items.deleted_at is
+-- dead/unused (see its own column comment above).
+--
+-- material_master_audit gets no UPDATE policy at all, unlike every other
+-- "immutable" table in this schema (bom_revisions, bom_snapshots, ...) —
+-- those got a same-predicate UPDATE policy purely so a sync retry's
+-- ON CONFLICT DO UPDATE (from .upsert()) doesn't fail forever after a crash
+-- between the remote insert succeeding and the local dirty flag clearing.
+-- material_master_audit is pushed via pushMaterialMasterAuditEntry, which
+-- also .upsert()s, so it has the exact same retry gap: an interrupted sync
+-- would leave that one row permanently failing (shown as a skipped row on
+-- every future sync, retried and rejected each time) rather than
+-- self-healing like the BoM tables do. That's a deliberate tradeoff, not an
+-- oversight — an audit log gains real integrity value from being
+-- mechanically un-updatable by anyone, including its own writer, and this
+-- retry gap is a rare, non-destructive edge case (a stuck row, not data
+-- loss) rather than a correctness bug.
+--
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+drop policy if exists "dev all - material_master_items" on public.material_master_items;
+
+drop policy if exists "select material_master_items for everyone" on public.material_master_items;
+create policy "select material_master_items for everyone" on public.material_master_items
+  for select to authenticated
+  using (true);
+
+drop policy if exists "insert material_master_items by admin" on public.material_master_items;
+create policy "insert material_master_items by admin" on public.material_master_items
+  for insert to authenticated
+  with check (public.is_admin());
+
+drop policy if exists "update material_master_items by admin" on public.material_master_items;
+create policy "update material_master_items by admin" on public.material_master_items
+  for update to authenticated
+  using (public.is_admin())
+  with check (public.is_admin());
+
+drop policy if exists "delete material_master_items by admin" on public.material_master_items;
+create policy "delete material_master_items by admin" on public.material_master_items
+  for delete to authenticated
+  using (public.is_admin());
+
+drop policy if exists "dev all - material_master_audit" on public.material_master_audit;
+
+drop policy if exists "select material_master_audit by admin" on public.material_master_audit;
+create policy "select material_master_audit by admin" on public.material_master_audit
+  for select to authenticated
+  using (public.is_admin());
+
+drop policy if exists "insert material_master_audit by admin" on public.material_master_audit;
+create policy "insert material_master_audit by admin" on public.material_master_audit
+  for insert to authenticated
+  with check (public.is_admin());
+
+-- No UPDATE, no DELETE on material_master_audit — see the doc block above.
+
+-- anon is deliberately not granted anywhere above — same reasoning as
+-- Slice 2b's profiles policies.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
