@@ -11,6 +11,7 @@ class BomRevision {
     required this.version,
     required this.reason,
     required this.createdBy,
+    this.createdByUserId,
     required this.createdAt,
   });
 
@@ -24,9 +25,14 @@ class BomRevision {
   /// Required: why this change was made (e.g. "wall broken, extra elbows").
   final String reason;
 
-  /// Label of the role that created this revision (e.g. "Engineer") —
-  /// shared-login roles for now, not a real per-user identity.
+  /// Display snapshot of who created this revision — the signed-in user's
+  /// real name (Roles & Assignment Slice 1d) going forward; a bare role
+  /// label (e.g. "Engineer") on any revision written before that slice.
   final String createdBy;
+
+  /// The real account id (`profiles.id`) that created this revision. Null on
+  /// any revision written before Slice 1d.
+  final String? createdByUserId;
 
   final DateTime createdAt;
 
@@ -36,6 +42,7 @@ class BomRevision {
     version: version,
     reason: reason,
     createdBy: createdBy,
+    createdByUserId: createdByUserId,
     createdAt: createdAt,
   );
 }

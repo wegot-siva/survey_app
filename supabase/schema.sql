@@ -591,3 +591,237 @@ alter table public.source_points
 
 alter table public.inlet_points
   add column if not exists material_id text references public.material_master_items (id) on delete set null;
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 1a: backend foundation only.
+--
+-- One row per real Supabase Auth user, one-to-one with auth.users (id IS the
+-- auth user's id, not a separate identity) and carrying the same 4-role model
+-- the app already has (UserRole.name values — see lib/models/user_role.dart).
+-- Nothing in the app reads this table yet; that's Slice 1b onward.
+--
+-- RLS is deliberately NOT enabled/policied here — out of scope for this
+-- slice by explicit instruction (see the project's RLS slice, still pending).
+-- !! No real employee gets a real account until that slice lands — this table
+-- is currently reachable by the anon key with no restriction at all. Only
+-- the 1-2 manually-created test accounts from this slice should exist until
+-- then. !!
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.profiles (
+  id         uuid primary key references auth.users (id) on delete cascade,
+  full_name  text not null,
+  role       text not null check (role in ('sales', 'engineer', 'approver', 'admin')),
+  active     boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- Auto-creates a profiles row whenever a new auth.users row is inserted (i.e.
+-- every time an account is created via the Dashboard's Auth panel), so a
+-- fresh Auth user is never left without a matching profile. full_name/role
+-- are read from the new user's metadata if the Dashboard's "User Metadata"
+-- field was filled in (e.g. {"full_name": "Ravi Kumar", "role": "engineer"});
+-- otherwise falls back to the email and 'engineer' so the insert can never
+-- fail the NOT NULL/check constraints above — a failing trigger would abort
+-- the auth.users insert itself, since both run in the same transaction.
+-- Whatever the fallback lands on, an Admin can always correct full_name/role
+-- afterwards directly in the Table Editor (this slice's verification step).
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id, full_name, role)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data ->> 'full_name', new.email),
+    coalesce(new.raw_user_meta_data ->> 'role', 'engineer')
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 1c: real account references for assignment.
+--
+-- assigned_to (the display-name string, above) stays as a denormalized
+-- cache; assigned_to_user_id is the real source of truth going forward. Must
+-- come after the profiles table above — the FK target has to already exist.
+-- `on delete set null`: if an engineer's account is ever hard-deleted, the
+-- site reverts to unassigned-by-id rather than leaving a dangling
+-- reference; assigned_to (the name snapshot) is untouched either way, same
+-- reasoning as material_id's on-delete behavior on source_points/
+-- inlet_points. Re-runnable / idempotent.
+--
+-- survey_assignment_audit is NOT included here — it's local-only (never
+-- synced to Supabase, same as the now-retired `engineers` roster table —
+-- see SqfliteSurveyRepository's pull-reconcile helper's doc comment for the
+-- full list of push-only/local-only tables), so its matching
+-- old_assignee_user_id/new_assignee_user_id columns live only in
+-- app_database.dart, not here.
+-- ---------------------------------------------------------------------------
+
+alter table public.sites
+  add column if not exists assigned_to_user_id uuid references public.profiles (id) on delete set null;
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 1d: real account references for attribution.
+--
+-- The remaining "who did this" fields — who changed a Material Master row,
+-- finalized a BoM, added a revision, or added a manual BoM line (not who a
+-- survey is assigned to/from — that was 1c's assigned_to_user_id). Each
+-- existing label/name column (changed_by_role, finalized_by, created_by,
+-- added_by) stays as the denormalized display snapshot; each new
+-- *_user_id column is the real source of truth going forward. Same
+-- `on delete set null` reasoning as assigned_to_user_id above. Must come
+-- after the profiles table — the FK target has to already exist.
+--
+-- survey_assignment_audit.changed_by_user_id is NOT included here — that
+-- table is local-only, same as its 1c-era *_assignee_user_id columns (see
+-- the comment on assigned_to_user_id above); it lives only in
+-- app_database.dart. Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.material_master_audit
+  add column if not exists changed_by_user_id uuid references public.profiles (id) on delete set null;
+
+alter table public.bom_manual_entries
+  add column if not exists added_by_user_id uuid references public.profiles (id) on delete set null;
+
+alter table public.bom_snapshots
+  add column if not exists finalized_by_user_id uuid references public.profiles (id) on delete set null;
+
+alter table public.bom_revisions
+  add column if not exists created_by_user_id uuid references public.profiles (id) on delete set null;
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 2b: lock down profiles RLS.
+--
+-- profiles has had ZERO RLS policies since Slice 1a (deliberately deferred,
+-- with an explicit "!! no real employee gets a real account until this
+-- lands !!" warning on that table's own comment block) — meaning any
+-- authenticated caller could read every profile and, worse, update ANY
+-- profile's role/active columns, including their own (a live privilege-
+-- escalation hole). This closes it.
+--
+-- is_admin() is SECURITY DEFINER, so its internal lookup runs as the
+-- function owner and bypasses RLS entirely — this sidesteps the classic
+-- self-referential-RLS foot-gun (a policy on `profiles` that subqueries
+-- `profiles` to check the caller's own role can work via a plain subquery
+-- too, since the "select own row" policy would let that subquery see the
+-- caller's own row regardless — but that only holds as long as nobody later
+-- tightens the "own row" policy to depend on something else, which would
+-- silently break the admin check). A SECURITY DEFINER function has no such
+-- fragility, and is reusable by every later RLS slice (2c onward) that also
+-- needs an "is this caller an admin / what site can they see" check.
+-- `stable` lets the planner cache one evaluation per query instead of
+-- re-running it per row. `set search_path = public` matches the same
+-- hardening already applied to handle_new_user() — prevents a
+-- search_path-hijacking attack against a SECURITY DEFINER function.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.profiles where id = auth.uid() and role = 'admin'
+  );
+$$;
+
+alter table public.profiles enable row level security;
+
+-- SELECT: three independent PERMISSIVE policies for the same command, which
+-- Postgres OR's together — a caller sees the union of (their own row) OR
+-- (any active engineer row — the assign/reassign picker's roster; role and
+-- active are the fields that matter for that, and the table's only other
+-- columns today are id/full_name/created_at, none of which are sensitive
+-- enough to warrant a separate column-restricted view) OR (every row, if
+-- they're an admin).
+drop policy if exists "select own profile" on public.profiles;
+create policy "select own profile" on public.profiles
+  for select to authenticated
+  using (id = auth.uid());
+
+drop policy if exists "select engineer roster" on public.profiles;
+create policy "select engineer roster" on public.profiles
+  for select to authenticated
+  using (role = 'engineer' and active = true);
+
+drop policy if exists "admin selects any profile" on public.profiles;
+create policy "admin selects any profile" on public.profiles
+  for select to authenticated
+  using (public.is_admin());
+
+-- UPDATE: row-level gate only (own row, or admin on any row) — RLS
+-- USING/WITH CHECK clauses can't restrict which *columns* an UPDATE touches,
+-- only which *rows* it's allowed to target. Column-level restriction (a
+-- non-admin may change full_name but never role/active, even on their own
+-- row) is enforced below by prevent_self_role_escalation, a trigger — the
+-- only mechanism that can actually inspect NEW vs OLD per column. (Postgres
+-- does support column-level GRANTs, e.g. `grant update (full_name)`, but
+-- those apply per Postgres *role* — every human user here shares the same
+-- `authenticated` role, so a GRANT can't distinguish "this authenticated
+-- user is admin" from "this one isn't"; only a row-aware check like this
+-- trigger can.)
+drop policy if exists "update own or any as admin" on public.profiles;
+create policy "update own or any as admin" on public.profiles
+  for update to authenticated
+  using (id = auth.uid() or public.is_admin())
+  with check (id = auth.uid() or public.is_admin());
+
+create or replace function public.prevent_self_role_escalation()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if public.is_admin() then
+    return new;
+  end if;
+  if new.role is distinct from old.role or new.active is distinct from old.active then
+    raise exception 'Only an admin can change role or active.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists prevent_self_role_escalation on public.profiles;
+create trigger prevent_self_role_escalation
+  before update on public.profiles
+  for each row execute function public.prevent_self_role_escalation();
+
+-- INSERT / DELETE: no policy for either — RLS default-denies a command with
+-- no matching permissive policy, for every role. This is intentional, not
+-- an oversight:
+--   INSERT: the only current path that creates a profiles row is
+--   handle_new_user() (Slice 1a), a SECURITY DEFINER trigger on auth.users
+--   that runs as its owner and so bypasses RLS on profiles entirely — it
+--   keeps working unaffected. No app code inserts into profiles directly.
+--   DELETE: the app never deletes a profile. Deactivate via `active = false`
+--   instead (already enforced as admin-only above), consistent with the
+--   pending_delete/tombstone convention used everywhere else in this
+--   schema. An actual account removal happens by deleting the auth.users
+--   row via the Dashboard (service_role, bypasses RLS) or the future
+--   Edge-Function-based admin flow — the `on delete cascade` FK already
+--   removes the matching profiles row automatically when that happens.
+--
+-- anon is deliberately not granted on any of the policies above — the app
+-- only ever queries Supabase after a real sign-in, so every legitimate
+-- request already carries an authenticated session; anon access here would
+-- just mean anyone holding the publishable key (baked into the APK) could
+-- read/write profiles with no session at all.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------

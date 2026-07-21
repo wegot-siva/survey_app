@@ -21,6 +21,7 @@ class BomGroupManualSectionScreen extends StatefulWidget {
     required this.surveyId,
     required this.surveyName,
     required this.addedByRole,
+    this.addedByUserId,
     required this.group,
     this.autoLines = const [],
     this.readOnly = false,
@@ -30,6 +31,7 @@ class BomGroupManualSectionScreen extends StatefulWidget {
   final String surveyId;
   final String surveyName;
   final String addedByRole;
+  final String? addedByUserId;
   final MaterialGroup group;
 
   /// This group's auto-computed lines (if any) from the same BomEngine
@@ -76,6 +78,7 @@ class _BomGroupManualSectionScreenState
           repository: widget.repository,
           surveyId: widget.surveyId,
           addedByRole: widget.addedByRole,
+          addedByUserId: widget.addedByUserId,
           existing: existing,
           lockedGroup: widget.group,
         ),

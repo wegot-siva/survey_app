@@ -161,20 +161,21 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// Engineer sees only their own assigned surveys (Slice C); Sales, Admin,
-  /// and Approver all see everything (Approver gained Sales-like create/
-  /// assign/reassign capability, so it needs the same full visibility to
-  /// find sites to manage — not just ones awaiting review; the row-tap logic
-  /// below still routes a submitted survey to the read-only review screen).
-  /// Admin has no survey-list filtering — only the Material Master entry
-  /// point is role-gated to them.
+  /// Engineer sees only their own assigned surveys (Slice C, now matched by
+  /// real account id — Slice 1c — not the old free-text name string); Sales,
+  /// Admin, and Approver all see everything (Approver gained Sales-like
+  /// create/assign/reassign capability, so it needs the same full visibility
+  /// to find sites to manage — not just ones awaiting review; the row-tap
+  /// logic below still routes a submitted survey to the read-only review
+  /// screen). Admin has no survey-list filtering — only the Material Master
+  /// entry point is role-gated to them.
   List<Site> _visibleSites(List<Site> sites) {
     switch (widget.session.currentRole) {
       case UserRole.engineer:
-        final engineer = widget.session.currentEngineerName;
-        if (engineer == null) return const [];
+        final userId = widget.session.currentUserId;
+        if (userId == null) return const [];
         return sites
-            .where((s) => s.assignedTo == engineer)
+            .where((s) => s.assignedToUserId == userId)
             .toList(growable: false);
       case UserRole.approver:
       case UserRole.sales:
@@ -196,7 +197,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openAssignSurvey() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => AssignSurveyScreen(repository: widget.repository),
+        builder: (_) => AssignSurveyScreen(
+          repository: widget.repository,
+          syncService: widget.syncService,
+        ),
       ),
     );
     await _load();
@@ -220,6 +224,7 @@ class _HomeScreenState extends State<HomeScreen> {
           repository: widget.repository,
           siteId: site.id,
           session: widget.session,
+          syncService: widget.syncService,
         ),
       ),
     );
@@ -235,6 +240,7 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => ApproverReviewScreen(
           repository: widget.repository,
           siteId: site.id,
+          session: widget.session,
         ),
       ),
     );
@@ -343,7 +349,10 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute<void>(
         builder: (_) => MaterialMasterGroupListScreen(
           repository: widget.repository,
-          changedByRole: widget.session.currentRole?.label ?? 'Unknown',
+          changedByRole: widget.session.currentUserName ??
+              widget.session.currentRole?.label ??
+              'Unknown',
+          changedByUserId: widget.session.currentUserId,
         ),
       ),
     );
@@ -433,13 +442,16 @@ class _HomeScreenState extends State<HomeScreen> {
       final records = _syncRecordTotal(result);
       final photos = result.photos;
       final pulled = pullResult.success ? pullResult.materialMasterItems : 0;
+      final failed = result.pushFailures.length;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'All synced — $records record${records == 1 ? '' : 's'} and '
+            '${failed == 0 ? 'All synced' : 'Synced with $failed row${failed == 1 ? '' : 's'} skipped'}'
+            ' — $records record${records == 1 ? '' : 's'} and '
             '$photos photo${photos == 1 ? '' : 's'} backed up'
             '${pulled > 0 ? ', $pulled Material Master row${pulled == 1 ? '' : 's'} pulled' : ''}'
-            '${coreResult.success ? '' : ' (core data pull failed — tap Sync again)'}.',
+            '${coreResult.success ? '' : ' (core data pull failed — tap Sync again)'}'
+            '${failed == 0 ? '' : ' (skipped rows will retry next sync)'}.',
           ),
         ),
       );

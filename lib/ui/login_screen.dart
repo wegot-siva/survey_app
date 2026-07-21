@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 
-import '../models/engineer_directory.dart';
-import '../models/user_role.dart';
 import '../services/session_controller.dart';
 import 'theme/app_theme.dart';
 
-/// Role-based sign-in shown at app start (Slice A). The user picks a role and
-/// enters the shared password for it. On success, [SessionController] flips to
-/// logged-in and the app's auth gate swaps to the home screen.
+/// Email/password sign-in shown at app start (Slice 1b). Role is never
+/// chosen here — it's resolved from the signed-in account's `profiles` row.
+/// On success, [SessionController] flips to logged-in and the app's auth
+/// gate swaps to the home screen.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.session});
 
@@ -18,41 +17,26 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  UserRole _role = UserRole.engineer;
+  final TextEditingController _email = TextEditingController();
   final TextEditingController _password = TextEditingController();
-
-  // Which engineer the shared Engineer login is simulating (Slice C) — there
-  // are no real per-user accounts yet, so this is how testing the per-engineer
-  // filter works. Only used when _role == UserRole.engineer.
-  String? _engineerName;
 
   bool _submitting = false;
   String? _error;
 
   @override
   void dispose() {
+    _email.dispose();
     _password.dispose();
     super.dispose();
   }
 
   Future<void> _login() async {
-    if (_role == UserRole.engineer && _engineerName == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please choose which engineer you are.')),
-      );
-      return;
-    }
-
     setState(() {
       _submitting = true;
       _error = null;
     });
 
-    final error = await widget.session.login(
-      _role,
-      _password.text,
-      engineerName: _engineerName,
-    );
+    final error = await widget.session.login(_email.text, _password.text);
 
     if (!mounted) return;
     if (error != null) {
@@ -66,7 +50,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
       body: Center(
         child: SingleChildScrollView(
@@ -88,60 +71,17 @@ class _LoginScreenState extends State<LoginScreen> {
                   style: AppTextStyles.title,
                 ),
                 const SizedBox(height: AppSpacing.lg),
-                Text('Role', style: AppTextStyles.label),
-                const SizedBox(height: AppSpacing.sm),
-                GridView.count(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  crossAxisCount: 2,
-                  mainAxisSpacing: AppSpacing.sm,
-                  crossAxisSpacing: AppSpacing.sm,
-                  childAspectRatio: 2.6,
-                  children: [
-                    for (final role in UserRole.values)
-                      Center(
-                        child: ChoiceChip(
-                          label: Text(role.label),
-                          showCheckmark: false,
-                          selected: _role == role,
-                          selectedColor: colorScheme.primaryContainer,
-                          backgroundColor: colorScheme.secondaryContainer,
-                          labelStyle: TextStyle(
-                            color: _role == role
-                                ? colorScheme.onPrimaryContainer
-                                : colorScheme.onSecondaryContainer,
-                          ),
-                          onSelected: _submitting
-                              ? null
-                              : (_) => setState(() {
-                                  _role = role;
-                                  if (_role != UserRole.engineer) {
-                                    _engineerName = null;
-                                  }
-                                }),
-                        ),
-                      ),
-                  ],
-                ),
-                if (_role == UserRole.engineer) ...[
-                  const SizedBox(height: 24),
-                  DropdownButtonFormField<String>(
-                    initialValue: _engineerName,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Which engineer are you?',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: [
-                      for (final name in kEngineerDirectory)
-                        DropdownMenuItem(value: name, child: Text(name)),
-                    ],
-                    onChanged: _submitting
-                        ? null
-                        : (v) => setState(() => _engineerName = v),
+                TextField(
+                  controller: _email,
+                  enabled: !_submitting,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    border: OutlineInputBorder(),
                   ),
-                ],
-                const SizedBox(height: 24),
+                ),
+                const SizedBox(height: AppSpacing.md),
                 TextField(
                   controller: _password,
                   obscureText: true,
@@ -152,9 +92,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     labelText: 'Password',
                     border: const OutlineInputBorder(),
                     errorText: _error,
+                    errorMaxLines: 4,
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: AppSpacing.lg),
                 FilledButton.icon(
                   onPressed: _submitting ? null : _login,
                   icon: _submitting
@@ -164,7 +105,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.login),
-                  label: Text('Sign in as ${_role.label}'),
+                  label: const Text('Sign in'),
                 ),
               ],
             ),

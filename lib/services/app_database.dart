@@ -10,7 +10,7 @@ import '../models/engineer_directory.dart';
 /// Phase 1: local persistence only. Schema covers sites, their blocks, and the
 /// single per-site client inputs form. No Supabase / sync yet.
 const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 23;
+const int _dbVersion = 25;
 
 Future<Database> openAppDatabase() async {
   final docsDir = await getApplicationDocumentsDirectory();
@@ -299,20 +299,69 @@ Future<Database> openAppDatabase() async {
           'REFERENCES material_master_items (id) ON DELETE SET NULL',
         );
       }
+      // v23 -> v24: Roles & Assignment Slice 1c — assignment now carries a
+      // real account id alongside the existing display-name string.
+      // assigned_to_user_id/*_assignee_user_id are plain TEXT with no local
+      // FK: `profiles` is Supabase-only, never mirrored into this local
+      // database (see SyncService.fetchEngineerRoster — the engineer roster
+      // is fetched live, not synced/cached like every other table here).
+      // assigned_to/old_assignee/new_assignee (the name snapshots) are
+      // untouched and stay the fallback/display value; existing
+      // pre-Slice-1c assignments simply have a null *_user_id until
+      // reconciled. Nullable, so every existing row is unaffected.
+      if (oldVersion < 24) {
+        await db.execute('ALTER TABLE sites ADD COLUMN assigned_to_user_id TEXT');
+        await db.execute(
+          'ALTER TABLE survey_assignment_audit ADD COLUMN old_assignee_user_id TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE survey_assignment_audit ADD COLUMN new_assignee_user_id TEXT',
+        );
+      }
+      // v24 -> v25: Roles & Assignment Slice 1d — the remaining 5
+      // attribution fields (who made a change, not who a survey is
+      // assigned to/from — that was 1c) now carry a real account id
+      // alongside their existing display-label string, same convention as
+      // v23->v24. Every *_user_id here is plain TEXT, no local FK, for the
+      // same reason as assigned_to_user_id above. The existing
+      // changed_by_role/added_by/finalized_by/created_by columns are
+      // untouched — they keep recording a role label on old rows and start
+      // recording the signed-in user's real name on new ones (see
+      // SessionController.currentUserName), same "denormalized display,
+      // keep both" pattern as assigned_to. Nullable, so every existing row
+      // is unaffected until its own next mutation.
+      if (oldVersion < 25) {
+        await db.execute(
+          'ALTER TABLE material_master_audit ADD COLUMN changed_by_user_id TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE survey_assignment_audit ADD COLUMN changed_by_user_id TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_snapshots ADD COLUMN finalized_by_user_id TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_revisions ADD COLUMN created_by_user_id TEXT',
+        );
+        await db.execute(
+          'ALTER TABLE bom_manual_entries ADD COLUMN added_by_user_id TEXT',
+        );
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
         CREATE TABLE sites (
-          id             TEXT PRIMARY KEY,
-          name           TEXT NOT NULL,
-          status         TEXT,
-          assigned_to    TEXT,
-          bom_locked     INTEGER NOT NULL DEFAULT 0,
-          archived       INTEGER NOT NULL DEFAULT 0,
-          address        TEXT,
-          client_name    TEXT,
-          client_contact TEXT,
-          dirty          INTEGER NOT NULL DEFAULT 1
+          id                  TEXT PRIMARY KEY,
+          name                TEXT NOT NULL,
+          status              TEXT,
+          assigned_to         TEXT,
+          assigned_to_user_id TEXT,
+          bom_locked          INTEGER NOT NULL DEFAULT 0,
+          archived            INTEGER NOT NULL DEFAULT 0,
+          address             TEXT,
+          client_name         TEXT,
+          client_contact      TEXT,
+          dirty               INTEGER NOT NULL DEFAULT 1
         )
       ''');
 
@@ -635,14 +684,15 @@ Future<void> _createMaterialMasterItemsTable(Database db) async {
 Future<void> _createMaterialMasterAuditTable(Database db) async {
   await db.execute('''
     CREATE TABLE material_master_audit (
-      id                TEXT PRIMARY KEY,
-      material_row_id   TEXT NOT NULL,
-      field_changed     TEXT NOT NULL,
-      old_value         TEXT,
-      new_value         TEXT,
-      changed_by_role   TEXT NOT NULL,
-      changed_at        TEXT NOT NULL,
-      dirty             INTEGER NOT NULL DEFAULT 1
+      id                  TEXT PRIMARY KEY,
+      material_row_id     TEXT NOT NULL,
+      field_changed       TEXT NOT NULL,
+      old_value           TEXT,
+      new_value           TEXT,
+      changed_by_role     TEXT NOT NULL,
+      changed_by_user_id  TEXT,
+      changed_at          TEXT NOT NULL,
+      dirty               INTEGER NOT NULL DEFAULT 1
     )
   ''');
   await db.execute(
@@ -666,19 +716,20 @@ Future<void> _createMaterialMasterAuditTable(Database db) async {
 Future<void> _createBomManualEntriesTable(Database db) async {
   await db.execute('''
     CREATE TABLE bom_manual_entries (
-      id            TEXT PRIMARY KEY,
-      survey_id     TEXT NOT NULL,
-      material_name TEXT NOT NULL,
-      sku           TEXT,
-      item_label    TEXT,
-      sensor_size   TEXT,
-      sensor_type   TEXT,
-      unit          TEXT NOT NULL,
-      qty           REAL NOT NULL,
-      group_code    TEXT NOT NULL,
-      added_by      TEXT NOT NULL,
-      added_at      TEXT NOT NULL,
-      dirty         INTEGER NOT NULL DEFAULT 1,
+      id             TEXT PRIMARY KEY,
+      survey_id      TEXT NOT NULL,
+      material_name  TEXT NOT NULL,
+      sku            TEXT,
+      item_label     TEXT,
+      sensor_size    TEXT,
+      sensor_type    TEXT,
+      unit           TEXT NOT NULL,
+      qty            REAL NOT NULL,
+      group_code     TEXT NOT NULL,
+      added_by       TEXT NOT NULL,
+      added_by_user_id TEXT,
+      added_at       TEXT NOT NULL,
+      dirty          INTEGER NOT NULL DEFAULT 1,
       pending_delete INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
     )
@@ -695,13 +746,14 @@ Future<void> _createBomManualEntriesTable(Database db) async {
 Future<void> _createBomSnapshotsTable(Database db) async {
   await db.execute('''
     CREATE TABLE bom_snapshots (
-      id            TEXT PRIMARY KEY,
-      survey_id     TEXT NOT NULL,
-      version       INTEGER NOT NULL DEFAULT 1,
-      status        TEXT NOT NULL,
-      finalized_by  TEXT NOT NULL,
-      finalized_at  TEXT NOT NULL,
-      dirty         INTEGER NOT NULL DEFAULT 1,
+      id                  TEXT PRIMARY KEY,
+      survey_id           TEXT NOT NULL,
+      version             INTEGER NOT NULL DEFAULT 1,
+      status              TEXT NOT NULL,
+      finalized_by        TEXT NOT NULL,
+      finalized_by_user_id TEXT,
+      finalized_at        TEXT NOT NULL,
+      dirty               INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -754,13 +806,14 @@ Future<void> _createBomSnapshotLinesTable(Database db) async {
 Future<void> _createBomRevisionsTable(Database db) async {
   await db.execute('''
     CREATE TABLE bom_revisions (
-      id          TEXT PRIMARY KEY,
-      survey_id   TEXT NOT NULL,
-      version     INTEGER NOT NULL,
-      reason      TEXT NOT NULL,
-      created_by  TEXT NOT NULL,
-      created_at  TEXT NOT NULL,
-      dirty       INTEGER NOT NULL DEFAULT 1,
+      id               TEXT PRIMARY KEY,
+      survey_id        TEXT NOT NULL,
+      version          INTEGER NOT NULL,
+      reason           TEXT NOT NULL,
+      created_by       TEXT NOT NULL,
+      created_by_user_id TEXT,
+      created_at       TEXT NOT NULL,
+      dirty            INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');
@@ -897,12 +950,15 @@ Future<void> _seedEngineers(Database db) async {
 Future<void> _createSurveyAssignmentAuditTable(Database db) async {
   await db.execute('''
     CREATE TABLE survey_assignment_audit (
-      id              TEXT PRIMARY KEY,
-      site_id         TEXT NOT NULL,
-      old_assignee    TEXT,
-      new_assignee    TEXT NOT NULL,
-      changed_by_role TEXT NOT NULL,
-      changed_at      TEXT NOT NULL,
+      id                   TEXT PRIMARY KEY,
+      site_id              TEXT NOT NULL,
+      old_assignee         TEXT,
+      old_assignee_user_id TEXT,
+      new_assignee         TEXT NOT NULL,
+      new_assignee_user_id TEXT,
+      changed_by_role      TEXT NOT NULL,
+      changed_by_user_id   TEXT,
+      changed_at           TEXT NOT NULL,
       FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
     )
   ''');

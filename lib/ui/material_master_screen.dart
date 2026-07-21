@@ -28,14 +28,20 @@ class MaterialMasterScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.changedByRole,
+    this.changedByUserId,
     required this.group,
   });
 
   final SurveyRepository repository;
 
-  /// Label of the signed-in role (e.g. "Admin"), recorded against every
-  /// change-log entry this screen's mutations write.
+  /// Display-name snapshot of the signed-in user (or a bare role label as a
+  /// fallback), recorded against every change-log entry this screen's
+  /// mutations write.
   final String changedByRole;
+
+  /// The signed-in user's real account id, recorded alongside
+  /// [changedByRole] — see Roles & Assignment Slice 1d.
+  final String? changedByUserId;
 
   /// Which group this screen shows — set once by
   /// [MaterialMasterGroupListScreen] and never changed after that; every row
@@ -112,6 +118,7 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
         builder: (_) => MaterialMasterFormScreen(
           repository: widget.repository,
           changedByRole: widget.changedByRole,
+          changedByUserId: widget.changedByUserId,
           existing: existing,
         ),
       ),
@@ -150,6 +157,7 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
     await widget.repository.deleteMaterialMasterItem(
       item.id,
       changedByRole: widget.changedByRole,
+      changedByUserId: widget.changedByUserId,
     );
     await _load();
   }
@@ -211,6 +219,7 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
       await widget.repository.deleteMaterialMasterItem(
         id,
         changedByRole: widget.changedByRole,
+        changedByUserId: widget.changedByUserId,
       );
     }
     if (!mounted) return;
@@ -262,6 +271,7 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
       await widget.repository.deleteMaterialMasterItem(
         id,
         changedByRole: widget.changedByRole,
+        changedByUserId: widget.changedByUserId,
       );
     }
     await _load();

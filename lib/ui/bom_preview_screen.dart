@@ -41,6 +41,7 @@ class BomPreviewScreen extends StatefulWidget {
     required this.repository,
     required this.site,
     required this.addedByRole,
+    this.addedByUserId,
     this.readOnly = false,
     this.canEditBom = false,
   });
@@ -48,9 +49,14 @@ class BomPreviewScreen extends StatefulWidget {
   final SurveyRepository repository;
   final Site site;
 
-  /// Label of the signed-in role (e.g. "Engineer"), recorded on manual BoM
-  /// entries added from this screen.
+  /// Display-name snapshot of the signed-in user (or a bare role label as a
+  /// fallback), recorded on manual BoM entries, revisions, and the
+  /// finalize action from this screen.
   final String addedByRole;
+
+  /// The signed-in user's real account id, recorded alongside
+  /// [addedByRole] — see Roles & Assignment Slice 1d.
+  final String? addedByUserId;
 
   /// When true: no "Add materials" action and no Finalize FAB — a reviewer
   /// can inspect the computed BoM (and Export/version history once locked)
@@ -307,6 +313,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
               surveyId: widget.site.id,
               surveyName: widget.site.name,
               addedByRole: widget.addedByRole,
+              addedByUserId: widget.addedByUserId,
               group: group,
               autoLines: autoLines,
               readOnly: widget.readOnly,
@@ -328,6 +335,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           surveyId: widget.site.id,
           surveyName: widget.site.name,
           createdByRole: widget.addedByRole,
+          createdByUserId: widget.addedByUserId,
         ),
       ),
     );
@@ -349,6 +357,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
           surveyId: widget.site.id,
           surveyName: widget.site.name,
           createdByRole: widget.addedByRole,
+          createdByUserId: widget.addedByUserId,
         ),
       ),
     );
@@ -447,6 +456,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
       surveyId: widget.site.id,
       lines: lines,
       finalizedBy: widget.addedByRole,
+      finalizedByUserId: widget.addedByUserId,
     );
 
     if (!mounted) return;

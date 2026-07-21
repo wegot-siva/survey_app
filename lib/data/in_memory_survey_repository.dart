@@ -7,8 +7,6 @@ import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
-import '../models/engineer.dart';
-import '../models/engineer_directory.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
@@ -27,12 +25,7 @@ import 'survey_repository.dart';
 /// Phase 0 storage: everything lives in a map and is lost on restart.
 /// Swappable for a real DB later — the UI only sees [SurveyRepository].
 class InMemorySurveyRepository implements SurveyRepository {
-  InMemorySurveyRepository(this._idService) {
-    _engineers = [
-      for (final name in kEngineerDirectory)
-        Engineer(id: _idService.newId(), name: name),
-    ];
-  }
+  InMemorySurveyRepository(this._idService);
 
   final IdService _idService;
   final Map<String, Site> _sites = {};
@@ -52,7 +45,6 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Map<String, List<BomRevisionLine>> _bomRevisionLines = {}; // keyed by revisionId
   final Map<String, BomManualEditSnapshot> _bomManualEditSnapshots = {}; // keyed by id
   final Map<String, List<BomManualEditSnapshotLine>> _bomManualEditSnapshotLines = {}; // keyed by snapshotId
-  late final List<Engineer> _engineers;
   final Map<String, SurveyAssignmentAuditEntry> _assignmentAudit = {};
 
   // ---- Dirty-tracking (sync) --------------------------------------------
@@ -593,6 +585,7 @@ class InMemorySurveyRepository implements SurveyRepository {
   Future<MaterialMasterItem> addMaterialMasterItem(
     MaterialMasterItem item, {
     required String changedByRole,
+    String? changedByUserId,
   }) async {
     final stored = item.copyWithId(_idService.newId());
     _materialMasterItems[stored.id] = stored;
@@ -601,6 +594,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       _auditBuilder.forCreate(
         item: stored,
         changedByRole: changedByRole,
+        changedByUserId: changedByUserId,
         changedAt: DateTime.now(),
       ),
     );
@@ -611,6 +605,7 @@ class InMemorySurveyRepository implements SurveyRepository {
   Future<void> updateMaterialMasterItem(
     MaterialMasterItem item, {
     required String changedByRole,
+    String? changedByUserId,
   }) async {
     final existing = _materialMasterItems[item.id];
     _materialMasterItems[item.id] = item;
@@ -621,6 +616,7 @@ class InMemorySurveyRepository implements SurveyRepository {
           oldItem: existing,
           newItem: item,
           changedByRole: changedByRole,
+          changedByUserId: changedByUserId,
           changedAt: DateTime.now(),
         ),
       );
@@ -631,6 +627,7 @@ class InMemorySurveyRepository implements SurveyRepository {
   Future<void> deleteMaterialMasterItem(
     String id, {
     required String changedByRole,
+    String? changedByUserId,
   }) async {
     final existing = _materialMasterItems[id];
     if (existing == null) return;
@@ -643,6 +640,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       _auditBuilder.forDelete(
         item: existing,
         changedByRole: changedByRole,
+        changedByUserId: changedByUserId,
         changedAt: DateTime.now(),
       ),
     );
@@ -894,6 +892,7 @@ class InMemorySurveyRepository implements SurveyRepository {
     required String surveyId,
     required List<BomSnapshotLine> lines,
     required String finalizedBy,
+    String? finalizedByUserId,
   }) async {
     final existing = _bomSnapshots[surveyId];
     if (existing != null) return existing;
@@ -902,6 +901,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       id: _idService.newId(),
       surveyId: surveyId,
       finalizedBy: finalizedBy,
+      finalizedByUserId: finalizedByUserId,
       finalizedAt: DateTime.now(),
     );
     _bomSnapshots[surveyId] = snapshot;
@@ -981,6 +981,7 @@ class InMemorySurveyRepository implements SurveyRepository {
     required String reason,
     required List<BomRevisionLine> lines,
     required String createdBy,
+    String? createdByUserId,
   }) async {
     final nextVersion = await _nextBomVersion(surveyId);
 
@@ -990,6 +991,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       version: nextVersion,
       reason: reason,
       createdBy: createdBy,
+      createdByUserId: createdByUserId,
       createdAt: DateTime.now(),
     );
     _bomRevisions[revision.id] = revision;
@@ -1094,13 +1096,12 @@ class InMemorySurveyRepository implements SurveyRepository {
   }
 
   @override
-  Future<List<Engineer>> getEngineers() async => List.unmodifiable(_engineers);
-
-  @override
   Future<void> reassignSurvey({
     required String siteId,
+    required String newAssigneeUserId,
     required String newAssignee,
     required String changedByRole,
+    String? changedByUserId,
   }) async {
     final site = _sites[siteId];
     if (site == null) {
@@ -1114,15 +1115,22 @@ class InMemorySurveyRepository implements SurveyRepository {
     }
 
     final oldAssignee = site.assignedTo;
-    _sites[siteId] = site.copyWith(assignedTo: newAssignee);
+    final oldAssigneeUserId = site.assignedToUserId;
+    _sites[siteId] = site.copyWith(
+      assignedTo: newAssignee,
+      assignedToUserId: newAssigneeUserId,
+    );
     _dirtySiteIds.add(siteId);
 
     final entry = SurveyAssignmentAuditEntry(
       id: _idService.newId(),
       siteId: siteId,
       oldAssignee: oldAssignee,
+      oldAssigneeUserId: oldAssigneeUserId,
       newAssignee: newAssignee,
+      newAssigneeUserId: newAssigneeUserId,
       changedByRole: changedByRole,
+      changedByUserId: changedByUserId,
       changedAt: DateTime.now(),
     );
     _assignmentAudit[entry.id] = entry;

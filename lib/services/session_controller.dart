@@ -1,91 +1,81 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../data/auth_repository.dart';
 import '../models/user_role.dart';
-import 'session_store.dart';
-
-/// A [SessionStore] that persists nothing. The default when
-/// [SessionController] is constructed without a real store (every existing
-/// test does this), so those callers keep their exact prior in-memory-only
-/// behavior with no shared_preferences access at all.
-class _NoopSessionStore implements SessionStore {
-  const _NoopSessionStore();
-
-  @override
-  Future<({UserRole role, String? engineerName})?> load() async => null;
-
-  @override
-  Future<void> save(UserRole role, String? engineerName) async {}
-
-  @override
-  Future<void> clear() async {}
-}
 
 /// Holds "who is logged in" as app state, so any screen can read the current
-/// role. Delegates credential checks to an [AuthRepository] and persistence
-/// (surviving an app close/reopen) to a [SessionStore].
-///
-/// [store] is optional and defaults to a no-op — pass a real store (e.g.
-/// [SharedPreferencesSessionStore]) in production; leave it unset in tests
-/// that only care about in-memory session state.
+/// user/role. Delegates every credential check, and session persistence, to
+/// an [AuthRepository] — persistence is Supabase's own (see
+/// [AuthRepository.currentUser] / [AuthRepository.authStateChanges]), not a
+/// custom store, since a real Auth SDK already does this correctly.
 class SessionController extends ChangeNotifier {
-  SessionController(this._auth, [SessionStore? store])
-    : _store = store ?? const _NoopSessionStore();
+  SessionController(this._auth);
 
   final AuthRepository _auth;
-  final SessionStore _store;
+  StreamSubscription<AuthenticatedUser?>? _authSub;
 
-  UserRole? _currentRole;
-  String? _currentEngineerName;
+  AuthenticatedUser? _currentUser;
 
-  /// The role currently signed in, or null when logged out.
-  UserRole? get currentRole => _currentRole;
+  /// The role currently signed in, or null when logged out. Kept as its own
+  /// getter (derived from [_currentUser]) so every existing role-gate check
+  /// across the app (`session.currentRole == UserRole.x`) keeps working
+  /// unchanged.
+  UserRole? get currentRole => _currentUser?.role;
 
-  /// Which engineer the shared Engineer login is simulating (Slice C). Only
-  /// meaningful when [currentRole] is [UserRole.engineer]; null otherwise.
-  String? get currentEngineerName => _currentEngineerName;
+  /// The signed-in user's id (`auth.uid()` / `profiles.id`), or null when
+  /// logged out. Not yet read anywhere — Slice 1c (assignment) and Slice 1d
+  /// (attribution) are what wire this in.
+  String? get currentUserId => _currentUser?.userId;
 
-  bool get isLoggedIn => _currentRole != null;
+  /// The signed-in user's real name, or null when logged out.
+  String? get currentUserName => _currentUser?.fullName;
 
-  /// Restores a persisted session (if any), so an app close/reopen while
-  /// still "logged in" skips the login screen. Call once at startup, before
-  /// anything reads [isLoggedIn] — a no-op if nothing was persisted (nobody
-  /// had signed in yet, or the last session ended with an explicit
-  /// [logout]).
+  bool get isLoggedIn => _currentUser != null;
+
+  /// Restores a persisted session (if any) from Supabase's own session
+  /// storage, so an app close/reopen while still signed in skips the login
+  /// screen. Call once at startup, before anything reads [isLoggedIn].
+  ///
+  /// Also subscribes to [AuthRepository.authStateChanges] so a token
+  /// refresh/expiry or a sign-out triggered elsewhere (not through this
+  /// [logout]) is reflected here too, not just at startup.
   Future<void> restore() async {
-    final persisted = await _store.load();
-    if (persisted == null) return;
-    _currentRole = persisted.role;
-    _currentEngineerName = persisted.engineerName;
+    _currentUser = await _auth.currentUser();
     notifyListeners();
+
+    _authSub ??= _auth.authStateChanges.listen((user) {
+      _currentUser = user;
+      notifyListeners();
+    });
   }
 
-  /// Attempts to sign in as [role]. [engineerName] is required to mean
-  /// anything when [role] is [UserRole.engineer] — it's how the shared
-  /// Engineer login simulates "being" a specific engineer until per-user
-  /// accounts exist. Returns null on success, or a human-readable error
-  /// message on failure.
-  Future<String?> login(
-    UserRole role,
-    String password, {
-    String? engineerName,
-  }) async {
-    final ok = await _auth.authenticate(role, password);
-    if (!ok) return 'Incorrect password for ${role.label}.';
-    _currentRole = role;
-    _currentEngineerName = role == UserRole.engineer ? engineerName : null;
-    await _store.save(role, _currentEngineerName);
-    notifyListeners();
-    return null;
+  /// Attempts to sign in with [email]/[password]. Returns null on success,
+  /// or a human-readable error message on failure (wrong credentials, no
+  /// profile, no network on a first sign-in).
+  Future<String?> login(String email, String password) async {
+    try {
+      _currentUser = await _auth.signIn(email, password);
+      notifyListeners();
+      return null;
+    } on AuthFailure catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'Something went wrong signing in: $e';
+    }
   }
 
-  /// Signs out, returning to the login screen. Clears the persisted session
-  /// first, so a subsequent app close/reopen shows the login screen rather
-  /// than restoring.
+  /// Signs out, returning to the login screen.
   Future<void> logout() async {
-    _currentRole = null;
-    _currentEngineerName = null;
-    await _store.clear();
+    await _auth.signOut();
+    _currentUser = null;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    unawaited(_authSub?.cancel());
+    super.dispose();
   }
 }

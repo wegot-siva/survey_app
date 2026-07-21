@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 
-import 'data/shared_password_auth_repository.dart';
 import 'data/sqflite_survey_repository.dart';
+import 'data/supabase_auth_repository.dart';
 import 'data/supabase_survey_data_source.dart';
 import 'data/survey_repository.dart';
 import 'services/app_database.dart';
 import 'services/id_service.dart';
 import 'services/session_controller.dart';
-import 'services/shared_preferences_session_store.dart';
 import 'services/supabase_service.dart';
 import 'services/sync_service.dart';
 import 'ui/home_screen.dart';
@@ -37,16 +36,14 @@ Future<void> main() async {
     SupabaseSurveyDataSource(),
   );
 
-  // Role-based login (Roles & Assignment — Slice A). Shared-per-role login,
-  // behind the AuthRepository seam so real per-user auth can replace it later.
-  // The active role is persisted (SharedPreferencesSessionStore) so an app
-  // close/reopen restores it directly — restore() checks for that before the
-  // first frame, so the login screen only shows when nothing was persisted
-  // (or the previous session ended with an explicit logout).
-  final session = SessionController(
-    const SharedPasswordAuthRepository(),
-    const SharedPreferencesSessionStore(),
-  );
+  // Per-user login (Roles & Assignment — Slice 1b). Real Supabase Auth
+  // accounts, one per person, each resolving to one of the 4 existing roles
+  // via `profiles` — see SupabaseAuthRepository. Session persistence is
+  // Supabase's own (not a custom store): restore() checks for an existing
+  // session before the first frame, so the login screen only shows when
+  // nothing was persisted (or the previous session ended with an explicit
+  // logout).
+  final session = SessionController(SupabaseAuthRepository(supabaseService));
   await session.restore();
 
   runApp(

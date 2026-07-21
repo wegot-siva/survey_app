@@ -15,6 +15,7 @@ class BomSnapshot {
     this.version = 1,
     this.status = kBomSnapshotStatusFinal,
     required this.finalizedBy,
+    this.finalizedByUserId,
     required this.finalizedAt,
   });
 
@@ -24,9 +25,14 @@ class BomSnapshot {
   final int version;
   final String status;
 
-  /// Label of the role that finalized this BoM (e.g. "Engineer") — shared-login
-  /// roles for now, not a real per-user identity.
+  /// Display snapshot of who finalized this BoM — the signed-in user's real
+  /// name (Roles & Assignment Slice 1d) going forward; a bare role label
+  /// (e.g. "Engineer") on any snapshot written before that slice.
   final String finalizedBy;
+
+  /// The real account id (`profiles.id`) that finalized this BoM. Null on
+  /// any snapshot written before Slice 1d.
+  final String? finalizedByUserId;
 
   final DateTime finalizedAt;
 
@@ -36,6 +42,7 @@ class BomSnapshot {
     version: version,
     status: status,
     finalizedBy: finalizedBy,
+    finalizedByUserId: finalizedByUserId,
     finalizedAt: finalizedAt,
   );
 }

@@ -20,12 +20,14 @@ class BomRevisionsScreen extends StatefulWidget {
     required this.surveyId,
     required this.surveyName,
     required this.createdByRole,
+    this.createdByUserId,
   });
 
   final SurveyRepository repository;
   final String surveyId;
   final String surveyName;
   final String createdByRole;
+  final String? createdByUserId;
 
   @override
   State<BomRevisionsScreen> createState() => _BomRevisionsScreenState();
@@ -144,6 +146,7 @@ class _BomRevisionsScreenState extends State<BomRevisionsScreen> {
           surveyId: widget.surveyId,
           surveyName: widget.surveyName,
           createdByRole: widget.createdByRole,
+          createdByUserId: widget.createdByUserId,
         ),
       ),
     );

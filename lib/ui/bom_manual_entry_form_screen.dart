@@ -27,6 +27,7 @@ class BomManualEntryFormScreen extends StatefulWidget {
     required this.repository,
     required this.surveyId,
     required this.addedByRole,
+    this.addedByUserId,
     this.existing,
     this.lockedGroup,
   });
@@ -34,10 +35,15 @@ class BomManualEntryFormScreen extends StatefulWidget {
   final SurveyRepository repository;
   final String surveyId;
 
-  /// Label of the signed-in role (e.g. "Engineer"), recorded as `addedBy` for
-  /// a freshly-created entry. Ignored when editing (the original `addedBy` /
-  /// `addedAt` are preserved — see [BomManualEntry]).
+  /// Display-name snapshot of the signed-in user (or a bare role label as a
+  /// fallback), recorded as `addedBy` for a freshly-created entry. Ignored
+  /// when editing (the original `addedBy`/`addedByUserId`/`addedAt` are
+  /// preserved — see [BomManualEntry]).
   final String addedByRole;
+
+  /// The signed-in user's real account id, recorded as `addedByUserId` for a
+  /// freshly-created entry — see Roles & Assignment Slice 1d.
+  final String? addedByUserId;
 
   final BomManualEntry? existing;
 
@@ -149,6 +155,7 @@ class _BomManualEntryFormScreenState extends State<BomManualEntryFormScreen> {
       qty: qty,
       group: group,
       addedBy: existing?.addedBy ?? widget.addedByRole,
+      addedByUserId: existing?.addedByUserId ?? widget.addedByUserId,
       addedAt: existing?.addedAt ?? DateTime.now(),
     );
 

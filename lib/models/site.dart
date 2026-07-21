@@ -10,6 +10,7 @@ class Site {
     this.clientInputs,
     this.status,
     this.assignedTo,
+    this.assignedToUserId,
     this.bomLocked = false,
     this.archived = false,
     this.address = '',
@@ -26,9 +27,19 @@ class Site {
   /// Null until Sales assigns the survey.
   final String? status;
 
-  /// The engineer this survey is assigned to (a name from the hardcoded
-  /// engineer directory — see Roles & Assignment Slice B). Null until assigned.
+  /// The assigned engineer's display name — a denormalized snapshot of
+  /// [assignedToUserId]'s `profiles.full_name` at the time of assignment, so
+  /// this can be shown without a join. [assignedToUserId] is the real source
+  /// of truth (see Roles & Assignment Slice 1c); this stays around purely for
+  /// display and as a fallback for the handful of sites assigned before real
+  /// accounts existed, whose [assignedToUserId] may still be null pending
+  /// manual reconciliation. Null until assigned.
   final String? assignedTo;
+
+  /// The assigned engineer's real account id (`profiles.id` / `auth.uid()`).
+  /// Null until assigned, and also null for pre-Slice-1c assignments that
+  /// haven't been reconciled to a real account yet — see [assignedTo].
+  final String? assignedToUserId;
 
   /// Whether this survey's BoM has been finalized (Finalize phase). Set by
   /// [SurveyRepository.finalizeBom] alongside writing the [BomSnapshot] —
@@ -54,6 +65,7 @@ class Site {
     ClientInputs? clientInputs,
     String? status,
     String? assignedTo,
+    String? assignedToUserId,
     bool? archived,
     String? address,
     String? clientName,
@@ -66,6 +78,7 @@ class Site {
       clientInputs: clientInputs ?? this.clientInputs,
       status: status ?? this.status,
       assignedTo: assignedTo ?? this.assignedTo,
+      assignedToUserId: assignedToUserId ?? this.assignedToUserId,
       bomLocked: bomLocked,
       archived: archived ?? this.archived,
       address: address ?? this.address,

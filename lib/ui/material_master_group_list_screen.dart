@@ -17,12 +17,14 @@ class MaterialMasterGroupListScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.changedByRole,
+    this.changedByUserId,
   });
 
   final SurveyRepository repository;
 
   /// Threaded through unchanged to every [MaterialMasterScreen] this pushes.
   final String changedByRole;
+  final String? changedByUserId;
 
   @override
   State<MaterialMasterGroupListScreen> createState() =>
@@ -67,6 +69,7 @@ class _MaterialMasterGroupListScreenState
         builder: (_) => MaterialMasterScreen(
           repository: widget.repository,
           changedByRole: widget.changedByRole,
+          changedByUserId: widget.changedByUserId,
           group: group,
         ),
       ),

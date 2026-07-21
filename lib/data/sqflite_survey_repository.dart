@@ -9,7 +9,6 @@ import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
-import '../models/engineer.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
@@ -92,6 +91,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
           'name': site.name,
           'status': site.status,
           'assigned_to': site.assignedTo,
+          'assigned_to_user_id': site.assignedToUserId,
           'archived': site.archived ? 1 : 0,
           'address': site.address,
           'client_name': site.clientName,
@@ -218,6 +218,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
       clientInputs: clientInputs,
       status: siteRow['status'] as String?,
       assignedTo: siteRow['assigned_to'] as String?,
+      assignedToUserId: siteRow['assigned_to_user_id'] as String?,
       bomLocked: _intToBool(siteRow['bom_locked'] as int?) ?? false,
       archived: _intToBool(siteRow['archived'] as int?) ?? false,
       address: siteRow['address'] as String? ?? '',
@@ -618,6 +619,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
   Future<MaterialMasterItem> addMaterialMasterItem(
     MaterialMasterItem item, {
     required String changedByRole,
+    String? changedByUserId,
   }) async {
     final stored = item.copyWithId(_idService.newId());
     await _db.transaction((txn) async {
@@ -627,6 +629,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
         _materialMasterAuditBuilder.forCreate(
           item: stored,
           changedByRole: changedByRole,
+          changedByUserId: changedByUserId,
           changedAt: DateTime.now(),
         ),
       );
@@ -638,6 +641,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
   Future<void> updateMaterialMasterItem(
     MaterialMasterItem item, {
     required String changedByRole,
+    String? changedByUserId,
   }) async {
     await _db.transaction((txn) async {
       final existingRows = await txn.query(
@@ -660,6 +664,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
             oldItem: existing,
             newItem: item,
             changedByRole: changedByRole,
+            changedByUserId: changedByUserId,
             changedAt: DateTime.now(),
           ),
         );
@@ -671,6 +676,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
   Future<void> deleteMaterialMasterItem(
     String id, {
     required String changedByRole,
+    String? changedByUserId,
   }) async {
     await _db.transaction((txn) async {
       final existingRows = await txn.query(
@@ -696,6 +702,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
           _materialMasterAuditBuilder.forDelete(
             item: existing,
             changedByRole: changedByRole,
+            changedByUserId: changedByUserId,
             changedAt: DateTime.now(),
           ),
         );
@@ -764,6 +771,15 @@ class SqfliteSurveyRepository implements SurveyRepository {
       // more likely to mean the fetch went wrong than that every row was
       // genuinely deleted, and treating it as the latter would wipe the
       // whole local catalog on a fluke.
+      //
+      // Deliberately kept unconditional (unlike _pullAndReconcile's
+      // reconcileDeletes flag, added in Slice 2b-prereq and defaulted off
+      // for every role-scoped table) — material_master_items is the one
+      // table whose remote visibility stays universal regardless of role
+      // under the RLS plan (everyone SELECTs the full active catalog), so a
+      // fetch here is always the complete table and absence-based deletion
+      // stays safe. See _pullAndReconcile's doc for the tables where it
+      // isn't anymore.
       if (remoteItems.isEmpty) return;
       final localRows = await txn.query(
         'material_master_items',
@@ -810,6 +826,23 @@ class SqfliteSurveyRepository implements SurveyRepository {
     required String idColumn,
     required List<String> boolColumns,
     bool hasPendingDelete = true,
+    // Slice 2b-prereq: absence-based delete detection ("missing from this
+    // fetch means deleted remotely") is only safe when a fetch is guaranteed
+    // to be the COMPLETE table regardless of who's asking. Once RLS scopes a
+    // table's visibility by role/identity (everything cascading from
+    // `sites`, under the RLS plan), a legitimately narrower fetch — not a
+    // remote deletion — would otherwise look identical to one, and this
+    // block would silently mass-delete every now-invisible row on the very
+    // next sync. Defaults to false; only material_master_items (whose
+    // remote visibility stays universal — everyone SELECTs the full active
+    // catalog regardless of role) opts in, via its own separate
+    // upsertMaterialMasterItemsFromRemote, not this shared helper. A local
+    // row that's genuinely been deleted remotely on a reconcileDeletes:false
+    // table simply lingers locally rather than risking that silent mass
+    // deletion — a real tombstone mechanism for these tables (a remote
+    // deleted_at column, checked explicitly instead of inferred from
+    // absence) is deferred as its own later, separate slice.
+    bool reconcileDeletes = false,
   }) async {
     Map<String, Object?> toLocalRow(Map<String, dynamic> r) {
       final row = Map<String, Object?>.from(r);
@@ -854,12 +887,14 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
       // Reconciliation: a row that's active locally (not dirty, not already
       // pending its own local delete) but absent from this complete remote
-      // fetch was deleted directly in Supabase — remove it here too. Skipped
-      // entirely when remoteRows is empty: a wholesale-empty result is far
-      // more likely to mean the fetch went wrong than that every row was
+      // fetch was deleted directly in Supabase — remove it here too. Gated
+      // on reconcileDeletes (see its doc above) — never runs at all for a
+      // role-scoped table. Also skipped when remoteRows is empty even when
+      // reconcileDeletes is true: a wholesale-empty result is far more
+      // likely to mean the fetch went wrong than that every row was
       // genuinely deleted, and treating it as the latter would wipe the
       // whole local table on a fluke.
-      if (remoteRows.isEmpty) return;
+      if (!reconcileDeletes || remoteRows.isEmpty) return;
       final remoteIds = remoteRows.map((r) => r[idColumn] as String).toSet();
       final localRows = await txn.query(table, columns: [idColumn, ...protectColumns]);
       for (final row in localRows) {
@@ -1268,6 +1303,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
     required String surveyId,
     required List<BomSnapshotLine> lines,
     required String finalizedBy,
+    String? finalizedByUserId,
   }) async {
     // Idempotent: a survey can only ever have one snapshot in this slice —
     // guards against a double-tap (or any future caller) creating a duplicate.
@@ -1278,6 +1314,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
       id: _idService.newId(),
       surveyId: surveyId,
       finalizedBy: finalizedBy,
+      finalizedByUserId: finalizedByUserId,
       finalizedAt: DateTime.now(),
     );
 
@@ -1359,6 +1396,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
     required String reason,
     required List<BomRevisionLine> lines,
     required String createdBy,
+    String? createdByUserId,
   }) async {
     final nextVersion = await _nextBomVersion(surveyId);
 
@@ -1368,6 +1406,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
       version: nextVersion,
       reason: reason,
       createdBy: createdBy,
+      createdByUserId: createdByUserId,
       createdAt: DateTime.now(),
     );
 
@@ -1493,25 +1532,19 @@ class SqfliteSurveyRepository implements SurveyRepository {
     return versions.reduce((a, b) => a > b ? a : b) + 1;
   }
 
-  // ---- Engineer roster + survey reassignment -------------------------------
-
-  @override
-  Future<List<Engineer>> getEngineers() async {
-    final rows = await _db.query('engineers', orderBy: 'name COLLATE NOCASE');
-    return rows
-        .map((r) => Engineer(id: r['id']! as String, name: r['name']! as String))
-        .toList(growable: false);
-  }
+  // ---- Survey reassignment ---------------------------------------------
 
   @override
   Future<void> reassignSurvey({
     required String siteId,
+    required String newAssigneeUserId,
     required String newAssignee,
     required String changedByRole,
+    String? changedByUserId,
   }) async {
     final rows = await _db.query(
       'sites',
-      columns: ['assigned_to', 'status'],
+      columns: ['assigned_to', 'assigned_to_user_id', 'status'],
       where: 'id = ?',
       whereArgs: [siteId],
       limit: 1,
@@ -1520,6 +1553,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
       throw StateError('Cannot reassign: site "$siteId" not found.');
     }
     final oldAssignee = rows.first['assigned_to'] as String?;
+    final oldAssigneeUserId = rows.first['assigned_to_user_id'] as String?;
     final status = rows.first['status'] as String?;
     if (status != SurveyStatus.assigned) {
       throw StateError(
@@ -1531,7 +1565,11 @@ class SqfliteSurveyRepository implements SurveyRepository {
     await _db.transaction((txn) async {
       await txn.update(
         'sites',
-        {'assigned_to': newAssignee, 'dirty': 1},
+        {
+          'assigned_to': newAssignee,
+          'assigned_to_user_id': newAssigneeUserId,
+          'dirty': 1,
+        },
         where: 'id = ?',
         whereArgs: [siteId],
       );
@@ -1539,8 +1577,11 @@ class SqfliteSurveyRepository implements SurveyRepository {
         'id': _idService.newId(),
         'site_id': siteId,
         'old_assignee': oldAssignee,
+        'old_assignee_user_id': oldAssigneeUserId,
         'new_assignee': newAssignee,
+        'new_assignee_user_id': newAssigneeUserId,
         'changed_by_role': changedByRole,
+        'changed_by_user_id': changedByUserId,
         'changed_at': DateTime.now().toIso8601String(),
       });
     });
@@ -1978,6 +2019,7 @@ Map<String, Object?> _materialMasterAuditEntryToRow(
     'old_value': e.oldValue,
     'new_value': e.newValue,
     'changed_by_role': e.changedByRole,
+    'changed_by_user_id': e.changedByUserId,
     'changed_at': e.changedAt.toIso8601String(),
     'dirty': 1,
   };
@@ -1993,6 +2035,7 @@ MaterialMasterAuditEntry _materialMasterAuditEntryFromRow(
     oldValue: r['old_value'] as String?,
     newValue: r['new_value'] as String?,
     changedByRole: (r['changed_by_role'] as String?) ?? '',
+    changedByUserId: r['changed_by_user_id'] as String?,
     changedAt:
         DateTime.tryParse((r['changed_at'] as String?) ?? '') ?? DateTime(1970),
   );
@@ -2051,6 +2094,7 @@ Map<String, Object?> _bomManualEntryToRow(BomManualEntry e) {
     // by the picker UI, not by this mapper.
     'group_code': e.group.code,
     'added_by': e.addedBy,
+    'added_by_user_id': e.addedByUserId,
     'added_at': e.addedAt.toIso8601String(),
     'dirty': 1,
   };
@@ -2069,6 +2113,7 @@ BomManualEntry _bomManualEntryFromRow(Map<String, Object?> r) {
     qty: (r['qty'] as num?)?.toDouble() ?? 0,
     group: _materialGroupFromCode(r['group_code'] as String?),
     addedBy: (r['added_by'] as String?) ?? '',
+    addedByUserId: r['added_by_user_id'] as String?,
     addedAt:
         DateTime.tryParse((r['added_at'] as String?) ?? '') ?? DateTime(1970),
   );
@@ -2091,6 +2136,7 @@ Map<String, Object?> _bomSnapshotToRow(BomSnapshot s) {
     'version': s.version,
     'status': s.status,
     'finalized_by': s.finalizedBy,
+    'finalized_by_user_id': s.finalizedByUserId,
     'finalized_at': s.finalizedAt.toIso8601String(),
     'dirty': 1,
   };
@@ -2103,6 +2149,7 @@ BomSnapshot _bomSnapshotFromRow(Map<String, Object?> r) {
     version: (r['version'] as int?) ?? 1,
     status: (r['status'] as String?) ?? kBomSnapshotStatusFinal,
     finalizedBy: (r['finalized_by'] as String?) ?? '',
+    finalizedByUserId: r['finalized_by_user_id'] as String?,
     finalizedAt:
         DateTime.tryParse((r['finalized_at'] as String?) ?? '') ?? DateTime(1970),
   );
@@ -2155,6 +2202,7 @@ Map<String, Object?> _bomRevisionToRow(BomRevision v) {
     'version': v.version,
     'reason': v.reason,
     'created_by': v.createdBy,
+    'created_by_user_id': v.createdByUserId,
     'created_at': v.createdAt.toIso8601String(),
     'dirty': 1,
   };
@@ -2167,6 +2215,7 @@ BomRevision _bomRevisionFromRow(Map<String, Object?> r) {
     version: (r['version'] as int?) ?? 2,
     reason: (r['reason'] as String?) ?? '',
     createdBy: (r['created_by'] as String?) ?? '',
+    createdByUserId: r['created_by_user_id'] as String?,
     createdAt:
         DateTime.tryParse((r['created_at'] as String?) ?? '') ?? DateTime(1970),
   );
@@ -2272,8 +2321,11 @@ SurveyAssignmentAuditEntry _surveyAssignmentAuditEntryFromRow(
     id: r['id']! as String,
     siteId: r['site_id']! as String,
     oldAssignee: r['old_assignee'] as String?,
+    oldAssigneeUserId: r['old_assignee_user_id'] as String?,
     newAssignee: (r['new_assignee'] as String?) ?? '',
+    newAssigneeUserId: r['new_assignee_user_id'] as String?,
     changedByRole: (r['changed_by_role'] as String?) ?? '',
+    changedByUserId: r['changed_by_user_id'] as String?,
     changedAt:
         DateTime.tryParse((r['changed_at'] as String?) ?? '') ?? DateTime(1970),
   );

@@ -12,6 +12,7 @@ class MaterialMasterAuditEntry {
     this.oldValue,
     this.newValue,
     required this.changedByRole,
+    this.changedByUserId,
     required this.changedAt,
   });
 
@@ -26,9 +27,15 @@ class MaterialMasterAuditEntry {
   final String? oldValue;
   final String? newValue;
 
-  /// Label of the role that made the change (e.g. "Admin") — shared-login
-  /// roles for now, not a real per-user identity.
+  /// Display snapshot of who made the change — the signed-in user's real
+  /// name (Roles & Assignment Slice 1d) going forward; a bare role label
+  /// (e.g. "Admin") on any row written before that slice. [changedByUserId]
+  /// is the real source of truth for new rows; null on old ones.
   final String changedByRole;
+
+  /// The real account id (`profiles.id`) that made the change. Null on any
+  /// row written before Slice 1d.
+  final String? changedByUserId;
 
   final DateTime changedAt;
 
@@ -39,6 +46,7 @@ class MaterialMasterAuditEntry {
     oldValue: oldValue,
     newValue: newValue,
     changedByRole: changedByRole,
+    changedByUserId: changedByUserId,
     changedAt: changedAt,
   );
 }

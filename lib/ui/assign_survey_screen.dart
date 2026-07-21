@@ -1,9 +1,12 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
-import '../models/engineer_directory.dart';
+import '../models/engineer.dart';
 import '../models/site.dart';
 import '../models/survey_status.dart';
+import '../services/sync_service.dart';
 import 'client_inputs_screen.dart';
 
 /// Sales' "New survey" flow (Roles & Assignment — Slice B). Approver also
@@ -16,9 +19,14 @@ import 'client_inputs_screen.dart';
 /// customer — reuses [ClientInputsScreen] unmodified), then assign an
 /// engineer and set status to [SurveyStatus.assigned].
 class AssignSurveyScreen extends StatefulWidget {
-  const AssignSurveyScreen({super.key, required this.repository});
+  const AssignSurveyScreen({
+    super.key,
+    required this.repository,
+    required this.syncService,
+  });
 
   final SurveyRepository repository;
+  final SyncService syncService;
 
   @override
   State<AssignSurveyScreen> createState() => _AssignSurveyScreenState();
@@ -28,13 +36,42 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
   final _nameController = TextEditingController();
 
   Site? _createdSite;
-  String? _engineer;
+  Engineer? _engineer;
   bool _saving = false;
+
+  List<Engineer>? _roster;
+  String? _rosterError;
+  bool _loadingRoster = false;
 
   @override
   void dispose() {
     _nameController.dispose();
     super.dispose();
+  }
+
+  /// The engineer roster is a live Supabase query (real accounts, not the
+  /// retired hardcoded list — see SyncService.fetchEngineerRoster), so it
+  /// needs its own loading/error state, fetched once the site exists (step
+  /// 2 of this screen) rather than up front.
+  Future<void> _loadRoster() async {
+    setState(() {
+      _loadingRoster = true;
+      _rosterError = null;
+    });
+    try {
+      final roster = await widget.syncService.fetchEngineerRoster();
+      if (!mounted) return;
+      setState(() {
+        _roster = roster;
+        _loadingRoster = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _rosterError = 'Could not load the engineer list: $e';
+        _loadingRoster = false;
+      });
+    }
   }
 
   Future<void> _createSite() async {
@@ -53,6 +90,7 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
       _createdSite = site;
       _saving = false;
     });
+    unawaited(_loadRoster());
   }
 
   Future<void> _openClientInputs() async {
@@ -80,13 +118,18 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
       return;
     }
 
+    final engineer = _engineer!;
     setState(() => _saving = true);
     await widget.repository.updateSite(
-      site.copyWith(assignedTo: _engineer, status: SurveyStatus.assigned),
+      site.copyWith(
+        assignedTo: engineer.name,
+        assignedToUserId: engineer.id,
+        status: SurveyStatus.assigned,
+      ),
     );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Survey assigned to $_engineer.')),
+      SnackBar(content: Text('Survey assigned to ${engineer.name}.')),
     );
     Navigator.of(context).pop();
   }
@@ -156,22 +199,10 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
           ),
         ),
         const SizedBox(height: 24),
-        DropdownButtonFormField<String>(
-          initialValue: _engineer,
-          isExpanded: true,
-          decoration: const InputDecoration(
-            labelText: 'Assign to engineer',
-            border: OutlineInputBorder(),
-          ),
-          items: [
-            for (final engineer in kEngineerDirectory)
-              DropdownMenuItem(value: engineer, child: Text(engineer)),
-          ],
-          onChanged: (v) => setState(() => _engineer = v),
-        ),
+        _buildEngineerPicker(),
         const SizedBox(height: 24),
         FilledButton.icon(
-          onPressed: _saving ? null : _assign,
+          onPressed: _saving || _engineer == null ? null : _assign,
           icon: _saving
               ? const SizedBox(
                   width: 18,
@@ -182,6 +213,41 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
           label: const Text('Assign survey'),
         ),
       ],
+    );
+  }
+
+  Widget _buildEngineerPicker() {
+    if (_loadingRoster) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_rosterError != null) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.error_outline, size: 18),
+          const SizedBox(width: 8),
+          Expanded(child: Text(_rosterError!)),
+          TextButton(onPressed: _loadRoster, child: const Text('Retry')),
+        ],
+      );
+    }
+    final roster = _roster ?? const [];
+    return DropdownButtonFormField<Engineer>(
+      initialValue: _engineer,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: 'Assign to engineer',
+        border: const OutlineInputBorder(),
+        helperText: roster.isEmpty ? 'No engineer accounts found.' : null,
+      ),
+      items: [
+        for (final engineer in roster)
+          DropdownMenuItem(value: engineer, child: Text(engineer.name)),
+      ],
+      onChanged: (v) => setState(() => _engineer = v),
     );
   }
 }

@@ -1,7 +1,8 @@
 // Contract tests for reassignment, exercised through the in-memory
 // repository: reassignSurvey must only work while a survey is 'assigned',
-// must write one audit row recording old/new assignee, and must leave other
-// surveys' status/assignment untouched.
+// must write one audit row recording old/new assignee (both the real
+// account id and its display-name snapshot — Slice 1c), and must leave
+// other surveys' status/assignment untouched.
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,32 +15,34 @@ void main() {
 
   setUp(() => repo = InMemorySurveyRepository(IdService()));
 
-  test('engineer roster is seeded and non-empty', () async {
-    final engineers = await repo.getEngineers();
-    expect(engineers, isNotEmpty);
-    expect(engineers.map((e) => e.name), contains('Ravi Kumar'));
-  });
-
-  test('reassigning an assigned survey updates assignedTo and logs one entry',
+  test('reassigning an assigned survey updates assignedTo/assignedToUserId and logs one entry',
       () async {
     final site = await repo.createSite(name: 'Site A', blocks: const []);
     await repo.updateSite(
-      site.copyWith(assignedTo: 'Ravi Kumar', status: SurveyStatus.assigned),
+      site.copyWith(
+        assignedTo: 'Ravi Kumar',
+        assignedToUserId: 'eng-ravi',
+        status: SurveyStatus.assigned,
+      ),
     );
 
     await repo.reassignSurvey(
       siteId: site.id,
+      newAssigneeUserId: 'eng-priya',
       newAssignee: 'Priya Sharma',
       changedByRole: 'Sales',
     );
 
     final updated = await repo.getSiteById(site.id);
     expect(updated!.assignedTo, 'Priya Sharma');
+    expect(updated.assignedToUserId, 'eng-priya');
 
     final log = await repo.getSurveyAssignmentAuditLog(site.id);
     expect(log, hasLength(1));
     expect(log.single.oldAssignee, 'Ravi Kumar');
+    expect(log.single.oldAssigneeUserId, 'eng-ravi');
     expect(log.single.newAssignee, 'Priya Sharma');
+    expect(log.single.newAssigneeUserId, 'eng-priya');
     expect(log.single.changedByRole, 'Sales');
     expect(log.single.siteId, site.id);
   });
@@ -49,6 +52,7 @@ void main() {
     await repo.updateSite(
       site.copyWith(
         assignedTo: 'Ravi Kumar',
+        assignedToUserId: 'eng-ravi',
         status: SurveyStatus.inProgress,
       ),
     );
@@ -56,6 +60,7 @@ void main() {
     await expectLater(
       () => repo.reassignSurvey(
         siteId: site.id,
+        newAssigneeUserId: 'eng-priya',
         newAssignee: 'Priya Sharma',
         changedByRole: 'Sales',
       ),
@@ -64,6 +69,7 @@ void main() {
 
     final unchanged = await repo.getSiteById(site.id);
     expect(unchanged!.assignedTo, 'Ravi Kumar');
+    expect(unchanged.assignedToUserId, 'eng-ravi');
     expect(await repo.getSurveyAssignmentAuditLog(site.id), isEmpty);
   });
 
@@ -74,6 +80,7 @@ void main() {
     await expectLater(
       () => repo.reassignSurvey(
         siteId: site.id,
+        newAssigneeUserId: 'eng-priya',
         newAssignee: 'Priya Sharma',
         changedByRole: 'Sales',
       ),
@@ -85,21 +92,31 @@ void main() {
       () async {
     final a = await repo.createSite(name: 'Site A', blocks: const []);
     await repo.updateSite(
-      a.copyWith(assignedTo: 'Ravi Kumar', status: SurveyStatus.assigned),
+      a.copyWith(
+        assignedTo: 'Ravi Kumar',
+        assignedToUserId: 'eng-ravi',
+        status: SurveyStatus.assigned,
+      ),
     );
     final b = await repo.createSite(name: 'Site B', blocks: const []);
     await repo.updateSite(
-      b.copyWith(assignedTo: 'Arjun Mehta', status: SurveyStatus.assigned),
+      b.copyWith(
+        assignedTo: 'Arjun Mehta',
+        assignedToUserId: 'eng-arjun',
+        status: SurveyStatus.assigned,
+      ),
     );
 
     await repo.reassignSurvey(
       siteId: a.id,
+      newAssigneeUserId: 'eng-priya',
       newAssignee: 'Priya Sharma',
       changedByRole: 'Sales',
     );
     await Future<void>.delayed(const Duration(milliseconds: 2));
     await repo.reassignSurvey(
       siteId: a.id,
+      newAssigneeUserId: 'eng-sneha',
       newAssignee: 'Sneha Iyer',
       changedByRole: 'Sales',
     );
@@ -119,6 +136,7 @@ void main() {
     await expectLater(
       () => repo.reassignSurvey(
         siteId: 'does-not-exist',
+        newAssigneeUserId: 'eng-priya',
         newAssignee: 'Priya Sharma',
         changedByRole: 'Sales',
       ),

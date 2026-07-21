@@ -16,14 +16,20 @@ class BomRevisionFormScreen extends StatefulWidget {
     required this.surveyId,
     required this.surveyName,
     required this.createdByRole,
+    this.createdByUserId,
   });
 
   final SurveyRepository repository;
   final String surveyId;
   final String surveyName;
 
-  /// Label of the signed-in role (e.g. "Engineer"), recorded as `createdBy`.
+  /// Display-name snapshot of the signed-in user (or a bare role label as a
+  /// fallback), recorded as `createdBy`.
   final String createdByRole;
+
+  /// The signed-in user's real account id, recorded as `createdByUserId` —
+  /// see Roles & Assignment Slice 1d.
+  final String? createdByUserId;
 
   @override
   State<BomRevisionFormScreen> createState() => _BomRevisionFormScreenState();
@@ -74,6 +80,7 @@ class _BomRevisionFormScreenState extends State<BomRevisionFormScreen> {
       reason: _reason.text.trim(),
       lines: _lines,
       createdBy: widget.createdByRole,
+      createdByUserId: widget.createdByUserId,
     );
 
     if (!mounted) return;

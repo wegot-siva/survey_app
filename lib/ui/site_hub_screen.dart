@@ -6,6 +6,7 @@ import '../models/site.dart';
 import '../models/survey_status.dart';
 import '../models/user_role.dart';
 import '../services/session_controller.dart';
+import '../services/sync_service.dart';
 import 'bom_preview_screen.dart';
 import 'client_inputs_screen.dart';
 import 'duct_loras_list_screen.dart';
@@ -38,11 +39,13 @@ class SiteHubScreen extends StatefulWidget {
     required this.repository,
     required this.siteId,
     required this.session,
+    required this.syncService,
   });
 
   final SurveyRepository repository;
   final String siteId;
   final SessionController session;
+  final SyncService syncService;
 
   @override
   State<SiteHubScreen> createState() => _SiteHubScreenState();
@@ -184,7 +187,8 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
         builder: (_) => BomPreviewScreen(
           repository: widget.repository,
           site: site,
-          addedByRole: role?.label ?? 'Unknown',
+          addedByRole: widget.session.currentUserName ?? role?.label ?? 'Unknown',
+          addedByUserId: widget.session.currentUserId,
           canEditBom: role == UserRole.admin || role == UserRole.approver,
         ),
       ),
@@ -221,29 +225,45 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
 
   /// Sales' "Edit assignee" action — only ever offered while [site] is still
   /// 'assigned' (gated by the caller), so a reassignment can never happen
-  /// after an engineer has started work.
+  /// after an engineer has started work. The engineer roster is a live
+  /// Supabase query (real accounts — see SyncService.fetchEngineerRoster),
+  /// so loading it can fail (no network); shown as an error dialog rather
+  /// than silently offering an empty picker.
   Future<void> _editAssignee(Site site) async {
-    final engineers = await widget.repository.getEngineers();
+    final List<Engineer> engineers;
+    try {
+      engineers = await widget.syncService.fetchEngineerRoster();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load the engineer list: $e')),
+      );
+      return;
+    }
     if (!mounted) return;
 
-    final newAssignee = await showDialog<String>(
+    final newEngineer = await showDialog<Engineer>(
       context: context,
       builder: (context) => _ReassignDialog(
-        currentAssignee: site.assignedTo,
+        currentAssigneeUserId: site.assignedToUserId,
         engineers: engineers,
       ),
     );
-    if (newAssignee == null || newAssignee == site.assignedTo) return;
+    if (newEngineer == null || newEngineer.id == site.assignedToUserId) return;
 
     try {
       await widget.repository.reassignSurvey(
         siteId: site.id,
-        newAssignee: newAssignee,
-        changedByRole: widget.session.currentRole?.label ?? 'Unknown',
+        newAssigneeUserId: newEngineer.id,
+        newAssignee: newEngineer.name,
+        changedByRole: widget.session.currentUserName ??
+            widget.session.currentRole?.label ??
+            'Unknown',
+        changedByUserId: widget.session.currentUserId,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Reassigned to $newAssignee.')),
+        SnackBar(content: Text('Reassigned to ${newEngineer.name}.')),
       );
       await _load();
     } catch (e) {
@@ -554,12 +574,15 @@ class _SectionTile extends StatelessWidget {
 }
 
 /// Sales' "Edit assignee" dialog — a dropdown of the engineer roster, seeded
-/// with the survey's current assignee. Pops the chosen name, or null if
-/// cancelled.
+/// with the survey's current assignee where possible. Pops the chosen
+/// [Engineer], or null if cancelled.
 class _ReassignDialog extends StatefulWidget {
-  const _ReassignDialog({required this.currentAssignee, required this.engineers});
+  const _ReassignDialog({
+    required this.currentAssigneeUserId,
+    required this.engineers,
+  });
 
-  final String? currentAssignee;
+  final String? currentAssigneeUserId;
   final List<Engineer> engineers;
 
   @override
@@ -567,19 +590,28 @@ class _ReassignDialog extends StatefulWidget {
 }
 
 class _ReassignDialogState extends State<_ReassignDialog> {
-  String? _selected;
+  Engineer? _selected;
 
   @override
   void initState() {
     super.initState();
-    _selected = widget.currentAssignee;
+    // Falls back to no pre-selection (rather than a dropdown assertion
+    // error) when the current assignee isn't in this roster — e.g. a
+    // pre-Slice-1c site with no real assignedToUserId yet, or an engineer
+    // account since deactivated.
+    for (final engineer in widget.engineers) {
+      if (engineer.id == widget.currentAssigneeUserId) {
+        _selected = engineer;
+        break;
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Edit assignee'),
-      content: DropdownButtonFormField<String>(
+      content: DropdownButtonFormField<Engineer>(
         initialValue: _selected,
         isExpanded: true,
         decoration: const InputDecoration(
@@ -588,7 +620,7 @@ class _ReassignDialogState extends State<_ReassignDialog> {
         ),
         items: [
           for (final engineer in widget.engineers)
-            DropdownMenuItem(value: engineer.name, child: Text(engineer.name)),
+            DropdownMenuItem(value: engineer, child: Text(engineer.name)),
         ],
         onChanged: (v) => setState(() => _selected = v),
       ),

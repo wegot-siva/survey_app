@@ -7,7 +7,6 @@ import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
-import '../models/engineer.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
@@ -251,8 +250,10 @@ abstract class SurveyRepository {
   // ---- Material Master (admin-editable reference data, not site-scoped) ---
   //
   // Every create/edit/delete writes to the change log (material_master_audit)
-  // as part of the same call — [changedByRole] is the signed-in role's label
-  // (e.g. "Admin"), recorded against each audit entry.
+  // as part of the same call — [changedByRole] is a display-name snapshot
+  // (the signed-in user's real name, Slice 1d; a bare role label like
+  // "Admin" on rows written before it) and [changedByUserId] is the real
+  // account id, recorded against each audit entry.
 
   /// [dirtyOnly] limits to rows not yet pushed since their last local
   /// change — sync-only, see [markMaterialMasterItemSynced]. Never includes
@@ -265,6 +266,7 @@ abstract class SurveyRepository {
   Future<MaterialMasterItem> addMaterialMasterItem(
     MaterialMasterItem item, {
     required String changedByRole,
+    String? changedByUserId,
   });
 
   /// Updates an existing row and logs one change-log entry per field that
@@ -273,6 +275,7 @@ abstract class SurveyRepository {
   Future<void> updateMaterialMasterItem(
     MaterialMasterItem item, {
     required String changedByRole,
+    String? changedByUserId,
   });
 
   /// Marks [id] for deletion (a tombstone, not a hard delete) and logs a
@@ -282,7 +285,11 @@ abstract class SurveyRepository {
   /// [hardDeleteMaterialMasterItem] is called once that remote delete
   /// succeeds, so a delete that fails partway (offline, etc.) is retried on
   /// the next sync exactly like any other unsynced change.
-  Future<void> deleteMaterialMasterItem(String id, {required String changedByRole});
+  Future<void> deleteMaterialMasterItem(
+    String id, {
+    required String changedByRole,
+    String? changedByUserId,
+  });
 
   /// Every Material Master row id currently pending deletion — sync-only,
   /// see [deleteMaterialMasterItem] / [hardDeleteMaterialMasterItem]. Not
@@ -453,6 +460,7 @@ abstract class SurveyRepository {
     required String surveyId,
     required List<BomSnapshotLine> lines,
     required String finalizedBy,
+    String? finalizedByUserId,
   });
 
   // ---- BoM revisions (additive deltas on top of a locked v1 snapshot) ------
@@ -495,6 +503,7 @@ abstract class SurveyRepository {
     required String reason,
     required List<BomRevisionLine> lines,
     required String createdBy,
+    String? createdByUserId,
   });
 
   // ---- BoM manual-edit snapshots (Admin/Approver full-version edits) -------
@@ -543,23 +552,28 @@ abstract class SurveyRepository {
     required String editedBy,
   });
 
-  // ---- Engineer roster + survey reassignment -------------------------------
+  // ---- Survey reassignment ---------------------------------------------
   //
-  // A lightweight roster, not an auth system — the shared Engineer login is
-  // unchanged (see UserRole / SessionController.currentEngineerName).
-  // Reassignment is only meaningful while a survey is still 'assigned' —
-  // enforced here (throws StateError otherwise), not just hidden in the UI —
-  // and each change writes one audit row recording who it moved from/to.
+  // The engineer roster itself now comes from real accounts (see
+  // SyncService.fetchEngineerRoster, which queries `profiles` directly —
+  // there's no local, offline-capable roster table anymore; picking an
+  // engineer to assign/reassign to needs a network connection, same
+  // trade-off already accepted for sign-in itself). Reassignment is only
+  // meaningful while a survey is still 'assigned' — enforced here (throws
+  // StateError otherwise), not just hidden in the UI — and each change
+  // writes one audit row recording who it moved from/to, by both real
+  // account id and display-name snapshot.
 
-  /// The engineer roster Sales assigns/reassigns surveys against.
-  Future<List<Engineer>> getEngineers();
-
-  /// Reassigns [siteId] to [newAssignee] and writes one audit entry. Throws
-  /// [StateError] if the site doesn't exist or its status isn't 'assigned'.
+  /// Reassigns [siteId] to [newAssigneeUserId] (a real `profiles.id`, with
+  /// [newAssignee] as its display-name snapshot) and writes one audit entry.
+  /// Throws [StateError] if the site doesn't exist or its status isn't
+  /// 'assigned'.
   Future<void> reassignSurvey({
     required String siteId,
+    required String newAssigneeUserId,
     required String newAssignee,
     required String changedByRole,
+    String? changedByUserId,
   });
 
   /// One survey's reassignment history, newest first.

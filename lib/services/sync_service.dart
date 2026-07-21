@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data/supabase_survey_data_source.dart';
 import '../data/survey_repository.dart';
+import '../models/engineer.dart';
 import '../models/survey_photo.dart';
 import 'supabase_service.dart';
 
@@ -26,6 +27,7 @@ class SyncResult {
     this.bomSnapshots = 0,
     this.bomRevisions = 0,
     this.bomManualEditSnapshots = 0,
+    this.pushFailures = const [],
     this.message,
   });
 
@@ -45,6 +47,14 @@ class SyncResult {
   final int bomSnapshots;
   final int bomRevisions;
   final int bomManualEditSnapshots;
+
+  /// One entry per row that failed to push during this run (e.g. an
+  /// RLS-rejected write) — each already skipped and left dirty for the next
+  /// sync attempt, not why the whole run failed. Empty on a fully clean run.
+  /// [success] can still be true with this non-empty: the run completed and
+  /// pushed everything it could, it just didn't get everything.
+  final List<String> pushFailures;
+
   final String? message;
 }
 
@@ -92,6 +102,26 @@ class SyncService {
       );
     }
 
+    // Per-row failure isolation: a single row's push failing here (an RLS
+    // rejection once site-scoped RLS lands, a transient network blip, ...)
+    // must not abort the rest of this run — every failure is caught, the
+    // row stays dirty locally for the next sync attempt exactly like an
+    // offline failure already worked before this fix, and its own
+    // table/id/error goes into [failures] so it's identifiable rather than
+    // folded into one generic "couldn't sync". Only a genuinely fatal,
+    // whole-run problem (missing config, a thrown error outside any single
+    // row's push) still produces success:false — see the outer try/catch.
+    final failures = <String>[];
+    Future<bool> pushRow(String label, Future<void> Function() action) async {
+      try {
+        await action();
+        return true;
+      } catch (e) {
+        failures.add('$label: $e');
+        return false;
+      }
+    }
+
     try {
       // Archived sites are excluded from every UI list, but their already-
       // recorded survey/BoM/photo data must keep syncing — nothing archived
@@ -124,19 +154,25 @@ class SyncService {
         // Site row + blocks — bundled (see SupabaseSurveyDataSource.pushSite),
         // so both share the site's own dirty flag.
         if (dirtySiteIds.contains(site.id)) {
-          await _remote.pushSite(site);
-          await _repository.markSiteSynced(site.id);
-          pushedSites++;
-          blocks += site.blocks.length;
+          final ok = await pushRow('sites/${site.id}', () async {
+            await _remote.pushSite(site);
+            await _repository.markSiteSynced(site.id);
+          });
+          if (ok) {
+            pushedSites++;
+            blocks += site.blocks.length;
+          }
         }
 
         // Client inputs — tracked independently, so a site-only edit never
         // forces a redundant push here (and vice versa).
         final inputs = site.clientInputs;
         if (inputs != null && await _repository.isClientInputsDirty(site.id)) {
-          await _remote.pushClientInputs(site.id, inputs);
-          await _repository.markClientInputsSynced(site.id);
-          clientInputs++;
+          final ok = await pushRow('client_inputs/${site.id}', () async {
+            await _remote.pushClientInputs(site.id, inputs);
+            await _repository.markClientInputsSynced(site.id);
+          });
+          if (ok) clientInputs++;
         }
 
         // Deletions are pushed before normal upserts: a source/inlet point
@@ -147,141 +183,192 @@ class SyncService {
         for (final id in await _repository.getPendingDeleteSourcePointIds(
           site.id,
         )) {
-          await _remote.deleteSourcePoint(id);
-          await _repository.hardDeleteSourcePoint(id);
-          sourcePoints++;
+          final ok = await pushRow('source_points/$id (delete)', () async {
+            await _remote.deleteSourcePoint(id);
+            await _repository.hardDeleteSourcePoint(id);
+          });
+          if (ok) sourcePoints++;
         }
-        final sps = await _repository.getSourcePoints(site.id, dirtyOnly: true);
-        for (final sp in sps) {
-          await _remote.pushSourcePoint(sp);
-          await _repository.markSourcePointSynced(sp.id);
+        for (final sp in await _repository.getSourcePoints(
+          site.id,
+          dirtyOnly: true,
+        )) {
+          final ok = await pushRow('source_points/${sp.id}', () async {
+            await _remote.pushSourcePoint(sp);
+            await _repository.markSourcePointSynced(sp.id);
+          });
+          if (ok) sourcePoints++;
         }
-        sourcePoints += sps.length;
 
         for (final id in await _repository.getPendingDeleteInletPointIds(
           site.id,
         )) {
-          await _remote.deleteInletPoint(id);
-          await _repository.hardDeleteInletPoint(id);
-          inletPoints++;
+          final ok = await pushRow('inlet_points/$id (delete)', () async {
+            await _remote.deleteInletPoint(id);
+            await _repository.hardDeleteInletPoint(id);
+          });
+          if (ok) inletPoints++;
         }
-        final ips = await _repository.getInletPoints(site.id, dirtyOnly: true);
-        for (final ip in ips) {
-          await _remote.pushInletPoint(ip);
-          await _repository.markInletPointSynced(ip.id);
+        for (final ip in await _repository.getInletPoints(
+          site.id,
+          dirtyOnly: true,
+        )) {
+          final ok = await pushRow('inlet_points/${ip.id}', () async {
+            await _remote.pushInletPoint(ip);
+            await _repository.markInletPointSynced(ip.id);
+          });
+          if (ok) inletPoints++;
         }
-        inletPoints += ips.length;
 
         for (final id in await _repository.getPendingDeleteDuctLoraIds(
           site.id,
         )) {
-          await _remote.deleteDuctLora(id);
-          await _repository.hardDeleteDuctLora(id);
-          ductLoras++;
+          final ok = await pushRow('duct_loras/$id (delete)', () async {
+            await _remote.deleteDuctLora(id);
+            await _repository.hardDeleteDuctLora(id);
+          });
+          if (ok) ductLoras++;
         }
-        final dls = await _repository.getDuctLoras(site.id, dirtyOnly: true);
-        for (final dl in dls) {
-          await _remote.pushDuctLora(dl);
-          await _repository.markDuctLoraSynced(dl.id);
+        for (final dl in await _repository.getDuctLoras(
+          site.id,
+          dirtyOnly: true,
+        )) {
+          final ok = await pushRow('duct_loras/${dl.id}', () async {
+            await _remote.pushDuctLora(dl);
+            await _repository.markDuctLoraSynced(dl.id);
+          });
+          if (ok) ductLoras++;
         }
-        ductLoras += dls.length;
 
         for (final id in await _repository.getPendingDeleteGatewayIds(
           site.id,
         )) {
-          await _remote.deleteGateway(id);
-          await _repository.hardDeleteGateway(id);
-          gateways++;
+          final ok = await pushRow('gateways/$id (delete)', () async {
+            await _remote.deleteGateway(id);
+            await _repository.hardDeleteGateway(id);
+          });
+          if (ok) gateways++;
         }
-        final gws = await _repository.getGateways(site.id, dirtyOnly: true);
-        for (final gw in gws) {
-          await _remote.pushGateway(gw);
-          await _repository.markGatewaySynced(gw.id);
+        for (final gw in await _repository.getGateways(
+          site.id,
+          dirtyOnly: true,
+        )) {
+          final ok = await pushRow('gateways/${gw.id}', () async {
+            await _remote.pushGateway(gw);
+            await _repository.markGatewaySynced(gw.id);
+          });
+          if (ok) gateways++;
         }
-        gateways += gws.length;
 
         if (await _repository.isFooterDirty(site.id)) {
           final footer = await _repository.getFooter(site.id);
           if (footer != null) {
-            await _remote.pushFooter(site.id, footer);
-            await _repository.markFooterSynced(site.id);
-            footers++;
+            final ok = await pushRow('footers/${site.id}', () async {
+              await _remote.pushFooter(site.id, footer);
+              await _repository.markFooterSynced(site.id);
+            });
+            if (ok) footers++;
           }
         }
 
         for (final id in await _repository.getPendingDeleteBomManualEntryIds(
           site.id,
         )) {
-          await _remote.deleteBomManualEntry(id);
-          await _repository.hardDeleteBomManualEntry(id);
-          bomManualEntries++;
+          final ok = await pushRow(
+            'bom_manual_entries/$id (delete)',
+            () async {
+              await _remote.deleteBomManualEntry(id);
+              await _repository.hardDeleteBomManualEntry(id);
+            },
+          );
+          if (ok) bomManualEntries++;
         }
-        final manualEntries = await _repository.getBomManualEntries(
+        for (final entry in await _repository.getBomManualEntries(
           site.id,
           dirtyOnly: true,
-        );
-        for (final entry in manualEntries) {
-          await _remote.pushBomManualEntry(entry);
-          await _repository.markBomManualEntrySynced(entry.id);
+        )) {
+          final ok = await pushRow('bom_manual_entries/${entry.id}', () async {
+            await _remote.pushBomManualEntry(entry);
+            await _repository.markBomManualEntrySynced(entry.id);
+          });
+          if (ok) bomManualEntries++;
         }
-        bomManualEntries += manualEntries.length;
 
         // The snapshot row and its lines are each dirty-tracked separately —
         // lines never change after finalize, so once pushed they never
         // become dirty again, but the row and lines can still finish syncing
-        // on different runs if an earlier sync was interrupted partway.
+        // on different runs if an earlier sync was interrupted partway —
+        // which is also why lines are attempted below regardless of whether
+        // the row itself was dirty (and pushed successfully) this round.
         final snapshot = await _repository.getBomSnapshot(site.id);
         if (snapshot != null) {
           if (await _repository.isBomSnapshotDirty(site.id)) {
-            await _remote.pushBomSnapshot(snapshot);
-            await _repository.markBomSnapshotSynced(snapshot.id);
-            bomSnapshots++;
+            final ok = await pushRow('bom_snapshots/${snapshot.id}', () async {
+              await _remote.pushBomSnapshot(snapshot);
+              await _repository.markBomSnapshotSynced(snapshot.id);
+            });
+            if (ok) bomSnapshots++;
           }
-          final lines = await _repository.getBomSnapshotLines(
+          for (final line in await _repository.getBomSnapshotLines(
             snapshot.id,
             dirtyOnly: true,
-          );
-          for (final line in lines) {
-            await _remote.pushBomSnapshotLine(line);
-            await _repository.markBomSnapshotLineSynced(line.id);
+          )) {
+            await pushRow('bom_snapshot_lines/${line.id}', () async {
+              await _remote.pushBomSnapshotLine(line);
+              await _repository.markBomSnapshotLineSynced(line.id);
+            });
           }
         }
 
-        final revisions = await _repository.getBomRevisions(
+        for (final revision in await _repository.getBomRevisions(
           site.id,
           dirtyOnly: true,
-        );
-        for (final revision in revisions) {
-          await _remote.pushBomRevision(revision);
-          await _repository.markBomRevisionSynced(revision.id);
-          final lines = await _repository.getBomRevisionLines(
+        )) {
+          final revisionOk = await pushRow('bom_revisions/${revision.id}', () async {
+            await _remote.pushBomRevision(revision);
+            await _repository.markBomRevisionSynced(revision.id);
+          });
+          if (revisionOk) bomRevisions++;
+          // Lines FK-reference this revision row remotely — if the row
+          // itself didn't make it there this round, pushing its lines would
+          // just fail on that FK too; skip and retry the whole revision
+          // (row + lines) together next sync instead of adding a second,
+          // confusing failure for the same underlying cause.
+          if (!revisionOk) continue;
+          for (final line in await _repository.getBomRevisionLines(
             revision.id,
             dirtyOnly: true,
-          );
-          for (final line in lines) {
-            await _remote.pushBomRevisionLine(line);
-            await _repository.markBomRevisionLineSynced(line.id);
+          )) {
+            await pushRow('bom_revision_lines/${line.id}', () async {
+              await _remote.pushBomRevisionLine(line);
+              await _repository.markBomRevisionLineSynced(line.id);
+            });
           }
         }
-        bomRevisions += revisions.length;
 
-        final manualEdits = await _repository.getBomManualEditSnapshots(
+        for (final edit in await _repository.getBomManualEditSnapshots(
           site.id,
           dirtyOnly: true,
-        );
-        for (final edit in manualEdits) {
-          await _remote.pushBomManualEditSnapshot(edit);
-          await _repository.markBomManualEditSnapshotSynced(edit.id);
-          final lines = await _repository.getBomManualEditSnapshotLines(
+        )) {
+          final editOk = await pushRow(
+            'bom_manual_edit_snapshots/${edit.id}',
+            () async {
+              await _remote.pushBomManualEditSnapshot(edit);
+              await _repository.markBomManualEditSnapshotSynced(edit.id);
+            },
+          );
+          if (editOk) bomManualEditSnapshots++;
+          if (!editOk) continue; // same FK reasoning as bom_revisions above
+          for (final line in await _repository.getBomManualEditSnapshotLines(
             edit.id,
             dirtyOnly: true,
-          );
-          for (final line in lines) {
-            await _remote.pushBomManualEditSnapshotLine(line);
-            await _repository.markBomManualEditSnapshotLineSynced(line.id);
+          )) {
+            await pushRow('bom_manual_edit_snapshot_lines/${line.id}', () async {
+              await _remote.pushBomManualEditSnapshotLine(line);
+              await _repository.markBomManualEditSnapshotLineSynced(line.id);
+            });
           }
         }
-        bomManualEditSnapshots += manualEdits.length;
       }
 
       // Material Master is global reference data, not site-scoped — push
@@ -290,23 +377,37 @@ class SyncService {
       // point tombstones), then dirty upserts.
       var materialMasterItems = 0;
       for (final id in await _repository.getPendingDeleteMaterialMasterItemIds()) {
-        await _remote.deleteMaterialMasterItem(id);
-        await _repository.hardDeleteMaterialMasterItem(id);
-        materialMasterItems++;
+        final ok = await pushRow(
+          'material_master_items/$id (delete)',
+          () async {
+            await _remote.deleteMaterialMasterItem(id);
+            await _repository.hardDeleteMaterialMasterItem(id);
+          },
+        );
+        if (ok) materialMasterItems++;
       }
-      final materials = await _repository.getMaterialMasterItems(dirtyOnly: true);
-      for (final material in materials) {
-        await _remote.pushMaterialMasterItem(material);
-        await _repository.markMaterialMasterItemSynced(material.id);
-      }
-      materialMasterItems += materials.length;
-
-      final auditEntries = await _repository.getMaterialMasterAuditLog(
+      for (final material in await _repository.getMaterialMasterItems(
         dirtyOnly: true,
-      );
-      for (final entry in auditEntries) {
-        await _remote.pushMaterialMasterAuditEntry(entry);
-        await _repository.markMaterialMasterAuditEntrySynced(entry.id);
+      )) {
+        final ok = await pushRow(
+          'material_master_items/${material.id}',
+          () async {
+            await _remote.pushMaterialMasterItem(material);
+            await _repository.markMaterialMasterItemSynced(material.id);
+          },
+        );
+        if (ok) materialMasterItems++;
+      }
+
+      var materialMasterAuditEntries = 0;
+      for (final entry in await _repository.getMaterialMasterAuditLog(
+        dirtyOnly: true,
+      )) {
+        final ok = await pushRow('material_master_audit/${entry.id}', () async {
+          await _remote.pushMaterialMasterAuditEntry(entry);
+          await _repository.markMaterialMasterAuditEntrySynced(entry.id);
+        });
+        if (ok) materialMasterAuditEntries++;
       }
 
       // Generic photos (slice 2): upload any pending files, then push
@@ -315,9 +416,11 @@ class SyncService {
       for (final photo in await _repository.getAllPhotos(dirtyOnly: true)) {
         final pushed = await _withUploadedGenericPhoto(photo);
         if (pushed.remotePath != null) {
-          await _remote.pushPhoto(pushed);
-          await _repository.markPhotoSynced(pushed.id);
-          photos++;
+          final ok = await pushRow('photos/${pushed.id}', () async {
+            await _remote.pushPhoto(pushed);
+            await _repository.markPhotoSynced(pushed.id);
+          });
+          if (ok) photos++;
         }
       }
 
@@ -332,12 +435,18 @@ class SyncService {
         gateways: gateways,
         footers: footers,
         materialMasterItems: materialMasterItems,
-        materialMasterAuditEntries: auditEntries.length,
+        materialMasterAuditEntries: materialMasterAuditEntries,
         photos: photos,
         bomManualEntries: bomManualEntries,
         bomSnapshots: bomSnapshots,
         bomRevisions: bomRevisions,
         bomManualEditSnapshots: bomManualEditSnapshots,
+        pushFailures: failures,
+        message: failures.isEmpty
+            ? null
+            : '${failures.length} row${failures.length == 1 ? '' : 's'} '
+                "could not sync (left dirty for next attempt):\n\n"
+                '${failures.join('\n')}',
       );
     } on PostgrestException catch (e) {
       return SyncResult(
@@ -468,6 +577,28 @@ class SyncService {
     } catch (e) {
       return SyncResult(success: false, message: 'Core survey data pull failed:\n\n$e');
     }
+  }
+
+  /// The current engineer roster, straight from Supabase — see
+  /// [SupabaseSurveyDataSource.fetchEngineerRoster] for why this is a live
+  /// query rather than a locally-cached pull. Throws on failure (missing
+  /// config, no network, database error) rather than swallowing it, so the
+  /// assign/reassign screen can show a real error instead of a silently
+  /// empty picker.
+  Future<List<Engineer>> fetchEngineerRoster() async {
+    if (!_supabase.isConfigured) {
+      throw StateError(
+        'Supabase is not configured.\n\n'
+        'SUPABASE_URL and SUPABASE_ANON_KEY are empty. Copy .env.example to '
+        '.env, fill in your values, and run:\n\n'
+        '    flutter run --dart-define-from-file=.env',
+      );
+    }
+    await _supabase.initIfConfigured();
+    if (!_supabase.isInitialized) {
+      throw StateError('Supabase failed to initialize. Check your keys in .env.');
+    }
+    return _remote.fetchEngineerRoster();
   }
 
   /// If [photo] has a locally-captured file not yet uploaded, uploads it to

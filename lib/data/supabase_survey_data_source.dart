@@ -12,6 +12,7 @@ import '../models/bom_snapshot.dart';
 import '../models/bom_snapshot_line.dart';
 import '../models/client_inputs.dart';
 import '../models/duct_lora.dart';
+import '../models/engineer.dart';
 import '../models/footer.dart';
 import '../models/gateway.dart';
 import '../models/inlet_point.dart';
@@ -48,9 +49,9 @@ class SupabaseSurveyDataSource {
     await _client.from('sites').upsert({
       'id': site.id,
       'name': site.name,
-      // Reserved assignment columns — currently always null.
       'status': site.status,
       'assigned_to': site.assignedTo,
+      'assigned_to_user_id': site.assignedToUserId,
       'bom_locked': site.bomLocked,
     });
 
@@ -187,12 +188,32 @@ class SupabaseSurveyDataSource {
     return all;
   }
 
-  /// Every site row (id/name/status/assigned_to/bom_locked only — blocks and
-  /// client_inputs are separate tables/pulls; archived/address/client_name/
-  /// client_contact are Sales-only fields never pushed to Supabase in the
-  /// first place, so they're simply absent from every remote row — see
-  /// [SqfliteSurveyRepository]'s pull-reconcile helper for why that's safe).
+  /// Every site row (id/name/status/assigned_to/assigned_to_user_id/
+  /// bom_locked only — blocks and client_inputs are separate tables/pulls;
+  /// archived/address/client_name/client_contact are Sales-only fields never
+  /// pushed to Supabase in the first place, so they're simply absent from
+  /// every remote row — see [SqfliteSurveyRepository]'s pull-reconcile
+  /// helper for why that's safe).
   Future<List<Map<String, dynamic>>> fetchSites() => _fetchAllRows('sites');
+
+  /// The current engineer roster — real accounts (`profiles` rows with
+  /// `role = 'engineer'`), not the retired hardcoded `kEngineerDirectory`.
+  /// Deliberately a live query, not a locally-cached pull like every other
+  /// `fetchX` here: the roster is small and only needed at the moment
+  /// someone is assigning/reassigning a survey, so a network round-trip
+  /// there (same trade-off already accepted for sign-in itself) beats
+  /// standing up a new sync-scoped table for it.
+  Future<List<Engineer>> fetchEngineerRoster() async {
+    final rows = await _client
+        .from('profiles')
+        .select('id, full_name')
+        .eq('role', 'engineer')
+        .eq('active', true)
+        .order('full_name');
+    return rows
+        .map((r) => Engineer(id: r['id'] as String, name: r['full_name'] as String))
+        .toList(growable: false);
+  }
 
   /// Every Client inputs row, keyed by site_id (not its own id).
   Future<List<Map<String, dynamic>>> fetchClientInputs() =>
@@ -573,6 +594,7 @@ Map<String, Object?> _materialMasterAuditEntryToRemoteRow(
     'old_value': e.oldValue,
     'new_value': e.newValue,
     'changed_by_role': e.changedByRole,
+    'changed_by_user_id': e.changedByUserId,
     'changed_at': e.changedAt.toIso8601String(),
   };
 }
@@ -592,6 +614,7 @@ Map<String, Object?> _bomManualEntryToRemoteRow(BomManualEntry e) {
     // sqflite_survey_repository.dart's _bomManualEntryToRow.
     'group_code': e.group.code,
     'added_by': e.addedBy,
+    'added_by_user_id': e.addedByUserId,
     'added_at': e.addedAt.toIso8601String(),
   };
 }
@@ -603,6 +626,7 @@ Map<String, Object?> _bomSnapshotToRemoteRow(BomSnapshot s) {
     'version': s.version,
     'status': s.status,
     'finalized_by': s.finalizedBy,
+    'finalized_by_user_id': s.finalizedByUserId,
     'finalized_at': s.finalizedAt.toIso8601String(),
   };
 }
@@ -633,6 +657,7 @@ Map<String, Object?> _bomRevisionToRemoteRow(BomRevision v) {
     'version': v.version,
     'reason': v.reason,
     'created_by': v.createdBy,
+    'created_by_user_id': v.createdByUserId,
     'created_at': v.createdAt.toIso8601String(),
   };
 }

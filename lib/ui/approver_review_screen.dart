@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/survey_repository.dart';
 import '../models/site.dart';
 import '../models/survey_status.dart';
+import '../services/session_controller.dart';
 import 'bom_preview_screen.dart';
 import 'client_inputs_screen.dart';
 import 'duct_loras_list_screen.dart';
@@ -28,10 +29,12 @@ class ApproverReviewScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.siteId,
+    required this.session,
   });
 
   final SurveyRepository repository;
   final String siteId;
+  final SessionController session;
 
   @override
   State<ApproverReviewScreen> createState() => _ApproverReviewScreenState();
@@ -163,7 +166,10 @@ class _ApproverReviewScreenState extends State<ApproverReviewScreen> {
         builder: (_) => BomPreviewScreen(
           repository: widget.repository,
           site: site,
-          addedByRole: 'Approver',
+          addedByRole: widget.session.currentUserName ??
+              widget.session.currentRole?.label ??
+              'Approver',
+          addedByUserId: widget.session.currentUserId,
           readOnly: true,
           canEditBom: true,
         ),

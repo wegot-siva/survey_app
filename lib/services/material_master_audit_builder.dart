@@ -14,6 +14,7 @@ class MaterialMasterAuditBuilder {
   List<MaterialMasterAuditEntry> forCreate({
     required MaterialMasterItem item,
     required String changedByRole,
+    String? changedByUserId,
     required DateTime changedAt,
   }) {
     return [
@@ -23,6 +24,7 @@ class MaterialMasterAuditBuilder {
         fieldChanged: '(created)',
         newValue: _summary(item),
         changedByRole: changedByRole,
+        changedByUserId: changedByUserId,
         changedAt: changedAt,
       ),
     ];
@@ -31,6 +33,7 @@ class MaterialMasterAuditBuilder {
   List<MaterialMasterAuditEntry> forDelete({
     required MaterialMasterItem item,
     required String changedByRole,
+    String? changedByUserId,
     required DateTime changedAt,
   }) {
     return [
@@ -40,6 +43,7 @@ class MaterialMasterAuditBuilder {
         fieldChanged: '(deleted)',
         oldValue: _summary(item),
         changedByRole: changedByRole,
+        changedByUserId: changedByUserId,
         changedAt: changedAt,
       ),
     ];
@@ -51,6 +55,7 @@ class MaterialMasterAuditBuilder {
     required MaterialMasterItem oldItem,
     required MaterialMasterItem newItem,
     required String changedByRole,
+    String? changedByUserId,
     required DateTime changedAt,
   }) {
     return [
@@ -62,6 +67,7 @@ class MaterialMasterAuditBuilder {
           oldValue: d.oldValue,
           newValue: d.newValue,
           changedByRole: changedByRole,
+          changedByUserId: changedByUserId,
           changedAt: changedAt,
         ),
     ];

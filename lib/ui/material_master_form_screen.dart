@@ -28,14 +28,19 @@ class MaterialMasterFormScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.changedByRole,
+    this.changedByUserId,
     this.existing,
   });
 
   final SurveyRepository repository;
 
-  /// Label of the signed-in role (e.g. "Admin"), recorded on the change-log
-  /// entry this save writes.
+  /// Display-name snapshot of the signed-in user (or a bare role label as a
+  /// fallback), recorded on the change-log entry this save writes.
   final String changedByRole;
+
+  /// The signed-in user's real account id, recorded alongside
+  /// [changedByRole] — see Roles & Assignment Slice 1d.
+  final String? changedByUserId;
 
   final MaterialMasterItem? existing;
 
@@ -269,11 +274,13 @@ class _MaterialMasterFormScreenState extends State<MaterialMasterFormScreen> {
       await widget.repository.addMaterialMasterItem(
         draft,
         changedByRole: widget.changedByRole,
+        changedByUserId: widget.changedByUserId,
       );
     } else {
       await widget.repository.updateMaterialMasterItem(
         draft,
         changedByRole: widget.changedByRole,
+        changedByUserId: widget.changedByUserId,
       );
     }
 

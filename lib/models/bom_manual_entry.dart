@@ -38,6 +38,7 @@ class BomManualEntry {
     required this.qty,
     required this.group,
     required this.addedBy,
+    this.addedByUserId,
     required this.addedAt,
   });
 
@@ -68,9 +69,15 @@ class BomManualEntry {
   /// this model.
   final MaterialGroup group;
 
-  /// Label of the role that added this entry (e.g. "Engineer") — shared-login
-  /// roles for now, not a real per-user identity. Preserved across edits.
+  /// Display snapshot of who added this entry — the signed-in user's real
+  /// name (Roles & Assignment Slice 1d) going forward; a bare role label
+  /// (e.g. "Engineer") on any entry added before that slice. Preserved
+  /// across edits.
   final String addedBy;
+
+  /// The real account id (`profiles.id`) that added this entry. Null on any
+  /// entry added before Slice 1d. Preserved across edits.
+  final String? addedByUserId;
 
   /// When this entry was first added. Preserved across edits.
   final DateTime addedAt;
@@ -89,6 +96,7 @@ class BomManualEntry {
     qty: qty,
     group: group,
     addedBy: addedBy,
+    addedByUserId: addedByUserId,
     addedAt: addedAt,
   );
 }
