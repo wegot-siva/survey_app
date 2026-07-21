@@ -1604,3 +1604,85 @@ create policy "insert material_master_audit by admin" on public.material_master_
 -- Slice 2b's profiles policies.
 -- Re-runnable / idempotent.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Per-user auth — Slice 2h: real RLS for storage.objects (survey-photos
+-- bucket) — the last wide-open surface.
+--
+-- Join key: an object's name IS the photos table's remote_path for that row
+-- — set to the deterministic `photos/<photo.id>.jpg` the moment a photo is
+-- pushed (see SyncService._pushGenericPhoto and
+-- SupabaseSurveyDataSource.uploadPhoto's caller) — so
+-- can_access_photo_object(name) below just looks up the one photos row
+-- with remote_path = name and defers to that row's own site_id via
+-- can_access_site(), exactly like every other Slice 2e/2f/2g helper.
+--
+-- Ordering dependency this slice depends on: _pushGenericPhoto now pushes
+-- the photos metadata row (already carrying remote_path and site_id)
+-- *before* the actual Storage upload, not after like it used to. The object
+-- key is deterministic and known upfront, so this reorder is safe — but
+-- it's required: with the old order (upload first, metadata row second),
+-- can_access_photo_object(name) would find no matching row yet at upload
+-- time and reject every photo's very first upload.
+--
+-- The bucket itself is flipped from public to private here
+-- (update storage.buckets ... public = false) — this is not optional
+-- alongside the RLS below. A Supabase Storage bucket with public = true
+-- serves every object via an unauthenticated /object/public/... URL that
+-- completely bypasses storage.objects RLS; leaving it public would make
+-- every policy below pure theater; anyone with (or able to guess) an
+-- object's URL could still fetch it directly. Confirmed via a full grep of
+-- lib/ that the app never actually fetches a photo back from Storage today
+-- (no getPublicUrl / createSignedUrl / Image.network anywhere — every photo
+-- view in the app reads SurveyPhoto.localPath, the on-device file) — so
+-- this flip has no visible effect on current app behavior. Any future
+-- feature that displays a remote photo (e.g. Sales/Approver viewing one
+-- without the originating device) will need an authenticated download or a
+-- signed URL, not a public link.
+--
+-- Only SELECT and INSERT get policies — confirmed via grep that the app's
+-- only Storage call anywhere is the single .storage.from(photoBucket).upload
+-- in SupabaseSurveyDataSource.uploadPhoto (no .remove()/.update()/.move()),
+-- consistent with the "no delete feature" finding from Slice 2e. Also
+-- confirmed survey-photos is the only bucket referenced anywhere in this
+-- schema or the app.
+--
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+update storage.buckets set public = false where id = 'survey-photos';
+
+create or replace function public.can_access_photo_object(object_name text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.photos
+    where remote_path = object_name
+      and public.can_access_site(site_id)
+  );
+$$;
+
+drop policy if exists "dev all - survey-photos read" on storage.objects;
+drop policy if exists "dev all - survey-photos write" on storage.objects;
+drop policy if exists "dev all - survey-photos update" on storage.objects;
+
+drop policy if exists "select survey-photos via site" on storage.objects;
+create policy "select survey-photos via site" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'survey-photos' and public.can_access_photo_object(name));
+
+drop policy if exists "insert survey-photos via site" on storage.objects;
+create policy "insert survey-photos via site" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'survey-photos' and public.can_access_photo_object(name));
+
+-- No UPDATE, no DELETE — see the doc block above.
+
+-- anon is deliberately not granted anywhere above — same reasoning as
+-- Slice 2b's profiles policies.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------

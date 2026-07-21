@@ -427,13 +427,7 @@ class SyncService {
           'owner=${photo.ownerType}/${photo.ownerId}',
         );
         final ok = await pushRow('photos/${photo.id}', () async {
-          final pushed = await _withUploadedGenericPhoto(photo);
-          if (pushed.remotePath == null) {
-            throw StateError(
-              'no local file at ${pushed.localPath} to upload for photo ${pushed.id}',
-            );
-          }
-          await _remote.pushPhoto(pushed);
+          final pushed = await _pushGenericPhoto(photo);
           await _repository.markPhotoSynced(pushed.id);
         });
         if (ok) photos++;
@@ -616,29 +610,39 @@ class SyncService {
     return _remote.fetchEngineerRoster();
   }
 
-  /// If [photo] has a locally-captured file not yet uploaded, uploads it to
-  /// Storage, records the remote key locally (write-back, so we don't
-  /// re-upload on the next sync), and returns the updated photo. Already-
-  /// uploaded photos (remotePath set) are returned unchanged without
-  /// touching the filesystem. A missing local file on a never-uploaded photo
-  /// is returned unchanged too (remotePath still null) — the caller treats
-  /// that as a failure for this row rather than silently dropping it.
-  Future<SurveyPhoto> _withUploadedGenericPhoto(SurveyPhoto photo) async {
-    final localPath = photo.localPath;
-    if (localPath == null || photo.remotePath != null) return photo;
-    if (!await File(localPath).exists()) {
-      debugPrint(
-        'sync: photo ${photo.id} has no file at $localPath — cannot upload',
-      );
+  /// Pushes [photo] to Supabase, uploading its file to Storage first if it
+  /// hasn't been already. Already-uploaded photos (remotePath set) just get
+  /// their metadata row refreshed. For a never-uploaded photo, the metadata
+  /// row is pushed *before* the Storage upload — reversed from how this used
+  /// to work — because Slice 2h's storage.objects RLS resolves a photo
+  /// object's site by joining back to this table via remote_path
+  /// (can_access_photo_object(name), see schema.sql); if the upload ran
+  /// first, that join would find nothing yet and the very first upload of
+  /// every photo would be rejected. The object key is deterministic
+  /// (`photos/<id>.jpg`), so it's known — and can be pushed — before the
+  /// file itself exists in Storage. A missing local file on a never-uploaded
+  /// photo throws (surfaces as a failure for this row, isolated by the
+  /// caller's pushRow) rather than being silently skipped.
+  Future<SurveyPhoto> _pushGenericPhoto(SurveyPhoto photo) async {
+    if (photo.remotePath != null) {
+      await _remote.pushPhoto(photo);
       return photo;
     }
 
+    final localPath = photo.localPath;
+    if (localPath == null || !await File(localPath).exists()) {
+      throw StateError(
+        'no local file at $localPath to upload for photo ${photo.id}',
+      );
+    }
+
     final objectKey = 'photos/${photo.id}.jpg';
+    final withRemotePath = photo.withRemotePath(objectKey);
+    await _remote.pushPhoto(withRemotePath);
     debugPrint('sync: photo ${photo.id} uploading $localPath -> $objectKey');
     await _remote.uploadPhoto(localPath, objectKey);
     debugPrint('sync: photo ${photo.id} upload complete');
-    final updated = photo.withRemotePath(objectKey);
-    await _repository.updatePhoto(updated);
-    return updated;
+    await _repository.updatePhoto(withRemotePath);
+    return withRemotePath;
   }
 }
