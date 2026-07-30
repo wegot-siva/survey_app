@@ -102,7 +102,25 @@ class SyncOutcome {
 /// a push sends every dirty row, not just the one that triggered it, so the
 /// next sync (manual, or a later save) carries them. The exposure is a user
 /// saving their last section within the cooldown and immediately closing the
-/// app; the manual Sync button and later lifecycle triggers both cover it.
+/// app; [requestBackgroundPush] is what narrows that particular case.
+///
+/// ## Background push is best-effort, NOT guaranteed
+///
+/// [requestBackgroundPush] fires from `AppLifecycleState.paused`, at which
+/// point Android gives no contract that the process keeps running long
+/// enough to finish a network round-trip. It may be frozen (Android 12+
+/// cached-process freezer), Doze-restricted, or killed outright — and the
+/// aggressive OEM battery managers common on budget field devices make this
+/// materially more likely, not less. A short push on a good connection
+/// usually lands; a slow connection, a large photo backlog, or an
+/// aggressive OEM will cut it off partway.
+///
+/// That is acceptable *because nothing depends on it*: a push that doesn't
+/// finish leaves its rows dirty, exactly as if it had never run, and the
+/// next trigger (resume, a later save, or the manual button) sends them.
+/// It shortens the window where data lives only on the device; it does not
+/// close it. Closing it properly would need WorkManager or a foreground
+/// service — real background execution, deliberately out of scope here.
 class SyncController extends ChangeNotifier {
   /// [autoDebounce] and [autoCooldown] are injectable purely for tests —
   /// production always uses the defaults. The cooldown is measured against
@@ -220,17 +238,56 @@ class SyncController extends ChangeNotifier {
     return pending.future;
   }
 
+  /// Push-only, fired when the app is being backgrounded, to get local edits
+  /// out before the user leaves. **Best-effort, not guaranteed** — see the
+  /// "Background push" section of this class's doc.
+  ///
+  /// Deliberately skips both automatic gates, unlike every other automatic
+  /// trigger:
+  ///
+  ///  * **Debounce** would defeat the purpose entirely. Waiting
+  ///    [autoDebounce] before starting means the timer almost certainly
+  ///    never fires — the process is being suspended in exactly that window.
+  ///  * **Cooldown** would drop precisely the case this exists for: an edit
+  ///    made shortly after a sync, with the user then leaving the app. That
+  ///    edit is the one at risk, and it's the one the cooldown would skip.
+  ///
+  /// Cheap when there's nothing to do: [SyncService.pushAll] only touches
+  /// rows flagged dirty, so with a clean queue this is a few local queries
+  /// and no network round-trip at all. Single-flight still applies — if a
+  /// full sync is already running it joins that instead of racing it.
+  Future<SyncOutcome> requestBackgroundPush() {
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    final superseded = _pendingAuto;
+    _pendingAuto = null;
+    final run = _runExclusive(manual: false, pushOnly: true);
+    if (superseded != null && !superseded.isCompleted) {
+      unawaited(run.then((outcome) {
+        if (!superseded.isCompleted) superseded.complete(outcome);
+      }));
+    }
+    return run;
+  }
+
   /// Single-flight: one sync at a time, later callers join the running one.
-  Future<SyncOutcome> _runExclusive({required bool manual}) {
+  Future<SyncOutcome> _runExclusive({
+    required bool manual,
+    bool pushOnly = false,
+  }) {
     final existing = _inFlight;
     if (existing != null) return existing;
 
-    final run = _run(manual: manual).whenComplete(() => _inFlight = null);
+    final run = _run(manual: manual, pushOnly: pushOnly)
+        .whenComplete(() => _inFlight = null);
     _inFlight = run;
     return run;
   }
 
-  Future<SyncOutcome> _run({required bool manual}) async {
+  Future<SyncOutcome> _run({
+    required bool manual,
+    bool pushOnly = false,
+  }) async {
     _setStatus(SyncStatus.syncing);
 
     // Pull before push: Material Master rows added centrally in Supabase,
@@ -238,8 +295,19 @@ class SyncController extends ChangeNotifier {
     // another device, since the last sync both land locally first, so this
     // run's push (and anything the user does right after tapping Sync) sees
     // them.
-    final materialMasterPull = await _syncService.pullMaterialMasterItems();
-    final corePull = await _syncService.pullCoreSurveyData();
+    //
+    // Skipped entirely for a push-only run: pulling data into an app the
+    // user is walking away from has no value, and every millisecond spent
+    // on it is one the push may not get (see requestBackgroundPush). The
+    // stand-in results are `success: true` because the pulls were never
+    // attempted — treating "not run" as a failure would wrongly downgrade a
+    // clean push to SyncStatus.failure via syncFullySucceeded below.
+    const notAttempted = SyncResult(success: true);
+    final materialMasterPull = pushOnly
+        ? notAttempted
+        : await _syncService.pullMaterialMasterItems();
+    final corePull =
+        pushOnly ? notAttempted : await _syncService.pullCoreSurveyData();
     final push = await _syncService.pushAll();
 
     // "Fully synced" is NOT push.success — pushAll() isolates per-row

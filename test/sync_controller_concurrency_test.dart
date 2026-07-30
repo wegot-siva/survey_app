@@ -35,6 +35,8 @@ class _FakeSyncService implements SyncService {
   final Duration pushDelay;
 
   int pushCalls = 0;
+  int materialMasterPullCalls = 0;
+  int corePullCalls = 0;
 
   /// Set false to make pushAll report a failure — no lastSyncedAt is
   /// recorded then, which is what the cooldown keys off.
@@ -50,12 +52,16 @@ class _FakeSyncService implements SyncService {
   }
 
   @override
-  Future<SyncResult> pullMaterialMasterItems() async =>
-      const SyncResult(success: true);
+  Future<SyncResult> pullMaterialMasterItems() async {
+    materialMasterPullCalls++;
+    return const SyncResult(success: true);
+  }
 
   @override
-  Future<SyncResult> pullCoreSurveyData() async =>
-      const SyncResult(success: true);
+  Future<SyncResult> pullCoreSurveyData() async {
+    corePullCalls++;
+    return const SyncResult(success: true);
+  }
 
   @override
   Future<List<Engineer>> fetchEngineerRoster() async => const [];
@@ -229,6 +235,99 @@ void main() {
         controller.dispose();
       },
     );
+  });
+
+  group('background push (Slice C)', () {
+    test('pushes without pulling — a backgrounded app has no use for '
+        'incoming data, and every ms spent is one the push may not get',
+        () async {
+      final service = _FakeSyncService();
+      final controller = _controller(service);
+
+      await controller.requestBackgroundPush();
+
+      expect(service.pushCalls, 1);
+      expect(service.materialMasterPullCalls, 0);
+      expect(service.corePullCalls, 0);
+      controller.dispose();
+    });
+
+    test('a clean push-only run still reports success — skipped pulls must '
+        'not be mistaken for failed ones', () async {
+      final service = _FakeSyncService();
+      final controller = _controller(service);
+
+      final outcome = await controller.requestBackgroundPush();
+
+      expect(outcome.status, SyncStatus.success);
+      expect(controller.status, SyncStatus.success);
+      controller.dispose();
+    });
+
+    test('bypasses the cooldown — the edit made just after a sync, right '
+        'before leaving, is exactly the one at risk', () async {
+      final service = _FakeSyncService();
+      final controller = _controller(service);
+
+      await controller.requestSync(manual: true); // starts the cooldown
+      expect(service.pushCalls, 1);
+
+      // A normal automatic trigger here would be skipped...
+      expect(await controller.requestSync(manual: false), isNull);
+      expect(service.pushCalls, 1);
+
+      // ...but backgrounding must still push.
+      await controller.requestBackgroundPush();
+      expect(service.pushCalls, 2);
+      controller.dispose();
+    });
+
+    test('bypasses the debounce — a delayed start would never fire, the '
+        'process is being suspended in that window', () async {
+      final service = _FakeSyncService();
+      final controller = _controller(service);
+
+      // Not awaited: the point is that it ran synchronously enough to have
+      // already called through, rather than parking on a debounce timer.
+      final run = controller.requestBackgroundPush();
+      await run;
+
+      expect(service.pushCalls, 1);
+      controller.dispose();
+    });
+
+    test('still respects single-flight — joins a full sync already running',
+        () async {
+      final service = _FakeSyncService(
+        pushDelay: const Duration(milliseconds: 150),
+      );
+      final controller = _controller(service);
+
+      final full = controller.requestSync(manual: true);
+      final background = controller.requestBackgroundPush();
+      final results = await Future.wait([full, background]);
+
+      expect(service.pushCalls, 1, reason: 'one run, not two');
+      expect(identical(results[0], results[1]), isTrue);
+      controller.dispose();
+    });
+
+    test('supersedes a pending debounced auto trigger without leaving it '
+        'hanging', () async {
+      final service = _FakeSyncService();
+      final controller = _controller(service);
+
+      final auto = controller.requestSync(manual: false); // debounced
+      final background = await controller.requestBackgroundPush();
+
+      expect(identical(await auto, background), isTrue);
+      expect(service.pushCalls, 1);
+
+      // The cancelled debounce timer must not fire a second run later.
+      await _past(_debounce);
+      expect(service.pushCalls, 1);
+      controller.dispose();
+    });
   });
 
   test('dispose completes a pending debounced request instead of hanging',

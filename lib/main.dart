@@ -88,7 +88,7 @@ class SurveyApp extends StatefulWidget {
   State<SurveyApp> createState() => _SurveyAppState();
 }
 
-class _SurveyAppState extends State<SurveyApp> {
+class _SurveyAppState extends State<SurveyApp> with WidgetsBindingObserver {
   // The user id the currently-loaded repository/syncService belong to, or
   // null when nothing is loaded (logged out, or a load is still in flight).
   String? _loadedForUserId;
@@ -99,6 +99,7 @@ class _SurveyAppState extends State<SurveyApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.session.addListener(_onSessionChanged);
     // Handles a session already restored (main() awaits session.restore()
     // before runApp) before this widget's first build.
@@ -107,9 +108,47 @@ class _SurveyAppState extends State<SurveyApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.session.removeListener(_onSessionChanged);
     _syncController?.dispose();
     super.dispose();
+  }
+
+  /// Lifecycle sync triggers. Observed here rather than on a screen because
+  /// this is app-level: an engineer backgrounding the app mid-form should
+  /// still get their saved work pushed, and HomeScreen isn't even built when
+  /// they're deep in a section form.
+  ///
+  /// Both routes go through the same [SyncController] as the Sync button and
+  /// the after-save trigger, so they inherit single-flight and (for resume)
+  /// the debounce/cooldown gates — no parallel concurrency handling.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final controller = _syncController;
+    if (controller == null) return; // logged out — nothing to sync
+
+    switch (state) {
+      case AppLifecycleState.resumed:
+        // Full sync: coming back is exactly when data from other devices is
+        // most likely to be stale, so this pulls as well as pushes. Gated
+        // normally — a quick app-switch round trip inside the cooldown is
+        // correctly skipped.
+        unawaited(controller.requestSync(manual: false));
+      case AppLifecycleState.paused:
+        // Push-only, immediately, best-effort — see requestBackgroundPush.
+        unawaited(controller.requestBackgroundPush());
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        // Deliberately ignored. `inactive` in particular is transient and
+        // noisy — it fires for the app switcher, the notification shade, an
+        // incoming call — none of which mean the user left. `paused` is the
+        // real "went to background" signal on Android and always follows
+        // `inactive` when they actually do, so nothing is missed by not
+        // acting here. `detached` is too late to start network work.
+        break;
+    }
   }
 
   void _onSessionChanged() {
