@@ -56,6 +56,14 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+  # Real (not in-memory-stub) SQLite for tests — sqflite's own plugin channel
+  # doesn't run under `flutter test` on desktop/CI, so exercising
+  # SqfliteSurveyRepository against actual row-level SQLite behavior needs
+  # this FFI-backed implementation instead. Added for Full sync Group 1's
+  # blocks-push fix, where "confirm via local SQLite query" needed to mean
+  # a literal query against real SQLite, not the in-memory repository stub.
+  sqflite_common_ffi: ^2.3.4
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 

@@ -1,20 +1,79 @@
+import 'dart:io';
+
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
-import '../models/engineer_directory.dart';
-
-/// Opens (and on first run, creates) the local SQLite database.
+/// Opens (and on first run, creates) the local SQLite database for [userId].
 ///
-/// Phase 1: local persistence only. Schema covers sites, their blocks, and the
-/// single per-site client inputs form. No Supabase / sync yet.
-const String _dbFileName = 'survey_app.db';
-const int _dbVersion = 26;
+/// Account-scoped local databases (shared-device data isolation fix): one
+/// physical file per signed-in account (`survey_app_<userId>.db`), not one
+/// shared file for the whole device. Before this, every account that ever
+/// logged in on a device shared a single local database — a row a Sales
+/// account created and never got around to syncing stayed sitting there,
+/// dirty, after the device logged out and a different account (often a
+/// different role, e.g. an Engineer) logged in, and every sync since kept
+/// retrying that push under whichever identity happened to be active,
+/// which RLS then correctly rejected (a real Sales-created site or another
+/// engineer's block, pushed under an Engineer session that never had rights
+/// to it) — see the forensic sync investigation this fixes.
+///
+/// This isn't a per-table patch (an `owner_user_id` column checked at push
+/// time would still leave a second account able to *read* the first
+/// account's cached local drafts, and would need to be added to every one
+/// of ~15 synced tables individually). Scoping the whole database file per
+/// account is a single structural fix that covers every table, current and
+/// future, and additionally means a previous account's offline work is
+/// simply untouched in its own file — not resurrected under someone else's
+/// identity, not silently wiped either — ready the moment they sign back
+/// in. See [main.dart]'s `_AuthGate` for the lifecycle: a database is opened
+/// only once a signed-in user id is known (never before login — nothing
+/// pre-login needs local storage), and swapped for a freshly-opened one
+/// whenever the active account changes.
+const int _dbVersion = 29;
 
-Future<Database> openAppDatabase() async {
+String _dbFileNameFor(String userId) => 'survey_app_$userId.db';
+
+/// Devices that already had data under the old single shared file
+/// (`survey_app.db`, from before this account-scoping fix) would otherwise
+/// have that data become invisible — not deleted, just never looked at
+/// again — once every account starts getting its own file. Rather than
+/// silently orphaning it, the legacy file is claimed (renamed, not copied)
+/// by whichever account is first to open a database after upgrading to
+/// this version. This is a one-time, best-effort reconciliation, not a
+/// true per-row ownership migration — the old shared schema never recorded
+/// which account created or edited any given row, so there's no way to
+/// correctly split its contents across multiple accounts if more than one
+/// had unsynced data in it. The single account that claims it keeps
+/// everything (including, harmlessly, any other account's already-synced
+/// rows it happened to have cached); every other account that logs into
+/// this device afterward simply starts with a fresh, empty database, same
+/// as a first-ever login. Idempotent: does nothing once any file has
+/// already claimed the legacy path, or on a device that never had one.
+Future<void> _claimLegacyDatabaseIfPresent(String docsDirPath, String newPath) async {
+  if (await File(newPath).exists()) return;
+  final legacyFile = File(p.join(docsDirPath, 'survey_app.db'));
+  if (await legacyFile.exists()) {
+    await legacyFile.rename(newPath);
+  }
+}
+
+Future<Database> openAppDatabaseForUser(String userId) async {
   final docsDir = await getApplicationDocumentsDirectory();
-  final dbPath = p.join(docsDir.path, _dbFileName);
+  return openAppDatabaseInDirectory(docsDir.path, userId);
+}
+
+/// The actual open-and-migrate logic, factored out from
+/// [openAppDatabaseForUser] so it's directly testable against a real temp
+/// directory without needing to mock path_provider's platform channel just
+/// to exercise file-naming/legacy-claim behavior.
+Future<Database> openAppDatabaseInDirectory(
+  String docsDirPath,
+  String userId,
+) async {
+  final dbPath = p.join(docsDirPath, _dbFileNameFor(userId));
+  await _claimLegacyDatabaseIfPresent(docsDirPath, dbPath);
 
   return openDatabase(
     dbPath,
@@ -137,15 +196,10 @@ Future<Database> openAppDatabase() async {
           'ALTER TABLE bom_snapshot_lines ADD COLUMN sensor_type TEXT',
         );
       }
-      // v13 -> v14: lightweight engineer roster + survey reassignment audit
-      // log. The roster is a plain list Sales assigns/reassigns against — not
-      // a real per-user auth system (the shared Engineer login is unchanged)
-      // — seeded from the same names AssignSurveyScreen has always offered
-      // (kEngineerDirectory) so reassignment offers exactly the same choices
-      // as initial assignment did.
+      // v13 -> v14: survey reassignment audit log. (This step originally
+      // also created a lightweight local engineer roster table — since
+      // dropped in v27, see that migration's comment.)
       if (oldVersion < 14) {
-        await _createEngineersTable(db);
-        await _seedEngineers(db);
         await _createSurveyAssignmentAuditTable(db);
       }
       // v14 -> v15: Sales site management — soft-delete flag ("archived",
@@ -171,8 +225,7 @@ Future<Database> openAppDatabase() async {
       // no separate "first sync" logic needed anywhere. `blocks` has no
       // column of its own — it has no stable per-row id (full delete+
       // reinsert already), so its dirtiness rides on `sites.dirty`.
-      // `engineers` / `survey_assignment_audit` are untouched — sync never
-      // pushes them today.
+      // `survey_assignment_audit` is untouched — sync never pushes it today.
       if (oldVersion < 16) {
         for (final table in [
           'sites',
@@ -386,6 +439,118 @@ Future<Database> openAppDatabase() async {
           ) WHERE owner_type = 'duct_lora'
         ''');
       }
+      // v26 -> v27: Full sync Group 1 — drop the local-only `engineers`
+      // roster table (and its kEngineerDirectory seed data). Confirmed
+      // retired: write-only since Roles & Assignment Slice 1c, when the
+      // real roster moved to `profiles` via fetchEngineerRoster() — nothing
+      // has read this table since. A device already past v14 has it
+      // populated; this removes it for real rather than just leaving it as
+      // unused dead weight.
+      //
+      // This version also fixes a real pre-existing bug found while
+      // building the blocks pull: updateSiteBlocks (the only path "Manage
+      // Blocks" uses) never set sites.dirty, so any block added or edited
+      // through that screen on an already-existing site has never actually
+      // reached Supabase — pushAll()'s site loop only ever considers sites
+      // in dirtySiteIds. The fix itself is in the Dart code, not this
+      // migration; what belongs here is the catch-up: force every local
+      // site dirty once on upgrade to v27, so the very next sync re-pushes
+      // every site's current state (including whatever blocks got silently
+      // stuck) exactly once. Safe regardless of whether a given site was
+      // actually affected — pushSite is a plain idempotent upsert, so a
+      // site that was already correctly synced just gets re-sent unchanged.
+      if (oldVersion < 27) {
+        await db.execute('DROP TABLE IF EXISTS engineers');
+        await db.execute('UPDATE sites SET dirty = 1');
+      }
+      // v27 -> v28: Full sync Group 1 (continued) — blocks gets its own
+      // stable id/dirty/pending_delete, exactly like source_points/
+      // inlet_points/duct_loras/gateways/bom_manual_entries, instead of
+      // riding on the site row via delete-all-and-reinsert. v27's fix
+      // (setting sites.dirty on a blocks edit) closed the push-skip
+      // symptom, but the delete-all-and-reinsert strategy itself has a
+      // second, sharper bug: because it has no way to tell a genuinely
+      // unchanged block from a deleted-then-recreated one, whenever a
+      // site's blocks got bundled into a push for ANY reason, the whole
+      // current local list — including a block another device had already
+      // deleted remotely but this device never learned about — got
+      // blindly resent, resurrecting it. Per-row identity and per-row
+      // dirty tracking (see SqfliteSurveyRepository.updateSiteBlocks /
+      // services/block_diff.dart) fix this at the root: a block nobody
+      // touched locally simply never becomes dirty, so it's never
+      // re-pushed, regardless of what else about the site changes.
+      //
+      // The old INTEGER AUTOINCREMENT id was purely local (never sent to
+      // Supabase — the old push didn't key on it at all), so there's
+      // nothing to preserve there; every existing row gets a fresh
+      // client-generated id and dirty=1, which doubles as the one-time
+      // catch-up for any block that was silently never pushed before
+      // either fix landed.
+      if (oldVersion < 28) {
+        final existingBlocks = await db.query('blocks');
+        await db.execute('''
+          CREATE TABLE blocks_new (
+            id             TEXT PRIMARY KEY,
+            site_id        TEXT NOT NULL,
+            position       INTEGER NOT NULL,
+            label          TEXT NOT NULL,
+            dirty          INTEGER NOT NULL DEFAULT 1,
+            pending_delete INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+          )
+        ''');
+        const uuid = Uuid();
+        for (final row in existingBlocks) {
+          await db.insert('blocks_new', {
+            'id': uuid.v4(),
+            'site_id': row['site_id'],
+            'position': row['position'],
+            'label': row['label'],
+            'dirty': 1,
+            'pending_delete': 0,
+          });
+        }
+        await db.execute('DROP TABLE blocks');
+        await db.execute('ALTER TABLE blocks_new RENAME TO blocks');
+      }
+      // v28 -> v29: `sync_blocked` — a row the signed-in account is not
+      // PERMITTED to write, as opposed to one that merely hasn't synced yet.
+      //
+      // A Postgres 42501 ("violates row-level security policy") is an
+      // authorization verdict, not a transient error: re-sending byte-
+      // identical data under the same account can never succeed. Before
+      // this flag the push loop couldn't tell the two apart, so such a row
+      // stayed dirty and was retried on every single sync forever, emitting
+      // an identical failure each time and permanently poisoning the sync
+      // status. sync_blocked lets the push queue skip it (see
+      // SqfliteSurveyRepository.getSites/getBlocks) while `dirty` stays 1 —
+      // deliberately: the local edit is preserved, never silently
+      // discarded, and the row is surfaced to the user as needing
+      // attention instead. It self-clears if a pull later brings down the
+      // authoritative remote version (see _pullAndReconcile) — at that
+      // point remote truth wins, since the local edit was never permitted.
+      //
+      // Only sites and blocks get this now: those are the two tables where
+      // a permanently-unpushable backlog was actually observed and traced.
+      // The same treatment generalizes to any other synced table if one
+      // ever exhibits it — the mechanism is per-table columns plus the
+      // markXSyncBlocked hooks in SyncService, not anything site-specific.
+      //
+      // NOTE for future migrations: v27's `UPDATE sites SET dirty = 1` and
+      // v28's blanket `'dirty': 1` above are what CREATED the backlog this
+      // flag now contains. They force-dirtied every local row, including
+      // rows the account can never legally push (another engineer's site
+      // cached locally, or a site that only ever existed on-device). A
+      // catch-up migration must scope its dirty-marking to rows the
+      // signed-in account can actually push — never a blanket UPDATE.
+      if (oldVersion < 29) {
+        await db.execute(
+          'ALTER TABLE sites ADD COLUMN sync_blocked INTEGER NOT NULL DEFAULT 0',
+        );
+        await db.execute(
+          'ALTER TABLE blocks ADD COLUMN sync_blocked INTEGER NOT NULL DEFAULT 0',
+        );
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -400,16 +565,20 @@ Future<Database> openAppDatabase() async {
           address             TEXT,
           client_name         TEXT,
           client_contact      TEXT,
-          dirty               INTEGER NOT NULL DEFAULT 1
+          dirty               INTEGER NOT NULL DEFAULT 1,
+          sync_blocked        INTEGER NOT NULL DEFAULT 0
         )
       ''');
 
       await db.execute('''
         CREATE TABLE blocks (
-          id       INTEGER PRIMARY KEY AUTOINCREMENT,
-          site_id  TEXT NOT NULL,
-          position INTEGER NOT NULL,
-          label    TEXT NOT NULL,
+          id             TEXT PRIMARY KEY,
+          site_id        TEXT NOT NULL,
+          position       INTEGER NOT NULL,
+          label          TEXT NOT NULL,
+          dirty          INTEGER NOT NULL DEFAULT 1,
+          pending_delete INTEGER NOT NULL DEFAULT 0,
+          sync_blocked   INTEGER NOT NULL DEFAULT 0,
           FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
         )
       ''');
@@ -454,8 +623,6 @@ Future<Database> openAppDatabase() async {
       await _createBomRevisionLinesTable(db);
       await _createBomManualEditSnapshotsTable(db);
       await _createBomManualEditSnapshotLinesTable(db);
-      await _createEngineersTable(db);
-      await _seedEngineers(db);
       await _createSurveyAssignmentAuditTable(db);
     },
   );
@@ -953,38 +1120,6 @@ Future<void> _createBomManualEditSnapshotLinesTable(Database db) async {
     'CREATE INDEX bom_manual_edit_snapshot_lines_snapshot_idx '
     'ON bom_manual_edit_snapshot_lines (snapshot_id)',
   );
-}
-
-/// Engineer roster table (v14) — Sales assigns/reassigns surveys against this
-/// list. A roster, not an auth system: the shared Engineer login (see
-/// UserRole) is unchanged; `name` is the plain string written to
-/// `sites.assigned_to`. Not site-scoped, so no FK — same shape as
-/// material_master_items.
-Future<void> _createEngineersTable(Database db) async {
-  await db.execute('''
-    CREATE TABLE engineers (
-      id   TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE
-    )
-  ''');
-}
-
-/// Seeds the roster from the same names AssignSurveyScreen has always
-/// offered (kEngineerDirectory), so reassignment offers exactly who could
-/// already be picked at initial assignment. Guarded by the table's
-/// UNIQUE(name) + ConflictAlgorithm.ignore, so calling this more than once is
-/// harmless.
-Future<void> _seedEngineers(Database db) async {
-  const uuid = Uuid();
-  await db.transaction((txn) async {
-    for (final name in kEngineerDirectory) {
-      await txn.insert(
-        'engineers',
-        {'id': uuid.v4(), 'name': name},
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
-    }
-  });
 }
 
 /// Survey reassignment audit log (v14). Genuinely survey-scoped — FK'd to

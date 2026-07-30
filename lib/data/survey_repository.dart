@@ -1,3 +1,4 @@
+import '../models/block.dart';
 import '../models/bom_manual_edit_snapshot.dart';
 import '../models/bom_manual_edit_snapshot_line.dart';
 import '../models/bom_manual_entry.dart';
@@ -38,10 +39,19 @@ abstract class SurveyRepository {
 
   Future<void> updateSite(Site site);
 
-  /// Replaces a site's block list. Leaves the site name and client inputs
-  /// untouched (unlike [updateSite], which writes the whole site). Blocks
-  /// have no independent dirty flag — they ride on the site's own (see
-  /// [markSiteSynced]), since they have no stable per-row id.
+  /// Replaces a site's block list with [blocks] (a flat list of labels — the
+  /// UI, [ManageBlocksScreen], has no concept of a block's identity beyond
+  /// its position). Internally reconciled against the site's currently
+  /// stored blocks (each with its own stable id) via [diffBlocks] — an
+  /// unchanged label produces no write at all, a changed one updates that
+  /// row in place, a shorter list tombstones the excess, a longer one
+  /// inserts new rows — rather than deleting and recreating the whole set,
+  /// which had no way to tell a genuinely unchanged block from a
+  /// deleted-then-recreated one and could resurrect a block another device
+  /// had already deleted (Full sync Group 1's blocks-push investigation).
+  /// Leaves the site name and client inputs untouched (unlike [updateSite],
+  /// which writes the whole site). Blocks have had their own per-row dirty
+  /// flag since that rework — no longer rides on the site row's.
   Future<void> updateSiteBlocks(String siteId, List<String> blocks);
 
   /// Saves (or replaces) the Client inputs form for an existing site.
@@ -53,28 +63,72 @@ abstract class SurveyRepository {
   /// forces a redundant push of the other.
   Future<bool> isClientInputsDirty(String siteId);
 
-  /// Clears the sync-pending flag for [siteId]'s site row (and blocks, which
-  /// share this flag — see [updateSiteBlocks]). Call once that row's push to
-  /// Supabase has succeeded.
+  /// Clears the sync-pending flag for [siteId]'s site row. Call once that
+  /// row's push to Supabase has succeeded. Blocks are tracked independently
+  /// — see [markBlockSynced].
   Future<void> markSiteSynced(String siteId);
 
   /// Clears the sync-pending flag for [siteId]'s Client inputs. Call once
   /// that row's push to Supabase has succeeded.
   Future<void> markClientInputsSynced(String siteId);
 
+  /// [siteId]'s active (not pending-delete) blocks, ordered by position.
+  /// [dirtyOnly] limits to blocks not yet pushed since their last local
+  /// change — sync-only, see [markBlockSynced].
+  Future<List<Block>> getBlocks(String siteId, {bool dirtyOnly = false});
+
+  /// Clears the sync-pending flag for block [id]. Call once that row's push
+  /// to Supabase has succeeded.
+  Future<void> markBlockSynced(String id);
+
+  /// Every block id currently pending deletion for [siteId] — sync-only,
+  /// see [SqfliteSurveyRepository._applyBlockDiff] (the tombstone side of
+  /// [updateSiteBlocks]) and [hardDeleteBlock].
+  Future<List<String>> getPendingDeleteBlockIds(String siteId);
+
+  /// Removes a tombstoned block row for real, once sync has confirmed its
+  /// remote delete succeeded. Sync-only — never called from the UI, which
+  /// already treats a pending-delete block as gone (see [updateSiteBlocks]).
+  Future<void> hardDeleteBlock(String id);
+
+  /// Marks a site permanently unpushable by the signed-in account — called
+  /// when its push is refused with a Postgres 42501 (RLS authorization),
+  /// which byte-identical retries can never overcome. The row keeps
+  /// `dirty = 1` so the local edit is preserved, but leaves the push queue
+  /// so it stops being retried (and re-failing) on every sync. Cleared
+  /// automatically if a pull later brings down the authoritative remote
+  /// version — see [upsertSitesFromRemote].
+  Future<void> markSiteSyncBlocked(String id);
+
+  /// Same as [markSiteSyncBlocked], for a block row.
+  Future<void> markBlockSyncBlocked(String id);
+
+  /// How many rows are currently sync-blocked across every table that
+  /// tracks it (sites + blocks today). Surfaced by the sync UI as "N rows
+  /// can't sync — needs attention", instead of silently retrying forever.
+  Future<int> countSyncBlocked();
+
   /// Merges Supabase's sites rows into local storage — new rows inserted,
   /// existing ones updated (never replaced wholesale: a column the remote
-  /// payload doesn't carry, e.g. archived/address/client_name/client_contact,
-  /// is left exactly as it was), unless that local row has an unsynced edit
-  /// of its own. A local row absent from [remoteRows] was deleted directly in
-  /// Supabase and is reconciled away here too — skipped entirely when
-  /// [remoteRows] is empty, so a failed/partial fetch can never be mistaken
-  /// for "every site was deleted." [remoteRows] must always be a complete
-  /// fetch of the whole table (see [SupabaseSurveyDataSource.fetchSites]'s
-  /// pagination) — never a partial page. Blocks and Client inputs are
-  /// separate tables/pulls (see [upsertClientInputsFromRemote]), not touched
-  /// here.
+  /// payload doesn't carry, e.g. address/client_name/client_contact, is left
+  /// exactly as it was), unless that local row has an unsynced edit of its
+  /// own. Does NOT reconcile deletes by absence — a site is never actually
+  /// deleted (see [Site.archived], now a real synced column as of Full sync
+  /// Group 1), so there's nothing here for absence to mean in the first
+  /// place. [remoteRows] should still be a complete fetch of the whole table
+  /// (see [SupabaseSurveyDataSource.fetchSites]'s pagination). Blocks and
+  /// Client inputs are separate tables/pulls (see [upsertBlocksFromRemote],
+  /// [upsertClientInputsFromRemote]), not touched here.
   Future<void> upsertSitesFromRemote(List<Map<String, dynamic>> remoteRows);
+
+  /// Same merge rule as [upsertSitesFromRemote], for blocks — keyed by their
+  /// own stable id (not site_id) since Full sync Group 1's blocks-push
+  /// rework gave every block one, same as source_points/inlet_points/etc.
+  /// Additionally: a remote row carrying a non-null `deleted_at` (blocks'
+  /// explicit delete tombstone) is hard-deleted locally instead of
+  /// upserted, unless the local row has an unsynced edit of its own — never
+  /// inferred from a row's absence, an explicit marker on the row itself.
+  Future<void> upsertBlocksFromRemote(List<Map<String, dynamic>> remoteRows);
 
   /// Same merge rule as [upsertSitesFromRemote], for Client inputs — keyed by
   /// site_id (not its own id), one row per site.

@@ -29,6 +29,7 @@ class SyncResult {
     this.bomRevisions = 0,
     this.bomManualEditSnapshots = 0,
     this.pushFailures = const [],
+    this.syncBlocked = 0,
     this.message,
   });
 
@@ -56,8 +57,41 @@ class SyncResult {
   /// pushed everything it could, it just didn't get everything.
   final List<String> pushFailures;
 
+  /// How many local rows are currently sync-blocked — refused by RLS
+  /// (Postgres 42501), so retrying them can never succeed with this
+  /// account. Distinct from [pushFailures]: those are retryable and DO mean
+  /// the run wasn't fully successful; these are a standing condition the
+  /// user has to resolve (a row belonging to someone else's site, or one
+  /// that only ever existed on this device). Reported separately by the UI
+  /// as "N rows can't sync — needs attention" rather than re-failing the
+  /// sync forever. See SurveyRepository.markSiteSyncBlocked.
+  final int syncBlocked;
+
   final String? message;
 }
+
+/// Whether a whole sync run — push + the core survey-data pull — fully
+/// succeeded, i.e. nothing was left unsynced.
+///
+/// This is the single source of truth the UI must use to decide "did this
+/// sync actually work", NOT [SyncResult.success] alone. [pushAll] isolates
+/// per-row failures on purpose (an RLS-rejected or otherwise-failing row is
+/// caught, left dirty for the next attempt, and does NOT abort the run), so
+/// it returns `success: true` even when it skipped rows — [success] means
+/// "the run didn't crash", not "everything reached the server". Reporting a
+/// run with skipped rows (or a failed pull) as a success is exactly the
+/// false-success bug: the row silently stays dirty while the status says
+/// "Synced". [SyncResult.pushFailures] aggregates skips across EVERY table
+/// [pushAll] touches, so gating on it here covers all of them uniformly —
+/// not a per-table check.
+///
+/// [corePull] is [SyncService.pullCoreSurveyData]'s result; a failed pull
+/// also means the device isn't fully in sync, so it counts against success
+/// too. Material Master's pull is deliberately excluded — it's global
+/// reference data on its own separate path, and its failure doesn't mean
+/// this device's own survey data failed to sync.
+bool syncFullySucceeded(SyncResult push, SyncResult corePull) =>
+    push.success && push.pushFailures.isEmpty && corePull.success;
 
 /// Mostly-push sync (Phase 3): reads local data via [SurveyRepository] and
 /// upserts it to Supabase via [SupabaseSurveyDataSource].
@@ -113,12 +147,41 @@ class SyncService {
     // whole-run problem (missing config, a thrown error outside any single
     // row's push) still produces success:false — see the outer try/catch.
     final failures = <String>[];
-    Future<bool> pushRow(String label, Future<void> Function() action) async {
+
+    /// [onPermissionDenied], when given, is invoked instead of recording a
+    /// retryable failure if the push is refused with Postgres 42501
+    /// ("violates row-level security policy"). That code is an
+    /// authorization verdict, not a transient error: the same account
+    /// re-sending the same row can never succeed, so retrying it every sync
+    /// forever just reproduces an identical failure and permanently poisons
+    /// the sync status. The callback marks the row sync_blocked (keeping
+    /// its local edit — see SurveyRepository.markSiteSyncBlocked), which
+    /// takes it out of the push queue and into a separate "needs attention"
+    /// count the UI reports distinctly. Every other error stays a normal
+    /// retryable failure.
+    Future<bool> pushRow(
+      String label,
+      Future<void> Function() action, {
+      Future<void> Function()? onPermissionDenied,
+    }) async {
       try {
         await action();
         return true;
       } catch (e) {
-        debugPrint('sync: $label failed: $e');
+        if (e is PostgrestException) {
+          debugPrint(
+            'sync: $label failed (PostgrestException): '
+            'message=${e.message} code=${e.code} details=${e.details} '
+            'hint=${e.hint}',
+          );
+          if (e.code == '42501' && onPermissionDenied != null) {
+            await onPermissionDenied();
+            debugPrint('sync: $label marked sync-blocked (not retried again)');
+            return false;
+          }
+        } else {
+          debugPrint('sync: $label failed (${e.runtimeType}): $e');
+        }
         failures.add('$label: $e');
         return false;
       }
@@ -153,17 +216,49 @@ class SyncService {
       var bomRevisions = 0;
       var bomManualEditSnapshots = 0;
       for (final site in sites) {
-        // Site row + blocks — bundled (see SupabaseSurveyDataSource.pushSite),
-        // so both share the site's own dirty flag.
         if (dirtySiteIds.contains(site.id)) {
-          final ok = await pushRow('sites/${site.id}', () async {
-            await _remote.pushSite(site);
-            await _repository.markSiteSynced(site.id);
-          });
-          if (ok) {
-            pushedSites++;
-            blocks += site.blocks.length;
-          }
+          final ok = await pushRow(
+            'sites/${site.id}',
+            () async {
+              await _remote.pushSite(site);
+              await _repository.markSiteSynced(site.id);
+            },
+            onPermissionDenied: () =>
+                _repository.markSiteSyncBlocked(site.id),
+          );
+          if (ok) pushedSites++;
+        }
+
+        // Blocks — tracked independently of the site row (Full sync Group 1's
+        // blocks-push rework: each block has its own stable id and dirty
+        // flag now, no longer bundled into the site's delete-all-and-
+        // reinsert). Deletions pushed first, same tombstone convention as
+        // every other per-row-deletable table below.
+        for (final id in await _repository.getPendingDeleteBlockIds(site.id)) {
+          final ok = await pushRow(
+            'blocks/$id (delete)',
+            () async {
+              await _remote.deleteBlock(id);
+              await _repository.hardDeleteBlock(id);
+            },
+            onPermissionDenied: () => _repository.markBlockSyncBlocked(id),
+          );
+          if (ok) blocks++;
+        }
+        for (final block in await _repository.getBlocks(
+          site.id,
+          dirtyOnly: true,
+        )) {
+          final ok = await pushRow(
+            'blocks/${block.id}',
+            () async {
+              await _remote.pushBlock(block);
+              await _repository.markBlockSynced(block.id);
+            },
+            onPermissionDenied: () =>
+                _repository.markBlockSyncBlocked(block.id),
+          );
+          if (ok) blocks++;
         }
 
         // Client inputs — tracked independently, so a site-only edit never
@@ -451,6 +546,11 @@ class SyncService {
         bomRevisions: bomRevisions,
         bomManualEditSnapshots: bomManualEditSnapshots,
         pushFailures: failures,
+        // Total standing blocked rows, not just the ones newly blocked this
+        // run — the UI reports a current condition ("N rows can't sync"),
+        // and rows blocked on an earlier run are skipped by the push queue
+        // so they'd otherwise vanish from the count entirely.
+        syncBlocked: await _repository.countSyncBlocked(),
         message: failures.isEmpty
             ? null
             : '${failures.length} row${failures.length == 1 ? '' : 's'} '
@@ -520,13 +620,14 @@ class SyncService {
     }
   }
 
-  /// Pulls the "Phase 1" core survey tables — sites, client_inputs, footers,
-  /// source_points, inlet_points, duct_loras, gateways, bom_manual_entries —
-  /// same merge-and-reconcile rule as [pullMaterialMasterItems], generalized
-  /// (see [SqfliteSurveyRepository]'s pull-reconcile helper for the shared
-  /// mechanics). bom_snapshots/bom_revisions and their line tables
-  /// (immutable once written) and engineers/survey_assignment_audit
-  /// (separate decision pending) are deliberately not part of this phase.
+  /// Pulls the "Phase 1" core survey tables — sites, blocks, client_inputs,
+  /// footers, source_points, inlet_points, duct_loras, gateways,
+  /// bom_manual_entries — same merge-and-reconcile rule as
+  /// [pullMaterialMasterItems], generalized (see [SqfliteSurveyRepository]'s
+  /// pull-reconcile helper for the shared mechanics). bom_snapshots/
+  /// bom_revisions and their line tables (immutable once written) and
+  /// survey_assignment_audit (separate decision pending) are deliberately
+  /// not part of this phase.
   ///
   /// Before this phase, every one of these tables was push-only — a survey
   /// created or edited on one device would never reach any other device,
@@ -558,6 +659,10 @@ class SyncService {
 
     try {
       await _repository.upsertSitesFromRemote(await _remote.fetchSites());
+      // Blocks pull must come after sites — it replaces blocks per local
+      // site row, and local sqlite FK enforcement (PRAGMA foreign_keys = ON)
+      // requires that row to already exist.
+      await _repository.upsertBlocksFromRemote(await _remote.fetchBlocks());
       await _repository.upsertClientInputsFromRemote(
         await _remote.fetchClientInputs(),
       );
@@ -575,6 +680,16 @@ class SyncService {
       );
       return const SyncResult(success: true);
     } on PostgrestException catch (e) {
+      // Diagnostic instrumentation (forensic sync investigation): this
+      // detail was already captured in the returned message, but never
+      // logged anywhere and never actually shown in the sync SnackBar (see
+      // home_screen.dart's hardcoded "core data pull failed" text) — so it
+      // was effectively swallowed despite the code looking like it wasn't.
+      debugPrint(
+        'sync: pullCoreSurveyData failed (PostgrestException): '
+        'message=${e.message} code=${e.code} details=${e.details} '
+        'hint=${e.hint}',
+      );
       return SyncResult(
         success: false,
         message: 'Core survey data pull failed (database):\n\n'
@@ -584,6 +699,7 @@ class SyncService {
             'hint: ${e.hint}',
       );
     } catch (e) {
+      debugPrint('sync: pullCoreSurveyData failed (${e.runtimeType}): $e');
       return SyncResult(success: false, message: 'Core survey data pull failed:\n\n$e');
     }
   }

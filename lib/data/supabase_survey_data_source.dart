@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/block.dart';
 import '../models/bom_manual_edit_snapshot.dart';
 import '../models/bom_manual_edit_snapshot_line.dart';
 import '../models/bom_manual_entry.dart';
@@ -26,44 +27,96 @@ import '../models/survey_photo.dart';
 /// Remote (Supabase) reads/writes for survey data.
 ///
 /// Push-only tables (bom_snapshots/bom_revisions and their line tables,
-/// engineers, survey_assignment_audit): reachable only from the device that
-/// authored them, deliberately deferred — see [SyncService] for why. Every
-/// other table also has a pull (`fetchX`) — sites, client_inputs, footers,
+/// survey_assignment_audit): reachable only from the device that authored
+/// them, deliberately deferred — see [SyncService] for why. Every other
+/// table also has a pull (`fetchX`) — sites, blocks, client_inputs, footers,
 /// source_points, inlet_points, duct_loras, gateways, bom_manual_entries,
 /// plus Material Master (global reference data, pulled since the earliest
 /// slice). A pulled row reaches every device, not just the one that entered
 /// it, and a row deleted directly in Supabase is reconciled away locally too
-/// — see [SqfliteSurveyRepository]'s pull-reconcile helper.
+/// — see [SqfliteSurveyRepository]'s pull-reconcile helper. (Full sync Group
+/// 1: blocks joins this list without a tombstone — see [fetchBlocks].)
 ///
 /// Upserts are idempotent — keyed by the same UUIDs used locally — so repeating
 /// a sync converges to the same rows instead of duplicating them.
 class SupabaseSurveyDataSource {
   SupabaseClient get _client => Supabase.instance.client;
 
-  /// Pushes one site's row and its blocks. Order matters: the site row must
-  /// exist before blocks (which reference it via FK). Client inputs are
-  /// pushed separately (see [pushClientInputs]) — they're dirty-tracked
-  /// independently of the site row, so a site-only edit shouldn't force a
-  /// redundant client_inputs push and vice versa.
+  /// Pushes one site's row (name/status/assignment/bom_locked/archived
+  /// only). Blocks and Client inputs are pushed separately — see
+  /// [pushBlock]/[deleteBlock] and [pushClientInputs] — each dirty-tracked
+  /// independently of the site row (and, since Full sync Group 1's
+  /// blocks-push rework, independently of each other too) so editing one
+  /// never forces a redundant push of another.
+  ///
+  /// UPDATE-if-exists / INSERT-only-if-new, deliberately NOT `.upsert()`.
+  /// PostgREST issues upsert as `INSERT ... ON CONFLICT DO UPDATE`, and
+  /// Postgres evaluates the INSERT policy's WITH CHECK even when the row
+  /// already exists and the operation resolves to an update. sites' INSERT
+  /// policy is `is_site_manager()` (Slice 2c) — so an Engineer upserting a
+  /// site they already own (e.g. pushing their own status -> in_progress on
+  /// an assigned site) got a 42501 RLS violation on the INSERT check, even
+  /// though the sites UPDATE policy explicitly permits that exact update and
+  /// a plain UPDATE succeeds (verified: upsert 403 vs PATCH 204). That broke
+  /// every Engineer site-status push and was masked for a long time by the
+  /// sync's false-success reporting. Doing an explicit UPDATE first, then an
+  /// INSERT only when the update matched no existing row, routes each role
+  /// through the policy that actually applies to it: an Engineer updating
+  /// their own site hits only the UPDATE policy (passes); a manager creating
+  /// a new site falls through to INSERT (passes is_site_manager); an
+  /// Engineer attempting to create a genuinely new site still correctly
+  /// fails the INSERT check, since only a manager may create a site.
   Future<void> pushSite(Site site) async {
-    await _client.from('sites').upsert({
+    final row = {
       'id': site.id,
       'name': site.name,
       'status': site.status,
       'assigned_to': site.assignedTo,
       'assigned_to_user_id': site.assignedToUserId,
       'bom_locked': site.bomLocked,
-    });
-
-    // Blocks carry no stable id in the domain model, so replace the whole set
-    // for this site: delete existing rows, then insert the current ordered list.
-    await _client.from('blocks').delete().eq('site_id', site.id);
-    if (site.blocks.isNotEmpty) {
-      await _client.from('blocks').insert([
-        for (var i = 0; i < site.blocks.length; i++)
-          {'site_id': site.id, 'position': i, 'label': site.blocks[i]},
-      ]);
+      'archived': site.archived,
+    };
+    final updated = await _client
+        .from('sites')
+        .update(row)
+        .eq('id', site.id)
+        .select('id');
+    if (updated.isEmpty) {
+      // No existing row matched — this is a genuinely new site. INSERT is
+      // gated to site managers by RLS; an Engineer reaching here (e.g. a
+      // site stranded in their local db that was never created remotely)
+      // will correctly get a 42501, surfaced as a skipped row.
+      await _client.from('sites').insert(row);
     }
+  }
+
+  /// Upserts a block by its own stable id (idempotent). The parent site
+  /// must already have been pushed (FK). Per-row, not a whole-site replace
+  /// — see [SqfliteSurveyRepository.updateSiteBlocks] / block_diff.dart for
+  /// why the old delete-all-and-reinsert approach could resurrect a block
+  /// another device had already deleted.
+  Future<void> pushBlock(Block block) async {
+    await _client.from('blocks').upsert({
+      'id': block.id,
+      'site_id': block.siteId,
+      'position': block.position,
+      'label': block.label,
+    });
+  }
+
+  /// Marks a block deleted by id — an explicit `deleted_at` tombstone
+  /// (`UPDATE`), not a real `DELETE`. blocks' RLS no longer grants DELETE
+  /// at all (see schema.sql's "Blocks explicit delete tombstone" section) —
+  /// a real row delete would be invisible to pull reconciliation (which
+  /// only ever sees rows a fetch actually returns), silently breaking
+  /// propagation to other devices exactly the way absence-based deletion
+  /// already proved unsafe. Idempotent: re-tombstoning an already-deleted
+  /// row, or one that was somehow never pushed, is a harmless no-op update.
+  Future<void> deleteBlock(String id) async {
+    await _client
+        .from('blocks')
+        .update({'deleted_at': DateTime.now().toUtc().toIso8601String()})
+        .eq('id', id);
   }
 
   /// Upserts the Client inputs form for [siteId] (idempotent). The parent
@@ -189,15 +242,24 @@ class SupabaseSurveyDataSource {
   }
 
   /// Every site row (id/name/status/assigned_to/assigned_to_user_id/
-  /// bom_locked only — blocks and client_inputs are separate tables/pulls;
-  /// archived/address/client_name/client_contact are Sales-only fields never
-  /// pushed to Supabase in the first place, so they're simply absent from
-  /// every remote row — see [SqfliteSurveyRepository]'s pull-reconcile
-  /// helper for why that's safe).
+  /// bom_locked/archived — blocks and client_inputs are separate
+  /// tables/pulls; address/client_name/client_contact are Sales-only fields
+  /// never pushed to Supabase at all, so they're simply absent from every
+  /// remote row — see [SqfliteSurveyRepository]'s pull-reconcile helper for
+  /// why that's safe).
   Future<List<Map<String, dynamic>>> fetchSites() => _fetchAllRows('sites');
 
+  /// Every block row across every site this account can see (RLS scopes it
+  /// exactly like [fetchSites] — can_access_site(site_id)). Since Full sync
+  /// Group 1's blocks-push rework gave every block a stable id, the caller
+  /// reconciles these the same per-row way as source_points/inlet_points/
+  /// etc. (see SqfliteSurveyRepository.upsertBlocksFromRemote), not a
+  /// group-and-replace.
+  Future<List<Map<String, dynamic>>> fetchBlocks() => _fetchAllRows('blocks');
+
   /// The current engineer roster — real accounts (`profiles` rows with
-  /// `role = 'engineer'`), not the retired hardcoded `kEngineerDirectory`.
+  /// `role = 'engineer'`), not the retired local `engineers` table/hardcoded
+  /// roster it used to seed from (removed entirely as of Full sync Group 1).
   /// Deliberately a live query, not a locally-cached pull like every other
   /// `fetchX` here: the roster is small and only needed at the moment
   /// someone is assigning/reassigning a survey, so a network round-trip

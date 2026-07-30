@@ -9,13 +9,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:survey_app/data/auth_repository.dart';
 import 'package:survey_app/data/in_memory_survey_repository.dart';
-import 'package:survey_app/data/supabase_survey_data_source.dart';
 import 'package:survey_app/main.dart';
 import 'package:survey_app/models/user_role.dart';
 import 'package:survey_app/services/id_service.dart';
 import 'package:survey_app/services/session_controller.dart';
 import 'package:survey_app/services/supabase_service.dart';
-import 'package:survey_app/services/sync_service.dart';
 
 class _FakeAuthRepository implements AuthRepository {
   _FakeAuthRepository(this._users);
@@ -62,14 +60,9 @@ void main() {
 
     await tester.pumpWidget(
       SurveyApp(
-        repository: repository,
         supabaseService: supabaseService,
-        syncService: SyncService(
-          repository,
-          supabaseService,
-          SupabaseSurveyDataSource(),
-        ),
         session: session,
+        repositoryFor: (_) async => repository,
       ),
     );
     await tester.pumpAndSettle();
@@ -77,7 +70,7 @@ void main() {
     expect(find.text('Sites'), findsOneWidget);
     expect(find.text('New survey'), findsOneWidget);
     expect(find.text('No sites yet'), findsOneWidget);
-    expect(find.text('Signed in as Sales'), findsOneWidget);
+    expect(find.text('Sam Sales (Sales)'), findsOneWidget);
   });
 
   testWidgets('Approver sees every site, like Sales and Admin', (tester) async {
@@ -110,14 +103,9 @@ void main() {
 
     await tester.pumpWidget(
       SurveyApp(
-        repository: repository,
         supabaseService: supabaseService,
-        syncService: SyncService(
-          repository,
-          supabaseService,
-          SupabaseSurveyDataSource(),
-        ),
         session: session,
+        repositoryFor: (_) async => repository,
       ),
     );
     await tester.pumpAndSettle();
@@ -161,14 +149,9 @@ void main() {
 
     await tester.pumpWidget(
       SurveyApp(
-        repository: repository,
         supabaseService: supabaseService,
-        syncService: SyncService(
-          repository,
-          supabaseService,
-          SupabaseSurveyDataSource(),
-        ),
         session: session,
+        repositoryFor: (_) async => repository,
       ),
     );
     await tester.pumpAndSettle();
@@ -185,14 +168,9 @@ void main() {
 
     await tester.pumpWidget(
       SurveyApp(
-        repository: repository,
         supabaseService: supabaseService,
-        syncService: SyncService(
-          repository,
-          supabaseService,
-          SupabaseSurveyDataSource(),
-        ),
         session: session,
+        repositoryFor: (_) async => repository,
       ),
     );
     await tester.pumpAndSettle();

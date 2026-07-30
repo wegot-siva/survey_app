@@ -975,9 +975,9 @@ create policy "site managers insert sites" on public.sites
 
 -- DELETE: no policy at all, for anyone — RLS default-denies with no
 -- matching permissive policy. The app never hard-deletes a site; Sales'
--- "Delete site" sets the local-only `archived` flag (never pushed to
--- Supabase in the first place — see _pullAndReconcile's doc), so there is
--- no legitimate DELETE to allow here.
+-- "Delete site" sets the `archived` flag (a normal synced column as of
+-- Full sync Group 1 — see below), so there is no legitimate DELETE to
+-- allow here.
 
 -- ---- blocks, client_inputs ---------------------------------------------
 --
@@ -1686,3 +1686,149 @@ create policy "insert survey-photos via site" on storage.objects
 -- Slice 2b's profiles policies.
 -- Re-runnable / idempotent.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- Full sync Group 1 — sites.archived becomes a real synced column.
+--
+-- "Delete site" has only ever set this locally (see the DELETE-policy
+-- comment on sites above, and SqfliteSurveyRepository's pull-reconcile doc —
+-- both now stale, kept only as history of why sites had no DELETE policy in
+-- the first place: there is still no genuine row delete to allow, archived
+-- just becomes a normal synced field like any other on the row). No RLS
+-- change needed: sites' existing UPDATE policy (site-scoped via
+-- can_access_site/is_site_manager) and prevent_engineer_site_reassignment
+-- trigger (which only restricts name/assigned_to/assigned_to_user_id)
+-- already cover this column with no amendment — and in the app, "Delete
+-- site" is gated to Sales/Admin/Approver only (home_screen.dart's
+-- _canManageSites), so this was never reachable by Engineer in practice
+-- anyway.
+--
+-- No tombstone here — archived hides a site, it never deletes the row, so
+-- there's nothing for a reconcile pull to detect via absence in the first
+-- place; this is a plain field like bom_locked.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.sites
+  add column if not exists archived boolean not null default false;
+
+-- ---------------------------------------------------------------------------
+-- Full sync Group 1 (continued) — blocks push/pull rework: real per-row
+-- identity instead of delete-all-and-reinsert.
+--
+-- Root cause (confirmed with logged/SQL evidence, not inferred — see the
+-- blocks-push investigation): the old strategy had no stable id shared
+-- between local storage and Supabase, so it couldn't tell a genuinely
+-- unchanged block from a deleted-then-recreated one. That single defect
+-- produced two symptoms: a block-only edit's push could fail/get skipped
+-- as a whole, and — sharper — whenever a site's blocks got swept into a
+-- push for ANY reason, the whole current local list, including a block
+-- another device had already deleted remotely but this device never
+-- learned about, got blindly resent, resurrecting it.
+--
+-- blocks.id changes from a server-generated `bigint identity` to a
+-- client-provided `text` (same shape as every other table's id), which
+-- can't be done as an in-place ALTER (existing numeric ids can't become
+-- meaningful client uuids). This DROPS and recreates the table rather than
+-- attempting a data-preserving type migration — deliberate, not an
+-- oversight: the old id was never something the app tracked (push never
+-- sent it, pull never read it), so there's nothing worth preserving under
+-- it, and every device already has the current correct block content
+-- locally, which the matching local migration (app_database.dart's
+-- v27 -> v28) marks dirty=1 so it re-pushes under the new stable ids on
+-- each device's next sync. Safe specifically because this is a small
+-- dev/test dataset with every row reconstructible from a device — not a
+-- general-purpose pattern for a production table with irreplaceable data.
+--
+-- RLS is unchanged in shape (still can_access_site(site_id), still no
+-- DELETE-by-absence anywhere) — recreated here only because dropping the
+-- table drops its policies with it.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+drop table if exists public.blocks;
+
+create table public.blocks (
+  id       text primary key,
+  site_id  text not null references public.sites (id) on delete cascade,
+  position integer not null,
+  label    text not null
+);
+
+create index if not exists blocks_site_id_idx on public.blocks (site_id);
+
+alter table public.blocks enable row level security;
+
+drop policy if exists "access blocks via site" on public.blocks;
+create policy "access blocks via site" on public.blocks
+  for all to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+-- anon is deliberately not granted — same reasoning as every other
+-- site-scoped table since Slice 2c.
+
+-- ---------------------------------------------------------------------------
+-- Blocks explicit delete tombstone — deleted_at, replacing the real DELETE
+-- the previous section still allowed (via "for all").
+--
+-- Absence-based delete detection was ruled unsafe for every RLS-scoped
+-- table back in the sync-safety work (a legitimately narrower fetch — RLS
+-- hiding a row this caller was never meant to see — is indistinguishable
+-- from a real deletion once you're only looking at what came back). The
+-- fix isn't "leave deletes unsynced downward" forever, though — it's an
+-- EXPLICIT marker every caller can see on the row itself, checked directly,
+-- never inferred from the row's absence. blocks is the first table this
+-- session actually builds that for (every other per-row-deletable table —
+-- source_points, inlet_points, duct_loras, gateways, bom_manual_entries —
+-- still only propagates deletes upward, one direction, exactly as before;
+-- extending them the same way is separate, future work, not implied by
+-- this change).
+--
+-- deleted_at is nullable, set once, never cleared — a block is "deleted"
+-- the moment this is non-null, full stop. RLS SELECT does NOT filter on it
+-- (must not: pull-reconcile needs to see a tombstoned row to act on it —
+-- filtering it out here would silently break the exact mechanism this
+-- exists to provide, the same rule already documented for every other
+-- tombstoned table). Local display/read paths are what hide a deleted row
+-- from the UI, same as the local pending_delete convention everywhere else.
+--
+-- DELETE is removed from the policy entirely (the "for all" above is
+-- superseded by the three commands below) — not just "the app doesn't
+-- currently call it," but genuinely disallowed at the database level, so
+-- nobody (including a future code path, including direct SQL Editor use)
+-- can bypass the tombstone by hard-deleting a row out from under pull
+-- reconciliation. "Delete" a block by setting deleted_at via UPDATE, which
+-- the existing can_access_site(site_id)-scoped UPDATE policy already
+-- permits — no new grant needed for that half.
+--
+-- can_access_site(site_id) on every command means a caller can only ever
+-- see, insert, update, or tombstone a block belonging to a site they can
+-- access in the first place — a block for an inaccessible site is invisible
+-- end to end, never returned, never reconciled, never touched.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.blocks
+  add column if not exists deleted_at timestamptz;
+
+drop policy if exists "access blocks via site" on public.blocks;
+
+drop policy if exists "select blocks via site" on public.blocks;
+create policy "select blocks via site" on public.blocks
+  for select to authenticated
+  using (public.can_access_site(site_id));
+
+drop policy if exists "insert blocks via site" on public.blocks;
+create policy "insert blocks via site" on public.blocks
+  for insert to authenticated
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "update blocks via site" on public.blocks;
+create policy "update blocks via site" on public.blocks
+  for update to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+-- No DELETE policy — see the doc block above for why this is deliberate,
+-- not an oversight.

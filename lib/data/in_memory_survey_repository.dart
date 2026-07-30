@@ -1,3 +1,4 @@
+import '../models/block.dart';
 import '../models/bom_manual_edit_snapshot.dart';
 import '../models/bom_manual_edit_snapshot_line.dart';
 import '../models/bom_manual_entry.dart';
@@ -18,6 +19,7 @@ import '../models/survey_assignment_audit_entry.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 import '../models/survey_status.dart';
+import '../services/block_diff.dart';
 import '../services/id_service.dart';
 import '../services/material_master_audit_builder.dart';
 import 'survey_repository.dart';
@@ -29,6 +31,13 @@ class InMemorySurveyRepository implements SurveyRepository {
 
   final IdService _idService;
   final Map<String, Site> _sites = {};
+  final Map<String, Block> _blocks = {}; // keyed by id
+  final Set<String> _dirtyBlockIds = {};
+  final Set<String> _pendingDeleteBlockIds = {};
+  // Mirrors the sqflite `sync_blocked` column — rows refused by RLS (42501)
+  // that leave the push queue but keep their local edit.
+  final Set<String> _syncBlockedSiteIds = {};
+  final Set<String> _syncBlockedBlockIds = {};
   final Map<String, SourcePoint> _sourcePoints = {};
   final Map<String, InletPoint> _inletPoints = {};
   final Map<String, DuctLora> _ductLoras = {};
@@ -51,8 +60,8 @@ class InMemorySurveyRepository implements SurveyRepository {
   //
   // Mirrors the sqflite repo's `dirty` column with a per-table id set: added
   // on every local create/update, removed by the matching markXxxSynced.
-  // Blocks have no set of their own — they ride on _dirtySiteIds, same as
-  // the sqflite implementation (see updateSiteBlocks).
+  // Blocks track their own (_dirtyBlockIds, above) since Full sync Group 1's
+  // blocks-push rework.
   final Set<String> _dirtySiteIds = {};
   final Set<String> _dirtyClientInputsSiteIds = {};
   final Set<String> _dirtySourcePointIds = {};
@@ -85,7 +94,9 @@ class InMemorySurveyRepository implements SurveyRepository {
       .where(
         (s) =>
             (includeArchived || !s.archived) &&
-            (!dirtyOnly || _dirtySiteIds.contains(s.id)),
+            (!dirtyOnly ||
+                (_dirtySiteIds.contains(s.id) &&
+                    !_syncBlockedSiteIds.contains(s.id))),
       )
       .toList(growable: false);
 
@@ -97,19 +108,19 @@ class InMemorySurveyRepository implements SurveyRepository {
     required String name,
     List<String> blocks = const [],
   }) async {
-    final site = Site(
-      id: _idService.newId(),
-      name: name,
-      blocks: List.unmodifiable(blocks),
-    );
-    _sites[site.id] = site;
-    _dirtySiteIds.add(site.id);
+    final id = _idService.newId();
+    _sites[id] = Site(id: id, name: name, blocks: const []);
+    _dirtySiteIds.add(id);
+    _applyBlockDiff(id, blocks);
+    final site = _sites[id]!.copyWith(blocks: _activeBlockLabels(id));
+    _sites[id] = site;
     return site;
   }
 
   @override
   Future<void> updateSite(Site site) async {
-    _sites[site.id] = site;
+    _applyBlockDiff(site.id, site.blocks);
+    _sites[site.id] = site.copyWith(blocks: _activeBlockLabels(site.id));
     _dirtySiteIds.add(site.id);
     // Mirrors the sqflite repo: updateSite always re-persists client inputs
     // when present, so it's also dirty after this call.
@@ -122,9 +133,48 @@ class InMemorySurveyRepository implements SurveyRepository {
     if (site == null) {
       throw StateError('Cannot update blocks: site "$siteId" not found.');
     }
-    _sites[siteId] = site.copyWith(blocks: List.unmodifiable(blocks));
-    _dirtySiteIds.add(siteId);
+    // Blocks have had their own per-row dirty flag since Full sync Group
+    // 1's blocks-push rework — this no longer touches _dirtySiteIds.
+    _applyBlockDiff(siteId, blocks);
+    _sites[siteId] = site.copyWith(blocks: _activeBlockLabels(siteId));
   }
+
+  /// Mirrors [SqfliteSurveyRepository._applyBlockDiff] — reconciles [siteId]'s
+  /// currently-active blocks against [newLabels] via [diffBlocks] rather
+  /// than clearing and recreating the whole set (see that method's doc for
+  /// why: an untouched block must never become dirty just because some
+  /// other block on the same site changed).
+  void _applyBlockDiff(String siteId, List<String> newLabels) {
+    final existing = _activeBlocksFor(siteId);
+    final existingForDiff = [
+      for (final b in existing) ExistingBlock(id: b.id, label: b.label),
+    ];
+    for (final op in diffBlocks(existingForDiff, newLabels)) {
+      switch (op) {
+        case InsertBlockOp(:final position, :final label):
+          final id = _idService.newId();
+          _blocks[id] = Block(id: id, siteId: siteId, position: position, label: label);
+          _dirtyBlockIds.add(id);
+        case UpdateBlockOp(:final id, :final position, :final label):
+          _blocks[id] = Block(id: id, siteId: siteId, position: position, label: label);
+          _dirtyBlockIds.add(id);
+        case TombstoneBlockOp(:final id):
+          _pendingDeleteBlockIds.add(id);
+          _dirtyBlockIds.add(id);
+      }
+    }
+  }
+
+  List<Block> _activeBlocksFor(String siteId) {
+    final list = _blocks.values
+        .where((b) => b.siteId == siteId && !_pendingDeleteBlockIds.contains(b.id))
+        .toList();
+    list.sort((a, b) => a.position.compareTo(b.position));
+    return list;
+  }
+
+  List<String> _activeBlockLabels(String siteId) =>
+      [for (final b in _activeBlocksFor(siteId)) b.label];
 
   @override
   Future<void> saveClientInputs(String siteId, ClientInputs inputs) async {
@@ -150,26 +200,87 @@ class InMemorySurveyRepository implements SurveyRepository {
     _dirtyClientInputsSiteIds.remove(siteId);
   }
 
+  @override
+  Future<List<Block>> getBlocks(String siteId, {bool dirtyOnly = false}) async {
+    final blocks = _activeBlocksFor(siteId);
+    return dirtyOnly
+        ? blocks
+              .where(
+                (b) =>
+                    _dirtyBlockIds.contains(b.id) &&
+                    !_syncBlockedBlockIds.contains(b.id),
+              )
+              .toList()
+        : blocks;
+  }
+
+  @override
+  Future<void> markBlockSynced(String id) async {
+    _dirtyBlockIds.remove(id);
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteBlockIds(String siteId) async =>
+      _blocks.values
+          .where(
+            (b) =>
+                b.siteId == siteId &&
+                _pendingDeleteBlockIds.contains(b.id) &&
+                !_syncBlockedBlockIds.contains(b.id),
+          )
+          .map((b) => b.id)
+          .toList();
+
+  @override
+  Future<void> hardDeleteBlock(String id) async {
+    _blocks.remove(id);
+    _pendingDeleteBlockIds.remove(id);
+    _dirtyBlockIds.remove(id);
+  }
+
+  @override
+  Future<void> markSiteSyncBlocked(String id) async {
+    _syncBlockedSiteIds.add(id);
+  }
+
+  @override
+  Future<void> markBlockSyncBlocked(String id) async {
+    _syncBlockedBlockIds.add(id);
+  }
+
+  @override
+  Future<int> countSyncBlocked() async =>
+      _syncBlockedSiteIds.length + _syncBlockedBlockIds.length;
+
   /// Mirrors [SqfliteSurveyRepository]'s pull-reconcile: an unsynced local
   /// edit is left untouched; blocks/clientInputs and the Sales-only fields
-  /// (archived/address/clientName/clientContact — never pushed to Supabase
-  /// at all) are carried over from the existing row, not reset, since the
-  /// remote payload never carries them.
+  /// (address/clientName/clientContact — never pushed to Supabase at all)
+  /// are carried over from the existing row, not reset, since the remote
+  /// payload never carries them. archived IS carried by the remote payload
+  /// as of Full sync Group 1.
   @override
   Future<void> upsertSitesFromRemote(List<Map<String, dynamic>> remoteRows) async {
     for (final row in remoteRows) {
       final id = row['id'] as String;
-      if (_dirtySiteIds.contains(id)) continue;
+      // A sync-blocked row is NOT protected: remote is authoritative,
+      // since the local edit was refused permission. Mirrors
+      // SqfliteSurveyRepository._pullAndReconcile's hasSyncBlocked path.
+      if (_syncBlockedSiteIds.contains(id)) {
+        _syncBlockedSiteIds.remove(id);
+        _dirtySiteIds.remove(id);
+      } else if (_dirtySiteIds.contains(id)) {
+        continue;
+      }
       final existing = _sites[id];
       _sites[id] = Site(
         id: id,
         name: (row['name'] as String?) ?? '',
-        blocks: existing?.blocks ?? const [],
+        blocks: _activeBlockLabels(id),
         clientInputs: existing?.clientInputs,
         status: row['status'] as String?,
         assignedTo: row['assigned_to'] as String?,
         bomLocked: (row['bom_locked'] as bool?) ?? false,
-        archived: existing?.archived ?? false,
+        archived: (row['archived'] as bool?) ?? existing?.archived ?? false,
         address: existing?.address ?? '',
         clientName: existing?.clientName ?? '',
         clientContact: existing?.clientContact ?? '',
@@ -182,6 +293,44 @@ class InMemorySurveyRepository implements SurveyRepository {
       if (remoteIds.contains(id)) continue;
       if (_dirtySiteIds.contains(id)) continue;
       _sites.remove(id);
+    }
+  }
+
+  /// Mirrors [SqfliteSurveyRepository.upsertBlocksFromRemote]: per-row
+  /// upsert-by-id now that blocks have a stable one, protecting any block
+  /// with an unsynced local edit or pending deletion — and, since that
+  /// method also gained deletedAtColumn support, a remote row carrying a
+  /// non-null `deleted_at` is hard-deleted locally (or simply never
+  /// added, if this stub never had it) instead of upserted, unless
+  /// protected the same way.
+  @override
+  Future<void> upsertBlocksFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    for (final row in remoteRows) {
+      final id = row['id'] as String;
+      // Blocked rows yield to remote truth — see upsertSitesFromRemote.
+      if (_syncBlockedBlockIds.contains(id)) {
+        _syncBlockedBlockIds.remove(id);
+        _dirtyBlockIds.remove(id);
+        _pendingDeleteBlockIds.remove(id);
+      } else if (_dirtyBlockIds.contains(id) ||
+          _pendingDeleteBlockIds.contains(id)) {
+        continue;
+      }
+      if (row['deleted_at'] != null) {
+        _blocks.remove(id);
+        continue;
+      }
+      _blocks[id] = Block(
+        id: id,
+        siteId: row['site_id']! as String,
+        position: row['position']! as int,
+        label: row['label']! as String,
+      );
+    }
+    for (final id in _sites.keys.toList()) {
+      _sites[id] = _sites[id]!.copyWith(blocks: _activeBlockLabels(id));
     }
   }
 

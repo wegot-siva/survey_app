@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 
+import '../models/block.dart';
 import '../models/bom_manual_edit_snapshot.dart';
 import '../models/bom_manual_edit_snapshot_line.dart';
 import '../models/bom_manual_entry.dart';
@@ -20,6 +21,7 @@ import '../models/survey_assignment_audit_entry.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 import '../models/survey_status.dart';
+import '../services/block_diff.dart';
 import '../services/id_service.dart';
 import '../services/material_master_audit_builder.dart';
 import 'survey_repository.dart';
@@ -43,7 +45,10 @@ class SqfliteSurveyRepository implements SurveyRepository {
   }) async {
     final conditions = <String>[
       if (!includeArchived) 'archived = 0',
-      if (dirtyOnly) 'dirty = 1',
+      // sync_blocked rows are excluded from the push queue only (dirtyOnly)
+      // — never from normal reads, so a blocked row still shows in the UI
+      // with its local edit intact. See the v28 -> v29 migration.
+      if (dirtyOnly) 'dirty = 1 AND sync_blocked = 0',
     ];
     final rows = await _db.query(
       'sites',
@@ -77,7 +82,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
     final id = _idService.newId();
     await _db.transaction((txn) async {
       await txn.insert('sites', {'id': id, 'name': name, 'dirty': 1});
-      await _writeBlocks(txn, id, blocks);
+      await _applyBlockDiff(txn, id, blocks);
     });
     return Site(id: id, name: name, blocks: List.unmodifiable(blocks));
   }
@@ -101,8 +106,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
         where: 'id = ?',
         whereArgs: [site.id],
       );
-      await txn.delete('blocks', where: 'site_id = ?', whereArgs: [site.id]);
-      await _writeBlocks(txn, site.id, site.blocks);
+      await _applyBlockDiff(txn, site.id, site.blocks);
 
       final inputs = site.clientInputs;
       if (inputs == null) {
@@ -123,9 +127,11 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
   @override
   Future<void> updateSiteBlocks(String siteId, List<String> blocks) async {
+    // Blocks get their own per-row dirty flag now (Full sync Group 1's
+    // blocks-push rework) — no longer rides on the site row's, so this no
+    // longer touches `sites` at all. See _applyBlockDiff / block_diff.dart.
     await _db.transaction((txn) async {
-      await txn.delete('blocks', where: 'site_id = ?', whereArgs: [siteId]);
-      await _writeBlocks(txn, siteId, blocks);
+      await _applyBlockDiff(txn, siteId, blocks);
     });
   }
 
@@ -171,19 +177,139 @@ class SqfliteSurveyRepository implements SurveyRepository {
     );
   }
 
+  // ---- Blocks (per-row sync — Full sync Group 1) -------------------------
+
+  @override
+  Future<List<Block>> getBlocks(String siteId, {bool dirtyOnly = false}) async {
+    final rows = await _db.query(
+      'blocks',
+      where: [
+        'site_id = ?',
+        'pending_delete = 0',
+        // See getSites — blocked rows leave the push queue, not the UI.
+        if (dirtyOnly) 'dirty = 1 AND sync_blocked = 0',
+      ].join(' AND '),
+      whereArgs: [siteId],
+      orderBy: 'position',
+    );
+    return [
+      for (final row in rows)
+        Block(
+          id: row['id']! as String,
+          siteId: siteId,
+          position: row['position']! as int,
+          label: row['label']! as String,
+        ),
+    ];
+  }
+
+  @override
+  Future<void> markBlockSynced(String id) async {
+    await _db.update('blocks', {'dirty': 0}, where: 'id = ?', whereArgs: [id]);
+  }
+
+  @override
+  Future<List<String>> getPendingDeleteBlockIds(String siteId) async {
+    final rows = await _db.query(
+      'blocks',
+      columns: ['id'],
+      // A tombstoned row whose remote delete was refused is blocked too —
+      // otherwise it retries the same refused delete on every sync.
+      where: 'site_id = ? AND pending_delete = 1 AND sync_blocked = 0',
+      whereArgs: [siteId],
+    );
+    return [for (final row in rows) row['id']! as String];
+  }
+
+  @override
+  Future<void> hardDeleteBlock(String id) async {
+    await _db.delete('blocks', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---- sync_blocked (permanently-unpushable rows) ------------------------
+
+  @override
+  Future<void> markSiteSyncBlocked(String id) async {
+    await _db.update(
+      'sites',
+      {'sync_blocked': 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<void> markBlockSyncBlocked(String id) async {
+    await _db.update(
+      'blocks',
+      {'sync_blocked': 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<int> countSyncBlocked() async {
+    final sites = await _db.rawQuery(
+      'SELECT COUNT(*) AS n FROM sites WHERE sync_blocked = 1',
+    );
+    final blocks = await _db.rawQuery(
+      'SELECT COUNT(*) AS n FROM blocks WHERE sync_blocked = 1',
+    );
+    return ((sites.first['n'] as int?) ?? 0) +
+        ((blocks.first['n'] as int?) ?? 0);
+  }
+
   // ---- Helpers --------------------------------------------------------------
 
-  Future<void> _writeBlocks(
+  /// Reconciles a site's stored blocks against a freshly-edited label list
+  /// (see [diffBlocks]'s own doc for the identity model), applying the
+  /// minimal set of per-row insert/update/tombstone operations instead of
+  /// the old delete-all-and-reinsert — required so an untouched block never
+  /// gets swept into an unrelated edit's push (see Full sync Group 1's
+  /// blocks-push investigation for why that resurrected deleted blocks).
+  Future<void> _applyBlockDiff(
     DatabaseExecutor txn,
     String siteId,
-    List<String> blocks,
+    List<String> newLabels,
   ) async {
-    for (var i = 0; i < blocks.length; i++) {
-      await txn.insert('blocks', {
-        'site_id': siteId,
-        'position': i,
-        'label': blocks[i],
-      });
+    final existingRows = await txn.query(
+      'blocks',
+      columns: ['id', 'label'],
+      where: 'site_id = ? AND pending_delete = 0',
+      whereArgs: [siteId],
+      orderBy: 'position',
+    );
+    final existing = [
+      for (final row in existingRows)
+        ExistingBlock(id: row['id']! as String, label: row['label']! as String),
+    ];
+    for (final op in diffBlocks(existing, newLabels)) {
+      switch (op) {
+        case InsertBlockOp(:final position, :final label):
+          await txn.insert('blocks', {
+            'id': _idService.newId(),
+            'site_id': siteId,
+            'position': position,
+            'label': label,
+            'dirty': 1,
+            'pending_delete': 0,
+          });
+        case UpdateBlockOp(:final id, :final position, :final label):
+          await txn.update(
+            'blocks',
+            {'position': position, 'label': label, 'dirty': 1},
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+        case TombstoneBlockOp(:final id):
+          await txn.update(
+            'blocks',
+            {'pending_delete': 1, 'dirty': 1},
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+      }
     }
   }
 
@@ -193,7 +319,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
     final blockRows = await _db.query(
       'blocks',
       columns: ['label'],
-      where: 'site_id = ?',
+      where: 'site_id = ? AND pending_delete = 0',
       whereArgs: [id],
       orderBy: 'position',
     );
@@ -800,9 +926,9 @@ class SqfliteSurveyRepository implements SurveyRepository {
   //
   // Generalizes the pull-and-reconcile pattern [upsertMaterialMasterItemsFromRemote]
   // pioneered to the highest-risk, most-frequently-edited core survey tables:
-  // sites, client_inputs, footers, source_points, inlet_points, duct_loras,
-  // gateways, bom_manual_entries. bom_snapshots/bom_revisions and their line
-  // tables (immutable once written) and engineers/survey_assignment_audit
+  // sites, blocks, client_inputs, footers, source_points, inlet_points,
+  // duct_loras, gateways, bom_manual_entries. bom_snapshots/bom_revisions and
+  // their line tables (immutable once written) and survey_assignment_audit
   // (separate decision pending) are deliberately not part of this phase.
   //
   // [remoteRows] are raw Supabase rows (see
@@ -843,26 +969,65 @@ class SqfliteSurveyRepository implements SurveyRepository {
     // deleted_at column, checked explicitly instead of inferred from
     // absence) is deferred as its own later, separate slice.
     bool reconcileDeletes = false,
+    // Explicit tombstone support (blocks-first — see schema.sql's "Blocks
+    // explicit delete tombstone" section): when set, names the remote
+    // column that marks a row deleted (non-null = deleted). Checked
+    // directly per remote row, never inferred from a row's absence — the
+    // exact thing reconcileDeletes above is unsafe for. A remote row with
+    // this column set is hard-deleted locally (or simply never inserted,
+    // if this device never had it) unless the local row is protected
+    // (unsynced edit of its own), in which case it's left alone exactly
+    // like a protected row is everywhere else in this function — it'll be
+    // re-evaluated correctly on a later pull once that local edit syncs
+    // and stops being dirty. Never touches the deletedAtColumn value
+    // itself in local storage — local schema has no such column; it only
+    // exists remotely as the durable tombstone marker.
+    String? deletedAtColumn,
+    // Whether [table] carries the sync_blocked column (sites/blocks — see
+    // the v28 -> v29 migration). When it does, a locally-blocked row is
+    // deliberately NOT protected from an incoming remote row: being blocked
+    // means the account was refused permission to write that local edit, so
+    // the remote version is authoritative and the edit can never be
+    // legitimately pushed. Taking remote truth here is what self-heals the
+    // blocked backlog — the row goes back to clean (dirty=0,
+    // sync_blocked=0) and rejoins normal sync.
+    bool hasSyncBlocked = false,
   }) async {
     Map<String, Object?> toLocalRow(Map<String, dynamic> r) {
       final row = Map<String, Object?>.from(r);
+      if (deletedAtColumn != null) row.remove(deletedAtColumn);
       for (final column in boolColumns) {
         if (row.containsKey(column)) row[column] = _boolToInt(row[column] as bool?);
       }
       return row;
     }
 
-    final protectColumns = ['dirty', if (hasPendingDelete) 'pending_delete'];
+    final protectColumns = [
+      'dirty',
+      if (hasPendingDelete) 'pending_delete',
+      if (hasSyncBlocked) 'sync_blocked',
+    ];
+    bool isBlocked(Map<String, Object?> row) =>
+        hasSyncBlocked && (row['sync_blocked'] as int?) == 1;
     bool isProtected(Map<String, Object?> row) {
+      if (isBlocked(row)) return false; // remote wins — see hasSyncBlocked doc
       final isDirty = (row['dirty'] as int?) == 1;
       final isPendingDelete =
           hasPendingDelete && (row['pending_delete'] as int?) == 1;
       return isDirty || isPendingDelete;
     }
+    // Clearing sync_blocked alongside dirty is what actually retires a
+    // blocked row once remote truth arrives.
+    final clearFlags = <String, Object?>{
+      'dirty': 0,
+      if (hasSyncBlocked) 'sync_blocked': 0,
+    };
 
     await _db.transaction((txn) async {
       for (final remoteRow in remoteRows) {
         final id = remoteRow[idColumn] as String;
+        final isTombstoned =
+            deletedAtColumn != null && remoteRow[deletedAtColumn] != null;
         final existingRows = await txn.query(
           table,
           columns: protectColumns,
@@ -874,15 +1039,20 @@ class SqfliteSurveyRepository implements SurveyRepository {
           if (isProtected(existingRows.first)) {
             continue; // Unsynced local edit/delete — leave it, don't clobber.
           }
+          if (isTombstoned) {
+            await txn.delete(table, where: '$idColumn = ?', whereArgs: [id]);
+            continue;
+          }
           await txn.update(
             table,
-            {...toLocalRow(remoteRow), 'dirty': 0},
+            {...toLocalRow(remoteRow), ...clearFlags},
             where: '$idColumn = ?',
             whereArgs: [id],
           );
-        } else {
-          await txn.insert(table, {...toLocalRow(remoteRow), 'dirty': 0});
+        } else if (!isTombstoned) {
+          await txn.insert(table, {...toLocalRow(remoteRow), ...clearFlags});
         }
+        // else: tombstoned and never existed locally — nothing to do.
       }
 
       // Reconciliation: a row that's active locally (not dirty, not already
@@ -912,8 +1082,35 @@ class SqfliteSurveyRepository implements SurveyRepository {
         'sites',
         remoteRows,
         idColumn: 'id',
-        boolColumns: const ['bom_locked'],
+        boolColumns: const ['bom_locked', 'archived'],
         hasPendingDelete: false,
+        hasSyncBlocked: true,
+      );
+
+  /// Full sync Group 1 (blocks-push rework) — now that blocks have a
+  /// stable per-row id, this is exactly [_pullAndReconcile] like every
+  /// other per-row table (source_points, inlet_points, ...): an existing
+  /// row's own dirty/pending_delete protects it from being clobbered by a
+  /// pull that hasn't seen this device's not-yet-pushed edit yet, and a
+  /// deletion is never inferred from absence (reconcileDeletes stays off).
+  /// Supersedes the earlier group-and-replace-by-site approach, which
+  /// existed only because blocks had no id to key an upsert on.
+  ///
+  /// blocks is also the first table to pass deletedAtColumn — an explicit
+  /// tombstone (schema.sql's "Blocks explicit delete tombstone"), checked
+  /// directly per row, not inferred from absence like reconcileDeletes
+  /// (which stays off, unsafe as ever for an RLS-scoped table). This is
+  /// what makes a remote delete actually propagate down to other devices —
+  /// see deleteBlock's doc for the push side of the same mechanism.
+  @override
+  Future<void> upsertBlocksFromRemote(List<Map<String, dynamic>> remoteRows) =>
+      _pullAndReconcile(
+        'blocks',
+        remoteRows,
+        idColumn: 'id',
+        boolColumns: const [],
+        deletedAtColumn: 'deleted_at',
+        hasSyncBlocked: true,
       );
 
   @override
