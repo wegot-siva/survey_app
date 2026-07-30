@@ -1,7 +1,10 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
 import '../models/site.dart';
+import 'sync_scope.dart';
 
 /// View / add / edit / delete a site's blocks after it exists.
 ///
@@ -95,7 +98,11 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Blocks saved.')),
     );
+    // Sync strictly after the local save and the pop — see
+    // client_inputs_screen.dart's _save for the full reasoning.
+    final sync = SyncScope.read(context);
     Navigator.of(context).pop();
+    unawaited(sync.requestSync(manual: false));
   }
 
   @override

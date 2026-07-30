@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -6,6 +8,7 @@ import '../models/duct_lora.dart';
 import '../models/site.dart';
 import '../models/survey_photo.dart';
 import 'photo_markup_screen.dart';
+import 'sync_scope.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
@@ -301,7 +304,11 @@ class _DuctLoraFormScreenState extends State<DuctLoraFormScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Duct LoRa unit saved.')),
     );
+    // Sync strictly after the local save and the pop — see
+    // client_inputs_screen.dart's _save for the full reasoning.
+    final sync = SyncScope.read(context);
     Navigator.of(context).pop();
+    unawaited(sync.requestSync(manual: false));
   }
 
   @override

@@ -441,11 +441,20 @@ class _HomeScreenState extends State<HomeScreen> {
     await _load();
     if (!mounted) return;
 
-    _presentSyncOutcome(outcome);
+    // Non-null for a manual request — it bypasses the debounce/cooldown
+    // gates that are the only reasons a run is skipped — but checked rather
+    // than forced, so a future change to those gates degrades to "no
+    // SnackBar" instead of a crash.
+    if (outcome != null) _presentSyncOutcome(outcome);
   }
 
   /// Turns a finished sync run into the user-facing SnackBar. Presentation
   /// only — every status decision was already made in [SyncController].
+  ///
+  /// Reached only from the manual path: an automatic sync deliberately
+  /// reports nothing here, leaving the AppBar indicator as its sole signal
+  /// (a SnackBar interrupting form entry would be intrusive, and the
+  /// failure/needs-attention indicator already persists rather than fading).
   void _presentSyncOutcome(SyncOutcome outcome) {
     switch (outcome.status) {
       case SyncStatus.success:

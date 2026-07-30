@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,6 +9,7 @@ import '../models/site.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 import 'photo_markup_screen.dart';
+import 'sync_scope.dart';
 import 'widgets/photo_capture_field.dart';
 
 /// The per-site "Client inputs" form. All fields are optional — partial
@@ -350,7 +353,13 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Client inputs saved.')),
     );
+    // The save is already committed locally and the screen is closing —
+    // sync runs strictly after both and never gates either. The controller
+    // is captured before the pop because it outlives this route (SyncScope
+    // sits above the Navigator) while this context does not.
+    final sync = SyncScope.read(context);
     Navigator.of(context).pop();
+    unawaited(sync.requestSync(manual: false));
   }
 
   @override

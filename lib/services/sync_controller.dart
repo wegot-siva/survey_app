@@ -91,8 +91,28 @@ class SyncOutcome {
 /// One instance per signed-in account, created and disposed alongside the
 /// account's [SyncService] (see main.dart) so sync state can never leak
 /// across an account switch.
+///
+/// Automatic triggers are gated three ways — single-flight, [autoDebounce],
+/// [autoCooldown] — so a burst of saves costs one sync rather than one per
+/// save. A manual sync bypasses the debounce and cooldown entirely.
+///
+/// Known, bounded gap from the cooldown: a save landing inside
+/// [autoCooldown] of a successful sync does not itself trigger one, so those
+/// rows stay dirty until the next trigger past the window. Nothing is lost —
+/// a push sends every dirty row, not just the one that triggered it, so the
+/// next sync (manual, or a later save) carries them. The exposure is a user
+/// saving their last section within the cooldown and immediately closing the
+/// app; the manual Sync button and later lifecycle triggers both cover it.
 class SyncController extends ChangeNotifier {
-  SyncController(this._syncService);
+  /// [autoDebounce] and [autoCooldown] are injectable purely for tests —
+  /// production always uses the defaults. The cooldown is measured against
+  /// `DateTime.now()`, which no Timer-based fake clock can shift, so tests
+  /// shorten the real windows rather than trying to virtualize time.
+  SyncController(
+    this._syncService, {
+    this.autoDebounce = defaultAutoDebounce,
+    this.autoCooldown = defaultAutoCooldown,
+  });
 
   final SyncService _syncService;
 
@@ -121,24 +141,87 @@ class SyncController extends ChangeNotifier {
   /// The run currently in flight, if any. A second request while one is
   /// running joins that run instead of starting a parallel one — two
   /// concurrent pushes of the same dirty rows would race each other's
-  /// dirty-flag clearing for no benefit. Harmless today (only the Sync
-  /// button can start a run, and it takes a deliberate double-tap to
-  /// overlap), and load-bearing once automatic triggers land.
+  /// dirty-flag clearing for no benefit.
   Future<SyncOutcome>? _inFlight;
 
   bool get isSyncing => _inFlight != null;
 
+  /// How long rapid automatic triggers are collapsed for. Saving three
+  /// sections in a row fires three requests; they should cost one sync, not
+  /// three. Only the last one's timer survives — see [requestSync].
+  static const defaultAutoDebounce = Duration(seconds: 3);
+
+  /// How long after a successful sync automatic triggers are ignored, so a
+  /// burst of saves just after a sync doesn't re-hit the server for a few
+  /// rows. Manual sync always bypasses this.
+  static const defaultAutoCooldown = Duration(seconds: 30);
+
+  final Duration autoDebounce;
+  final Duration autoCooldown;
+
+  Timer? _debounceTimer;
+
+  /// Completes the future handed back to a debounced automatic request.
+  /// Nullable payload so a request that never runs — superseded by a manual
+  /// sync, or dropped at [dispose] — still completes instead of leaving a
+  /// caller's await hanging forever.
+  Completer<SyncOutcome?>? _pendingAuto;
+
   /// Runs a full sync — Material Master pull, core survey pull, then push —
   /// updating [status] as it goes and returning everything the run produced.
   ///
+  /// Returns null when the request was deliberately not run: an automatic
+  /// trigger inside [autoCooldown], or one superseded by a later trigger
+  /// inside [autoDebounce]. A [manual] request never returns null.
+  ///
   /// [manual] marks a user-initiated run (the Sync button). It does not
-  /// change what the sync does; it's carried through to [SyncOutcome] so the
-  /// UI can decide how loudly to report the result.
+  /// change what a sync *does* — only whether the debounce/cooldown gates
+  /// apply, and how loudly the UI reports the result. A user who taps Sync
+  /// asked for a sync and must always get a real attempt.
   ///
   /// Never throws: [SyncService] already converts every failure into a
-  /// [SyncResult], and this returns the resulting outcome instead of
-  /// propagating. Safe to fire and forget.
-  Future<SyncOutcome> requestSync({required bool manual}) {
+  /// [SyncResult]. Safe to fire and forget.
+  Future<SyncOutcome?> requestSync({required bool manual}) {
+    if (manual) {
+      // Supersedes any pending automatic run — it's about to do the same
+      // work, immediately, and reporting one result is less confusing than
+      // two syncs firing seconds apart. The superseded request is completed
+      // with this run's outcome rather than dropped, so nothing awaiting it
+      // hangs.
+      _debounceTimer?.cancel();
+      _debounceTimer = null;
+      final superseded = _pendingAuto;
+      _pendingAuto = null;
+      final run = _runExclusive(manual: true);
+      if (superseded != null && !superseded.isCompleted) {
+        unawaited(run.then((outcome) {
+          if (!superseded.isCompleted) superseded.complete(outcome);
+        }));
+      }
+      return run;
+    }
+
+    final since = _lastSyncedAt;
+    if (since != null && DateTime.now().difference(since) < autoCooldown) {
+      // Nothing is lost by skipping: the rows this save dirtied stay dirty,
+      // and the next trigger past the cooldown pushes ALL dirty rows, not
+      // just its own. See the class doc for the bounded risk window.
+      return Future<SyncOutcome?>.value();
+    }
+
+    _debounceTimer?.cancel();
+    final pending = _pendingAuto ??= Completer<SyncOutcome?>();
+    _debounceTimer = Timer(autoDebounce, () async {
+      _debounceTimer = null;
+      _pendingAuto = null;
+      final outcome = await _runExclusive(manual: false);
+      if (!pending.isCompleted) pending.complete(outcome);
+    });
+    return pending.future;
+  }
+
+  /// Single-flight: one sync at a time, later callers join the running one.
+  Future<SyncOutcome> _runExclusive({required bool manual}) {
     final existing = _inFlight;
     if (existing != null) return existing;
 
@@ -232,6 +315,12 @@ class SyncController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _revertTimer?.cancel();
+    _debounceTimer?.cancel();
+    // A debounced request that will now never run still has to complete, or
+    // anything awaiting it hangs for the process's lifetime.
+    final pending = _pendingAuto;
+    _pendingAuto = null;
+    if (pending != null && !pending.isCompleted) pending.complete(null);
     super.dispose();
   }
 }
