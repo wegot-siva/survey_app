@@ -7,6 +7,7 @@ import 'data/supabase_auth_repository.dart';
 import 'data/supabase_survey_data_source.dart';
 import 'data/survey_repository.dart';
 import 'services/app_database.dart';
+import 'services/connectivity_watcher.dart';
 import 'services/id_service.dart';
 import 'services/session_controller.dart';
 import 'services/supabase_service.dart';
@@ -96,11 +97,25 @@ class _SurveyAppState extends State<SurveyApp> with WidgetsBindingObserver {
   SyncService? _syncService;
   SyncController? _syncController;
 
+  /// Device-wide, so it lives for the app's lifetime rather than per
+  /// account — the callback reads [_syncController] at fire time instead of
+  /// capturing it, so a restore after an account switch still reaches the
+  /// current account's controller (and no-ops while logged out).
+  final _connectivity = ConnectivityWatcher();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     widget.session.addListener(_onSessionChanged);
+    // Regaining signal after an offline stretch is when the dirty queue is
+    // fullest — exactly the case this whole sync project exists for. Gated
+    // normally: a genuinely offline period outlasts the cooldown anyway,
+    // and a failed sync never starts one (it only counts runs that reached
+    // the server), so the cooldown can't suppress the restore that matters.
+    _connectivity.start(() {
+      unawaited(_syncController?.requestSync(manual: false) ?? Future.value());
+    });
     // Handles a session already restored (main() awaits session.restore()
     // before runApp) before this widget's first build.
     _onSessionChanged();
@@ -110,6 +125,7 @@ class _SurveyAppState extends State<SurveyApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     widget.session.removeListener(_onSessionChanged);
+    unawaited(_connectivity.dispose());
     _syncController?.dispose();
     super.dispose();
   }
