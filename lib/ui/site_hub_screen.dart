@@ -196,11 +196,14 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     // Read-only — no need to reload the hub afterwards.
   }
 
-  Future<void> _openManageBlocks(Site site) async {
+  Future<void> _openManageBlocks(Site site, {bool readOnly = false}) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            ManageBlocksScreen(repository: widget.repository, site: site),
+        builder: (_) => ManageBlocksScreen(
+          repository: widget.repository,
+          site: site,
+          readOnly: readOnly,
+        ),
       ),
     );
     await _load();
@@ -347,8 +350,14 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     final canReassignRole = isSales || isAdmin || isApprover;
     // Blocks are created during the survey, not at site creation (Sales
     // never enters them) — so block *management* follows the same roles
-    // that touch surveyed content, not the create/assign role.
+    // that touch surveyed content, not the create/assign role. Sales still
+    // gets read-only visibility (canViewBlocks) — they already see all
+    // sites, and the blocks RLS policy already permits them to read (see
+    // can_access_site() in supabase/schema.sql); this only adds the app-side
+    // view for it. Never grants Sales write access — that's a deliberate
+    // app-level restriction on top of what RLS would technically allow.
     final canManageBlocks = isEngineer || isAdmin || isApprover;
+    final canViewBlocks = canManageBlocks || isSales;
     final canSubmit =
         site?.status == SurveyStatus.assigned ||
         site?.status == SurveyStatus.inProgress;
@@ -408,17 +417,22 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
               padding: const EdgeInsets.all(16),
               children: [
                 if (site.status != null) _StatusBanner(status: site.status!),
-                if (canManageBlocks)
+                if (canViewBlocks)
                   _SectionTile(
                     icon: Icons.grid_view_outlined,
                     title: 'Blocks',
                     subtitle: site.blocks.isEmpty
-                        ? 'No blocks — tap to add'
+                        ? (canManageBlocks
+                              ? 'No blocks — tap to add'
+                              : 'No blocks yet')
                         : site.blocks.join(', '),
                     status: site.blocks.isEmpty
                         ? _SectionStatus.empty
                         : _SectionStatus.complete,
-                    onTap: () => _openManageBlocks(site),
+                    onTap: () => _openManageBlocks(
+                      site,
+                      readOnly: !canManageBlocks,
+                    ),
                   ),
                 _SectionTile(
                   icon: Icons.assignment_outlined,

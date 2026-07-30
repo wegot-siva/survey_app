@@ -14,10 +14,18 @@ class ManageBlocksScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.site,
+    this.readOnly = false,
   });
 
   final SurveyRepository repository;
   final Site site;
+
+  /// Sales gets read-only visibility (see site_hub_screen.dart's
+  /// canViewBlocks) — no Save/Add/Delete controls, fields non-interactive.
+  /// Unlike other read-only screens in this app, there's no "Edit" toggle
+  /// here: Sales never gets write access to blocks, by design, so this is
+  /// permanent for the lifetime of this screen, not a starting state.
+  final bool readOnly;
 
   @override
   State<ManageBlocksScreen> createState() => _ManageBlocksScreenState();
@@ -96,24 +104,27 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
       appBar: AppBar(
         title: const Text('Blocks'),
         actions: [
-          IconButton(
-            tooltip: 'Save blocks',
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_outlined),
-          ),
+          if (!widget.readOnly)
+            IconButton(
+              tooltip: 'Save blocks',
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+            ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addBlock,
-        icon: const Icon(Icons.add),
-        label: const Text('Add block'),
-      ),
+      floatingActionButton: widget.readOnly
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _addBlock,
+              icon: const Icon(Icons.add),
+              label: const Text('Add block'),
+            ),
       body: ListView(
         controller: _scrollController,
         padding: const EdgeInsets.all(16),
@@ -130,36 +141,48 @@ class _ManageBlocksScreenState extends State<ManageBlocksScreen> {
           ),
           const SizedBox(height: 8),
           if (_blockControllers.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('No blocks yet. Tap "Add block" to create one.'),
-            ),
-          for (var i = 0; i < _blockControllers.length; i++)
             Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _blockControllers[i],
-                      focusNode: _blockFocusNodes[i],
-                      decoration: InputDecoration(
-                        labelText: 'Block ${i + 1}',
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Delete block',
-                    onPressed: () => _removeBlock(i),
-                    icon: const Icon(Icons.delete_outline),
-                  ),
-                ],
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                widget.readOnly
+                    ? 'No blocks yet.'
+                    : 'No blocks yet. Tap "Add block" to create one.',
               ),
             ),
+          IgnorePointer(
+            ignoring: widget.readOnly,
+            child: Column(
+              children: [
+                for (var i = 0; i < _blockControllers.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _blockControllers[i],
+                            focusNode: _blockFocusNodes[i],
+                            decoration: InputDecoration(
+                              labelText: 'Block ${i + 1}',
+                              border: const OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        if (!widget.readOnly)
+                          IconButton(
+                            tooltip: 'Delete block',
+                            onPressed: () => _removeBlock(i),
+                            icon: const Icon(Icons.delete_outline),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
           // Clears the floating "Add block" button so the last row's text
           // field and delete icon stay reachable when scrolled to the end.
-          const SizedBox(height: 96),
+          if (!widget.readOnly) const SizedBox(height: 96),
         ],
       ),
     );
