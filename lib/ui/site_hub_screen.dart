@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
@@ -17,6 +19,7 @@ import 'inlet_points_list_screen.dart';
 import 'manage_blocks_screen.dart';
 import 'source_points_list_screen.dart';
 import 'survey_assignment_audit_log_screen.dart';
+import 'sync_scope.dart';
 import 'theme/app_theme.dart';
 
 /// Completion state for one Site Hub section, shown as the row's trailing
@@ -268,6 +271,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Reassigned to ${newEngineer.name}.')),
       );
+      // Same reasoning as assign_survey_screen.dart's _assign: a
+      // reassignment is a cross-device handoff to a different engineer's
+      // account, and _load() below only re-reads local state — it doesn't
+      // push anything.
+      unawaited(SyncScope.read(context).requestSync(manual: false));
       await _load();
     } catch (e) {
       if (!mounted) return;

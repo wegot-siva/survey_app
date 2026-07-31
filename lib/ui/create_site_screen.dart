@@ -1,6 +1,9 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
+import 'sync_scope.dart';
 
 /// Create a new site: a name only — blocks are added later, during the
 /// survey, via Site Hub's "Blocks" section.
@@ -35,7 +38,14 @@ class _CreateSiteScreenState extends State<CreateSiteScreen> {
     setState(() => _saving = true);
     await widget.repository.createSite(name: name);
     if (!mounted) return;
+    // Sync strictly after the local write and after the pop — see
+    // client_inputs_screen.dart's _save for the full reasoning. A newly
+    // created site is exactly the kind of edit another device/account may
+    // need to see; without this, it sits local-only until some other
+    // trigger happens to fire.
+    final sync = SyncScope.read(context);
     Navigator.of(context).pop();
+    unawaited(sync.requestSync(manual: false));
   }
 
   @override

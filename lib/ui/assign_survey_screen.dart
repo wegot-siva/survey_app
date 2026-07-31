@@ -8,6 +8,7 @@ import '../models/site.dart';
 import '../models/survey_status.dart';
 import '../services/sync_service.dart';
 import 'client_inputs_screen.dart';
+import 'sync_scope.dart';
 
 /// Sales' "New survey" flow (Roles & Assignment — Slice B). Approver also
 /// uses this screen unmodified, for the same Sales-like create+assign
@@ -131,7 +132,17 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Survey assigned to ${engineer.name}.')),
     );
+    // Sync strictly after the local write and after the pop — see
+    // client_inputs_screen.dart's _save for the full reasoning. This is the
+    // one that matters most of every auto-sync trigger in the app: an
+    // assignment is inherently a cross-device handoff (the assigning
+    // Sales/Admin/Approver account and the assigned engineer are never the
+    // same device), so without this the engineer's own pull finds nothing —
+    // correctly, since the assignment never left this device — until some
+    // other trigger happens to fire on the assigner's side first.
+    final sync = SyncScope.read(context);
     Navigator.of(context).pop();
+    unawaited(sync.requestSync(manual: false));
   }
 
   @override
