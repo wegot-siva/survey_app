@@ -1085,6 +1085,23 @@ class SqfliteSurveyRepository implements SurveyRepository {
         boolColumns: const ['bom_locked', 'archived'],
         hasPendingDelete: false,
         hasSyncBlocked: true,
+        // Reassignment investigation (evidence in that slice's commit):
+        // reconcileDeletes was off everywhere by default because an
+        // RLS-narrowed fetch used to be indistinguishable from a partial/
+        // failed one. For sites that's no longer true: fetchSites() (via
+        // _fetchAllRows) either returns the complete account-scoped set or
+        // throws — a throw means this method is never called at all (see
+        // SyncService.pullCoreSurveyData), so a row absent from a
+        // successful, non-empty result really was removed from this
+        // account's authorized scope, whether by a real delete or by being
+        // reassigned away. That's exactly the signal needed to stop a
+        // reassigned-away site from lingering forever on the old assignee's
+        // device (confirmed: it never self-heals otherwise, since the row
+        // never appears in that account's pull again for anything to clear
+        // its dirty/sync_blocked flags). isProtected() still shields any
+        // row with a genuine unpushed local edit; only a clean or
+        // already-sync_blocked row is ever removed this way.
+        reconcileDeletes: true,
       );
 
   /// Full sync Group 1 (blocks-push rework) — now that blocks have a
@@ -1111,6 +1128,13 @@ class SqfliteSurveyRepository implements SurveyRepository {
         boolColumns: const [],
         deletedAtColumn: 'deleted_at',
         hasSyncBlocked: true,
+        // Same reasoning as upsertSitesFromRemote's reconcileDeletes: true
+        // above — blocks is RLS-scoped by can_access_site(site_id), so a
+        // site reassigned away from this account also narrows its blocks
+        // out of this fetch. deletedAtColumn already handles a real block
+        // delete explicitly; this additionally cleans up blocks that are
+        // still fully live remotely but no longer visible to this account.
+        reconcileDeletes: true,
       );
 
   @override

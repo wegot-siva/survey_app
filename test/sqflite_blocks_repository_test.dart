@@ -422,4 +422,179 @@ void main() {
     await repo.markBlockSyncBlocked(blockId);
     expect(await repo.countSyncBlocked(), 2);
   });
+
+  // ---- reconcileDeletes: site/block reassignment propagation -------------
+  //
+  // Reproduces the exact stale-row-on-reassignment bug traced on-device: a
+  // site reassigned away from this account (or genuinely deleted) used to
+  // linger locally forever, because absence from a pull was never treated
+  // as a delete signal for an RLS-scoped table. sites/blocks now opt in
+  // (reconcileDeletes: true) since fetchSites/fetchBlocks (_fetchAllRows)
+  // either return the complete account-scoped set or throw — a throw means
+  // upsertSitesFromRemote/upsertBlocksFromRemote are never called at all,
+  // so a non-empty successful result really is complete.
+
+  test(
+    'upsertSitesFromRemote: a clean local site absent from a complete '
+    'remote fetch is removed — the reassigned-away case',
+    () async {
+      final stays = await repo.createSite(name: 'Stays');
+      final reassignedAway = await repo.createSite(name: 'Reassigned Away');
+      await repo.markSiteSynced(stays.id);
+      await repo.markSiteSynced(reassignedAway.id);
+
+      // Remote's authoritative set no longer includes reassignedAway.
+      await repo.upsertSitesFromRemote([
+        {
+          'id': stays.id,
+          'name': 'Stays',
+          'status': null,
+          'assigned_to': null,
+          'assigned_to_user_id': null,
+          'bom_locked': false,
+          'archived': false,
+        },
+      ]);
+
+      final remaining = await db.query('sites');
+      expect(remaining.map((r) => r['id']), [stays.id]);
+    },
+  );
+
+  test(
+    'upsertSitesFromRemote: a sync-blocked site absent from a complete '
+    'remote fetch is removed — the exact backlog confirmed stuck on-device',
+    () async {
+      final site = await repo.createSite(name: 'Blocked and reassigned away');
+      await repo.markSiteSyncBlocked(site.id);
+
+      // Non-empty fetch that simply no longer includes this site (the
+      // empty case is a separate guard, tested below).
+      await repo.upsertSitesFromRemote([
+        {
+          'id': 'some-other-site',
+          'name': 'Unrelated',
+          'status': null,
+          'assigned_to': null,
+          'assigned_to_user_id': null,
+          'bom_locked': false,
+          'archived': false,
+        },
+      ]);
+
+      final remaining = await db.query('sites', where: 'id = ?', whereArgs: [site.id]);
+      expect(remaining, isEmpty);
+    },
+  );
+
+  test(
+    'upsertSitesFromRemote: a site with a genuine unsynced local edit is '
+    'NOT removed even when absent from remote — protected like every other pull',
+    () async {
+      final site = await repo.createSite(name: 'Unsynced local edit');
+      // Deliberately not marked synced — stays dirty=1.
+
+      await repo.upsertSitesFromRemote([
+        {
+          'id': 'some-other-site',
+          'name': 'Unrelated',
+          'status': null,
+          'assigned_to': null,
+          'assigned_to_user_id': null,
+          'bom_locked': false,
+          'archived': false,
+        },
+      ]);
+
+      final remaining = await db.query('sites', where: 'id = ?', whereArgs: [site.id]);
+      expect(remaining, hasLength(1));
+      expect(remaining.single['dirty'], 1);
+    },
+  );
+
+  test(
+    'upsertSitesFromRemote: an empty remote result removes nothing — a '
+    'partial/failed-looking pull must never wipe the local table',
+    () async {
+      final a = await repo.createSite(name: 'A');
+      final b = await repo.createSite(name: 'B');
+      await repo.markSiteSynced(a.id);
+      await repo.markSiteSynced(b.id);
+
+      await repo.upsertSitesFromRemote([]);
+
+      final remaining = await db.query('sites');
+      expect(remaining.map((r) => r['id']).toSet(), {a.id, b.id});
+    },
+  );
+
+  test(
+    'upsertBlocksFromRemote: a clean local block absent from a complete '
+    'remote fetch is removed — its site was reassigned away',
+    () async {
+      final site = await repo.createSite(name: 'S', blocks: ['A']);
+      final blockId =
+          (await db.query('blocks', where: 'site_id = ?', whereArgs: [site.id]))
+              .single['id'] as String;
+      await repo.markBlockSynced(blockId);
+
+      // Non-empty fetch that simply no longer includes this block (the
+      // empty case is a separate guard, tested below).
+      await repo.upsertBlocksFromRemote([
+        {
+          'id': 'from-another-site',
+          'site_id': 'some-other-site',
+          'position': 0,
+          'label': 'unrelated',
+          'deleted_at': null,
+        },
+      ]);
+
+      final remaining = await db.query('blocks', where: 'id = ?', whereArgs: [blockId]);
+      expect(remaining, isEmpty);
+    },
+  );
+
+  test(
+    'upsertBlocksFromRemote: a dirty block absent from remote is NOT '
+    'removed — protected exactly like every other pull',
+    () async {
+      final site = await repo.createSite(name: 'S', blocks: ['A']);
+      final blockId =
+          (await db.query('blocks', where: 'site_id = ?', whereArgs: [site.id]))
+              .single['id'] as String;
+      // Deliberately not marked synced — stays dirty=1.
+
+      await repo.upsertBlocksFromRemote([
+        {
+          'id': 'from-another-site',
+          'site_id': 'some-other-site',
+          'position': 0,
+          'label': 'unrelated',
+          'deleted_at': null,
+        },
+      ]);
+
+      final remaining = await db.query('blocks', where: 'id = ?', whereArgs: [blockId]);
+      expect(remaining, hasLength(1));
+      expect(remaining.single['dirty'], 1);
+    },
+  );
+
+  test(
+    'upsertBlocksFromRemote: an empty remote result removes nothing — a '
+    'partial/failed-looking pull must never wipe the local table',
+    () async {
+      final site = await repo.createSite(name: 'S', blocks: ['A', 'B']);
+      final rows = await db.query('blocks', where: 'site_id = ?', whereArgs: [site.id]);
+      for (final row in rows) {
+        await repo.markBlockSynced(row['id'] as String);
+      }
+
+      await repo.upsertBlocksFromRemote([]);
+
+      final remaining = await db.query('blocks', where: 'site_id = ?', whereArgs: [site.id]);
+      expect(remaining, hasLength(2));
+    },
+  );
 }

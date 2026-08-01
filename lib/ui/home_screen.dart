@@ -82,26 +82,24 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _query = _searchController.text.trim().toLowerCase());
     });
     _load();
-    // Material Master is global reference data populated centrally (e.g. a
-    // bulk SQL import of the plumbing catalog into Supabase) rather than
-    // authored on-device, so it needs a pull to actually reach this device.
-    // Fired here on every login/startup (this screen is only ever built
-    // fresh right after one of those) so a centrally-added row shows up
-    // without waiting for an explicit manual Sync tap. Fire-and-forget: a
-    // failure (offline, not configured) silently no-ops — see
-    // [SyncService.pullMaterialMasterItems] — and the manual Sync button
-    // below retries the same pull anyway.
-    unawaited(widget.syncService.pullMaterialMasterItems());
-    // Same reasoning, for the "Phase 1" core survey tables (sites,
-    // client_inputs, footers, source/inlet points, duct_loras, gateways,
-    // bom_manual_entries) — see [SyncService.pullCoreSurveyData]. These were
-    // push-only before this phase, so a survey created/edited on another
-    // device would never have reached this one otherwise. Refreshes this
-    // screen's own site list once the pull lands, since sites are exactly
-    // what it displays — unlike the Material Master pull above, which
-    // nothing on this screen shows.
+    // Auto-sync on login: this screen is only ever built fresh right after a
+    // successful login, a fresh install's first login, or an account switch
+    // (main.dart's _AuthGateState builds a brand-new HomeScreen +
+    // SyncController per signed-in account), so triggering here covers all
+    // three. Routed through SyncController — not SyncService directly — so
+    // this run shares the exact same single-flight/debounce/cooldown gates
+    // as the manual Sync button and every other automatic trigger: a manual
+    // tap that lands while this is still debouncing supersedes it, and one
+    // that lands once it's already running just joins it, so there's never a
+    // duplicate/overlapping run. Offline-first: [_load] above already showed
+    // local data synchronously, so this never blocks getting into the app —
+    // it only refreshes what's on screen once the pull half lands, exactly
+    // like every other automatic trigger reported nowhere but the AppBar
+    // indicator (see [SyncController]'s doc and [_presentSyncOutcome]'s —
+    // a failure here degrades to that same non-intrusive indicator, never a
+    // dialog or SnackBar).
     unawaited(
-      widget.syncService.pullCoreSurveyData().then((_) {
+      SyncScope.read(context).requestSync(manual: false).then((_) {
         if (mounted) _load();
       }),
     );
