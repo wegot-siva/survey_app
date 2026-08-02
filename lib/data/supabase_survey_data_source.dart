@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -412,6 +413,23 @@ class SupabaseSurveyDataSource {
   Future<void> pushPhoto(SurveyPhoto photo) async {
     await _client.from('photos').upsert(_photoToRemoteRow(photo));
   }
+
+  /// Every photo metadata row this account can see (RLS scopes it by
+  /// can_access_site(site_id) — Slice 2e). Includes tombstoned rows: the
+  /// SELECT policy deliberately does not filter `deleted_at`, because pull
+  /// reconcile can only act on a tombstone it can actually see.
+  Future<List<Map<String, dynamic>>> fetchPhotos() => _fetchAllRows('photos');
+
+  /// Downloads the Storage object at [objectKey] (a photo's `remote_path`).
+  ///
+  /// Note there is deliberately no matching delete: Slice 2h granted
+  /// storage.objects SELECT and INSERT only, so a client DELETE is refused
+  /// (verified: HTTP 403 AccessDenied). Tombstoning a photo therefore leaves
+  /// its Storage object behind — an accepted, low-cost tradeoff at this
+  /// team's scale, not an oversight. The `deleted_at` tombstone remains the
+  /// authoritative record that the photo is gone; only the bytes linger.
+  Future<Uint8List> downloadPhoto(String objectKey) =>
+      _client.storage.from(photoBucket).download(objectKey);
 
   /// Upserts a BoM manual entry by its id (idempotent). The parent site must
   /// already have been pushed (FK).

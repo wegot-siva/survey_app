@@ -426,6 +426,30 @@ abstract class SurveyRepository {
   /// to Supabase has succeeded.
   Future<void> markPhotoSynced(String id);
 
+  /// Same merge rule as [upsertSitesFromRemote], for photos — including the
+  /// explicit `deleted_at` tombstone path, which is how the photo cascade
+  /// written by Groups 2 and 3 finally reaches other devices.
+  ///
+  /// Returns the local file paths of any photos this pull removed, so the
+  /// caller can delete those files too rather than leaving dead image bytes
+  /// on the device forever.
+  Future<List<String>> upsertPhotosFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
+
+  /// Records where a pulled photo's downloaded file landed on this device.
+  ///
+  /// Distinct from [updatePhoto], which treats the write as a user edit and
+  /// re-queues the row for push. This only fills in device-local state, so
+  /// it must leave the row's sync status exactly as it found it.
+  Future<void> setPhotoLocalPath(String id, String localPath);
+
+  /// Photos whose bytes this device doesn't have: `remote_path` set (so the
+  /// file exists in Storage) but no `local_path`. That's every photo pulled
+  /// from another device — the metadata arrives first, the file follows.
+  /// Excludes the opposite case (captured here, not yet uploaded).
+  Future<List<SurveyPhoto>> getPhotosMissingLocalFile();
+
   // ---- BoM manual entries (D/E/G "Add materials" picker) -------------------
   //
   // Never read by BomEngine — these feed into a snapshot only at the moment

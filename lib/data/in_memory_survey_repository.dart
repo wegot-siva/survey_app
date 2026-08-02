@@ -945,6 +945,46 @@ class InMemorySurveyRepository implements SurveyRepository {
   }
 
   @override
+  Future<List<String>> upsertPhotosFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    final orphanedFiles = <String>[];
+    for (final row in remoteRows) {
+      final id = row['id'] as String;
+      if (_dirtyPhotoIds.contains(id)) continue; // unsynced local edit wins
+      if (row['deleted_at'] != null) {
+        final removed = _photos.remove(id);
+        final path = removed?.localPath;
+        if (path != null && path.isNotEmpty) orphanedFiles.add(path);
+        continue;
+      }
+      // local_path is never in a remote row (see the sqflite doc) — keep
+      // whatever this stub already had for that photo.
+      final existing = _photos[id];
+      _photos[id] = _photoFromRemoteRow(row, localPath: existing?.localPath);
+    }
+    return orphanedFiles;
+  }
+
+  @override
+  Future<void> setPhotoLocalPath(String id, String localPath) async {
+    final existing = _photos[id];
+    if (existing == null) return;
+    // Device-local bookkeeping only — must not touch _dirtyPhotoIds, or a
+    // pulled photo would be queued straight back for a pointless push.
+    _photos[id] = existing.withLocalPath(localPath);
+  }
+
+  @override
+  Future<List<SurveyPhoto>> getPhotosMissingLocalFile() async => _photos.values
+      .where(
+        (p) =>
+            (p.remotePath?.isNotEmpty ?? false) &&
+            (p.localPath == null || p.localPath!.isEmpty),
+      )
+      .toList(growable: false);
+
+  @override
   Future<List<BomManualEntry>> getBomManualEntries(
     String surveyId, {
     bool dirtyOnly = false,
@@ -1699,6 +1739,22 @@ BomManualEditSnapshotLine _bomManualEditSnapshotLineFromRemoteRow(
     unit: (r['unit'] as String?) ?? '',
     qty: (r['qty'] as num?)?.toDouble() ?? 0,
     group: _materialGroupFromCode(r['group_code'] as String?),
+  );
+}
+
+/// [localPath] is carried over from whatever this stub already held, never
+/// read from [r] — a remote photo row has no local_path (see
+/// SqfliteSurveyRepository.upsertPhotosFromRemote).
+SurveyPhoto _photoFromRemoteRow(Map<String, dynamic> r, {String? localPath}) {
+  return SurveyPhoto(
+    id: r['id'] as String,
+    ownerType: (r['owner_type'] as String?) ?? '',
+    ownerId: (r['owner_id'] as String?) ?? '',
+    slot: (r['slot'] as String?) ?? '',
+    position: (r['position'] as num?)?.toInt() ?? 0,
+    localPath: localPath,
+    remotePath: r['remote_path'] as String?,
+    siteId: r['site_id'] as String?,
   );
 }
 

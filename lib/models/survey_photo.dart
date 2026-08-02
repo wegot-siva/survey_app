@@ -62,6 +62,20 @@ class SurveyPhoto {
     remotePath: path,
     siteId: siteId,
   );
+
+  /// Returns a copy carrying the on-device path of a photo whose bytes were
+  /// just downloaded from Storage (Full sync Group 4 — the mirror of
+  /// [withRemotePath], which records the upload direction).
+  SurveyPhoto withLocalPath(String path) => SurveyPhoto(
+    id: id,
+    ownerType: ownerType,
+    ownerId: ownerId,
+    slot: slot,
+    position: position,
+    localPath: path,
+    remotePath: remotePath,
+    siteId: siteId,
+  );
 }
 
 /// Owner-type tokens stored in [SurveyPhoto.ownerType].

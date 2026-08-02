@@ -7,6 +7,7 @@ import '../data/supabase_survey_data_source.dart';
 import '../data/survey_repository.dart';
 import '../models/engineer.dart';
 import '../models/survey_photo.dart';
+import 'photo_file_store.dart';
 import 'supabase_service.dart';
 
 /// Outcome of a sync run, surfaced to the UI.
@@ -114,11 +115,21 @@ bool syncFullySucceeded(SyncResult push, SyncResult corePull) =>
 /// Supabase. Every other table here (client_inputs, footers, snapshots,
 /// revisions, ...) has no delete feature at all, so needs no tombstone.
 class SyncService {
-  SyncService(this._repository, this._supabase, this._remote);
+  SyncService(
+    this._repository,
+    this._supabase,
+    this._remote, {
+    PhotoFileStore? photoFiles,
+  }) : _photoFiles = photoFiles ?? PhotoFileStore();
 
   final SurveyRepository _repository;
   final SupabaseService _supabase;
   final SupabaseSurveyDataSource _remote;
+
+  /// Owns the device-local photo folder — used by the pull half to write
+  /// downloaded images and to clean up files behind tombstoned photos.
+  /// Injectable so tests can point it somewhere disposable.
+  final PhotoFileStore _photoFiles;
 
   Future<SyncResult> pushAll() async {
     if (!_supabase.isConfigured) {
@@ -701,6 +712,16 @@ class SyncService {
       await _repository.upsertBomManualEditSnapshotLinesFromRemote(
         await _remote.fetchBomManualEditSnapshotLines(),
       );
+      // Photos (Full sync Group 4) — last, because every photo row points at
+      // an owner that the pulls above have just landed. Any file left behind
+      // by a tombstoned photo is deleted here, outside the write
+      // transaction that removed the row (see upsertPhotosFromRemote).
+      for (final path in await _repository.upsertPhotosFromRemote(
+        await _remote.fetchPhotos(),
+      )) {
+        await _photoFiles.deleteLocalFile(path);
+      }
+      await downloadMissingPhotoFiles();
       return const SyncResult(success: true);
     } on PostgrestException catch (e) {
       // Diagnostic instrumentation (forensic sync investigation): this
@@ -747,6 +768,50 @@ class SyncService {
       throw StateError('Supabase failed to initialize. Check your keys in .env.');
     }
     return _remote.fetchEngineerRoster();
+  }
+
+  /// Fetches the image bytes for every photo this device has metadata for
+  /// but no local file — i.e. every photo pulled from another device.
+  ///
+  /// This exists because photo metadata alone is not viewable: every photo
+  /// surface in the app renders `File(localPath)` (see PhotoView), so a
+  /// pulled row with a null local_path would sync perfectly and still show
+  /// nothing. Downloading the file and recording its path is what makes a
+  /// pulled photo actually appear — and keeps it working offline afterwards,
+  /// which rendering from a Storage URL would not.
+  ///
+  /// Best-effort per photo: one failed download (offline mid-sync, a missing
+  /// object, an RLS refusal) is logged and skipped, leaving that row's
+  /// local_path null so the next sync simply tries again. It never fails the
+  /// surrounding pull — the metadata is already correctly stored by then,
+  /// and a missing image is a far smaller problem than a sync that reports
+  /// failure and re-runs everything.
+  ///
+  /// Idempotent: [SurveyRepository.getPhotosMissingLocalFile] only returns
+  /// rows that still lack a file, and [PhotoFileStore.saveDownload] names
+  /// each file after the photo id, so nothing is re-fetched or duplicated
+  /// once it has landed.
+  Future<int> downloadMissingPhotoFiles() async {
+    var downloaded = 0;
+    for (final photo in await _repository.getPhotosMissingLocalFile()) {
+      final objectKey = photo.remotePath;
+      if (objectKey == null || objectKey.isEmpty) continue;
+      try {
+        final bytes = await _remote.downloadPhoto(objectKey);
+        final localPath = await _photoFiles.saveDownload(photo.id, bytes);
+        // Records the path only — deliberately not updatePhoto, which would
+        // re-dirty the row and queue a pointless re-push of a record that
+        // hasn't changed remotely. See SurveyRepository.setPhotoLocalPath.
+        await _repository.setPhotoLocalPath(photo.id, localPath);
+        downloaded++;
+      } catch (e) {
+        debugPrint(
+          'sync: photo ${photo.id} download failed ($objectKey): $e — '
+          'left without a local file, will retry next sync',
+        );
+      }
+    }
+    return downloaded;
   }
 
   /// Pushes [photo] to Supabase, uploading its file to Storage first if it

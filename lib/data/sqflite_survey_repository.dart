@@ -992,6 +992,19 @@ class SqfliteSurveyRepository implements SurveyRepository {
     // blocked backlog — the row goes back to clean (dirty=0,
     // sync_blocked=0) and rejoins normal sync.
     bool hasSyncBlocked = false,
+    // Extra local columns to read off a row *before* it's removed, handed to
+    // [onRowDeleted]. Needed because a delete is the last moment that row's
+    // local-only state is still readable — photos uses it to learn the
+    // `local_path` of a tombstoned photo so the file can be cleaned up too
+    // (see upsertPhotosFromRemote).
+    List<String> captureColumnsOnDelete = const [],
+    // Called once per row this pull removed, with the columns named in
+    // [captureColumnsOnDelete]. Deliberately synchronous and side-effect-free
+    // here: it runs inside the write transaction, so it only collects. Any
+    // real work (file I/O) belongs *after* the transaction commits — holding
+    // a sqlite write lock across filesystem calls would serialise every
+    // other writer behind it.
+    void Function(Map<String, Object?> row)? onRowDeleted,
   }) async {
     Map<String, Object?> toLocalRow(Map<String, dynamic> r) {
       final row = Map<String, Object?>.from(r);
@@ -1030,7 +1043,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
             deletedAtColumn != null && remoteRow[deletedAtColumn] != null;
         final existingRows = await txn.query(
           table,
-          columns: protectColumns,
+          columns: [...protectColumns, ...captureColumnsOnDelete],
           where: '$idColumn = ?',
           whereArgs: [id],
           limit: 1,
@@ -1040,6 +1053,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
             continue; // Unsynced local edit/delete — leave it, don't clobber.
           }
           if (isTombstoned) {
+            onRowDeleted?.call(existingRows.first);
             await txn.delete(table, where: '$idColumn = ?', whereArgs: [id]);
             continue;
           }
@@ -1066,11 +1080,15 @@ class SqfliteSurveyRepository implements SurveyRepository {
       // whole local table on a fluke.
       if (!reconcileDeletes || remoteRows.isEmpty) return;
       final remoteIds = remoteRows.map((r) => r[idColumn] as String).toSet();
-      final localRows = await txn.query(table, columns: [idColumn, ...protectColumns]);
+      final localRows = await txn.query(
+        table,
+        columns: [idColumn, ...protectColumns, ...captureColumnsOnDelete],
+      );
       for (final row in localRows) {
         final id = row[idColumn]! as String;
         if (remoteIds.contains(id)) continue;
         if (isProtected(row)) continue;
+        onRowDeleted?.call(row);
         await txn.delete(table, where: '$idColumn = ?', whereArgs: [id]);
       }
     });
@@ -1479,6 +1497,77 @@ class SqfliteSurveyRepository implements SurveyRepository {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  /// Full sync Group 4 (Slice 3e) — photos pull.
+  ///
+  /// Upsert-by-id like every other per-row table, plus the explicit
+  /// `deleted_at` tombstone path from Group 2: a remote row carrying one is
+  /// hard-deleted locally (never inferred from absence — reconcileDeletes
+  /// stays off, still unsafe for an RLS-scoped table). Those tombstones are
+  /// written by the cascade already built in Groups 2 and 3 — deleting a
+  /// source point et al. tombstones the photos it owns — so this pull is
+  /// what finally makes that cascade reach other devices.
+  ///
+  /// `local_path` is deliberately absent from every remote row: it names a
+  /// file on one specific device and means nothing anywhere else. An UPDATE
+  /// (not REPLACE) therefore leaves an existing row's own local_path intact,
+  /// while a newly-pulled row starts with it null until the file is
+  /// downloaded — see SyncService.downloadMissingPhotoFiles.
+  ///
+  /// Returns the local file paths of photos this pull removed, so the caller
+  /// can delete the files too — a tombstoned photo that left its image
+  /// behind would just accumulate dead bytes on every device forever. The
+  /// deletion happens outside the write transaction on purpose (see
+  /// [_pullAndReconcile]'s onRowDeleted doc).
+  @override
+  Future<List<String>> upsertPhotosFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    final orphanedFiles = <String>[];
+    await _pullAndReconcile(
+      'photos',
+      remoteRows,
+      idColumn: 'id',
+      boolColumns: const [],
+      hasPendingDelete: false,
+      deletedAtColumn: 'deleted_at',
+      captureColumnsOnDelete: const ['local_path'],
+      onRowDeleted: (row) {
+        final path = row['local_path'] as String?;
+        if (path != null && path.isNotEmpty) orphanedFiles.add(path);
+      },
+    );
+    return orphanedFiles;
+  }
+
+  @override
+  Future<void> setPhotoLocalPath(String id, String localPath) async {
+    // Deliberately NOT updatePhoto: that writes the whole row via
+    // _photoToRow, which hardcodes dirty = 1 (correct for a user edit, wrong
+    // here). Recording where a *pulled* photo's file landed changes nothing
+    // about the remote record, so it must not queue a pointless re-push.
+    await _db.update(
+      'photos',
+      {'local_path': localPath},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  @override
+  Future<List<SurveyPhoto>> getPhotosMissingLocalFile() async {
+    // remote_path set + local_path missing == a photo that exists in Storage
+    // but whose bytes this device has never had (pulled from another
+    // device). Rows still awaiting their first upload are the opposite case
+    // (local_path set, remote_path null) and are excluded.
+    final rows = await _db.query(
+      'photos',
+      where: "remote_path IS NOT NULL AND remote_path != '' "
+          "AND (local_path IS NULL OR local_path = '')",
+      orderBy: 'rowid',
+    );
+    return rows.map(_photoFromRow).toList(growable: false);
   }
 
   // ---- BoM manual entries ----------------------------------------------
