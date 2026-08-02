@@ -516,7 +516,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-            duration: const Duration(seconds: 8),
+            // No fixed duration — a failure stays up until the user acts
+            // (Retry, the close icon, or a swipe) rather than quietly timing
+            // out and being missed. The close icon only calls
+            // ScaffoldMessenger.hideCurrentSnackBar internally — it never
+            // touches SyncController.status, so the AppBar indicator
+            // (_syncStatusButton) keeps reporting failure, and the next
+            // failed run shows a brand-new SnackBar regardless of whether
+            // this one was dismissed.
+            duration: const Duration(days: 1),
+            showCloseIcon: true,
             action: SnackBarAction(label: 'Retry', onPressed: _syncNow),
           ),
         );
