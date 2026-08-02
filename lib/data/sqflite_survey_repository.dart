@@ -1187,6 +1187,11 @@ class SqfliteSurveyRepository implements SurveyRepository {
       'transmitting_part_open_to_air',
       'nrv_feasibility',
     ],
+    // Full sync Group 2 (Slice 3c): explicit delete tombstone, exactly like
+    // blocks — a remote row carrying deleted_at is removed locally, checked
+    // directly per row rather than inferred from absence (reconcileDeletes
+    // stays off here, still unsafe for an RLS-scoped table).
+    deletedAtColumn: 'deleted_at',
   );
 
   @override
@@ -1205,6 +1210,8 @@ class SqfliteSurveyRepository implements SurveyRepository {
       'conduit_clamping',
       'civil_work_needed',
     ],
+    // See upsertSourcePointsFromRemote — same Group 2 tombstone.
+    deletedAtColumn: 'deleted_at',
   );
 
   @override
@@ -1228,6 +1235,8 @@ class SqfliteSurveyRepository implements SurveyRepository {
           'separate_mcb_for_series',
           'ups_power_supply',
         ],
+        // See upsertSourcePointsFromRemote — same Group 2 tombstone.
+        deletedAtColumn: 'deleted_at',
       );
 
   @override
@@ -1240,6 +1249,8 @@ class SqfliteSurveyRepository implements SurveyRepository {
           'wifi_interference_check',
           'uninterrupted_power_source',
         ],
+        // See upsertSourcePointsFromRemote — same Group 2 tombstone.
+        deletedAtColumn: 'deleted_at',
       );
 
   @override

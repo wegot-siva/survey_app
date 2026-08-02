@@ -133,11 +133,14 @@ class SupabaseSurveyDataSource {
     await _client.from('source_points').upsert(_sourcePointToRemoteRow(sp));
   }
 
-  /// Deletes a source point by id (idempotent — a no-op if it was never
-  /// pushed, or already deleted remotely).
-  Future<void> deleteSourcePoint(String id) async {
-    await _client.from('source_points').delete().eq('id', id);
-  }
+  /// Marks a source point deleted by id — an explicit `deleted_at`
+  /// tombstone (`UPDATE`), not a real `DELETE`, for exactly the reason
+  /// given on [deleteBlock]: a hard-deleted row is invisible to pull
+  /// reconciliation, so the delete would propagate upward and stop there
+  /// while every other device kept the row forever. Cascades to the photos
+  /// it owns — see [_tombstoneWithPhotos].
+  Future<void> deleteSourcePoint(String id) =>
+      _tombstoneWithPhotos('source_points', id, PhotoOwner.sourcePoint);
 
   /// Upserts an inlet point by its id (idempotent). The parent site must
   /// already have been pushed (FK).
@@ -145,32 +148,60 @@ class SupabaseSurveyDataSource {
     await _client.from('inlet_points').upsert(_inletPointToRemoteRow(ip));
   }
 
-  /// Deletes an inlet point by id (idempotent — a no-op if it was never
-  /// pushed, or already deleted remotely).
-  Future<void> deleteInletPoint(String id) async {
-    await _client.from('inlet_points').delete().eq('id', id);
-  }
+  /// Marks an inlet point deleted by id — a `deleted_at` tombstone, not a
+  /// real `DELETE`. See [deleteSourcePoint].
+  Future<void> deleteInletPoint(String id) =>
+      _tombstoneWithPhotos('inlet_points', id, PhotoOwner.inletPoint);
 
   /// Upserts a Duct LoRa unit by its id (idempotent). Parent site must exist.
   Future<void> pushDuctLora(DuctLora d) async {
     await _client.from('duct_loras').upsert(_ductLoraToRemoteRow(d));
   }
 
-  /// Deletes a Duct LoRa unit by id (idempotent — a no-op if it was never
-  /// pushed, or already deleted remotely).
-  Future<void> deleteDuctLora(String id) async {
-    await _client.from('duct_loras').delete().eq('id', id);
-  }
+  /// Marks a Duct LoRa unit deleted by id — a `deleted_at` tombstone, not a
+  /// real `DELETE`. See [deleteSourcePoint].
+  Future<void> deleteDuctLora(String id) =>
+      _tombstoneWithPhotos('duct_loras', id, PhotoOwner.ductLora);
 
   /// Upserts a gateway by its id (idempotent). Parent site must exist.
   Future<void> pushGateway(Gateway g) async {
     await _client.from('gateways').upsert(_gatewayToRemoteRow(g));
   }
 
-  /// Deletes a gateway by id (idempotent — a no-op if it was never pushed, or
-  /// already deleted remotely).
-  Future<void> deleteGateway(String id) async {
-    await _client.from('gateways').delete().eq('id', id);
+  /// Marks a gateway deleted by id — a `deleted_at` tombstone, not a real
+  /// `DELETE`. See [deleteSourcePoint].
+  Future<void> deleteGateway(String id) =>
+      _tombstoneWithPhotos('gateways', id, PhotoOwner.gateway);
+
+  /// Tombstones row [id] of [table], then every photos row it owns via the
+  /// polymorphic ([ownerType], [ownerId]) link — one shared timestamp, so a
+  /// parent and its photos always carry the same deletion time.
+  ///
+  /// Order matters on failure, not on success: if the photos half throws,
+  /// the caller's whole push action throws with it, so the local row stays
+  /// `pending_delete` and the next sync retries both halves (both are
+  /// idempotent `UPDATE`s). Tombstoning the parent first means that window
+  /// leaves a deleted parent with live photos — today's exact status quo,
+  /// and invisible until photos' own pull lands in Group 4 — rather than
+  /// photos disappearing out from under a row still shown as present.
+  ///
+  /// The local side already hard-deletes those photos on-device when the
+  /// parent is deleted (see SqfliteSurveyRepository.deleteSourcePoint);
+  /// this is what finally makes the remote match, closing a pre-existing
+  /// orphan gap. Idempotent: re-tombstoning an already-deleted row, or one
+  /// never pushed in the first place, is a harmless no-op update.
+  Future<void> _tombstoneWithPhotos(
+    String table,
+    String id,
+    String ownerType,
+  ) async {
+    final deletedAt = DateTime.now().toUtc().toIso8601String();
+    await _client.from(table).update({'deleted_at': deletedAt}).eq('id', id);
+    await _client
+        .from('photos')
+        .update({'deleted_at': deletedAt})
+        .eq('owner_type', ownerType)
+        .eq('owner_id', id);
   }
 
   /// Upserts the per-site footer (idempotent, keyed by site_id). Parent site

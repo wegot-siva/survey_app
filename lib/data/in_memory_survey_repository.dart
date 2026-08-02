@@ -432,16 +432,27 @@ class InMemorySurveyRepository implements SurveyRepository {
   /// (source_points, inlet_points, duct_loras, gateways, bom_manual_entries)
   /// — an unsynced local edit or pending delete is left untouched, and a
   /// local row absent from a complete [remoteRows] fetch is removed.
+  ///
+  /// [hasDeletedAt] mirrors that helper's `deletedAtColumn`: when set, a
+  /// remote row carrying a non-null `deleted_at` is removed locally (or
+  /// simply never added, if this stub never had it — never added-then-
+  /// removed), checked directly per row rather than inferred from absence.
+  /// Off for bom_manual_entries, whose tombstones are a later group.
   void _upsertFromRemoteById<T>({
     required Map<String, T> store,
     required Set<String> dirtyIds,
     required Set<String> pendingDeleteIds,
     required List<Map<String, dynamic>> remoteRows,
     required T Function(Map<String, dynamic>) fromRow,
+    bool hasDeletedAt = false,
   }) {
     for (final row in remoteRows) {
       final id = row['id'] as String;
       if (dirtyIds.contains(id) || pendingDeleteIds.contains(id)) continue;
+      if (hasDeletedAt && row['deleted_at'] != null) {
+        store.remove(id);
+        continue;
+      }
       store[id] = fromRow(row);
     }
 
@@ -464,6 +475,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       pendingDeleteIds: _pendingDeleteSourcePointIds,
       remoteRows: remoteRows,
       fromRow: _sourcePointFromRemoteRow,
+      hasDeletedAt: true,
     );
   }
 
@@ -536,6 +548,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       pendingDeleteIds: _pendingDeleteInletPointIds,
       remoteRows: remoteRows,
       fromRow: _inletPointFromRemoteRow,
+      hasDeletedAt: true,
     );
   }
 
@@ -606,6 +619,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       pendingDeleteIds: _pendingDeleteDuctLoraIds,
       remoteRows: remoteRows,
       fromRow: _ductLoraFromRemoteRow,
+      hasDeletedAt: true,
     );
   }
 
@@ -676,6 +690,7 @@ class InMemorySurveyRepository implements SurveyRepository {
       pendingDeleteIds: _pendingDeleteGatewayIds,
       remoteRows: remoteRows,
       fromRow: _gatewayFromRemoteRow,
+      hasDeletedAt: true,
     );
   }
 

@@ -1832,3 +1832,128 @@ create policy "update blocks via site" on public.blocks
 
 -- No DELETE policy — see the doc block above for why this is deliberate,
 -- not an oversight.
+
+-- ---------------------------------------------------------------------------
+-- Full sync Group 2 (Slice 3c) — delete tombstones for source_points,
+-- inlet_points, duct_loras, gateways, extending the exact mechanism blocks
+-- proved out in the section above.
+--
+-- These four already had pull-sync, but upsert-only: a row deleted on one
+-- device was pushed as a real remote DELETE and therefore vanished from
+-- every later fetch — and absence is precisely the signal pull reconcile is
+-- (correctly) forbidden to act on for an RLS-scoped table, since a
+-- role-narrowed fetch looks identical to a deletion. So the delete
+-- propagated upward and stopped there: other devices kept the row forever.
+-- Same fix as blocks — an EXPLICIT marker on the row itself, checked
+-- directly, never inferred from absence.
+--
+-- deleted_at is nullable, set once, never cleared. RLS SELECT does NOT
+-- filter on it, and must never be changed to: pull reconcile can only act
+-- on a tombstone it can actually see, so filtering here would silently
+-- re-break the propagation this exists to provide. Hiding a deleted row
+-- from the UI is the local read path's job, same as the pending_delete
+-- convention used everywhere else.
+--
+-- DELETE is removed from all four policies. The previous "for all" grant
+-- (Slice 2c) covered it; the three commands below supersede that, so a
+-- hard delete is now genuinely refused at the database level rather than
+-- merely unused by current code — nobody, including a future code path or
+-- direct SQL Editor use, can bypass the tombstone out from under pull
+-- reconciliation. "Delete" a row by setting deleted_at via UPDATE, which
+-- the same can_access_site(site_id) scope already permits.
+--
+-- photos gains deleted_at for the cascade: each of these four owns photos
+-- rows via the polymorphic (owner_type, owner_id) link, and the local
+-- delete path already hard-deletes them on-device (see
+-- SqfliteSurveyRepository.deleteSourcePoint) while nothing ever removed
+-- them remotely — a pre-existing orphan gap this closes. photos needs no
+-- policy change: it already has select/insert/update and deliberately no
+-- DELETE policy (Slice 2f), so an UPDATE tombstone is already permitted
+-- and a hard delete already refused.
+--
+-- Photos' own pull path is Group 4 — this slice only guarantees the
+-- cascade write happens, so the tombstones are already correct in the
+-- database by the time that pull is built on top of them.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.source_points add column if not exists deleted_at timestamptz;
+alter table public.inlet_points  add column if not exists deleted_at timestamptz;
+alter table public.duct_loras    add column if not exists deleted_at timestamptz;
+alter table public.gateways      add column if not exists deleted_at timestamptz;
+alter table public.photos        add column if not exists deleted_at timestamptz;
+
+drop policy if exists "access source_points via site" on public.source_points;
+
+drop policy if exists "select source_points via site" on public.source_points;
+create policy "select source_points via site" on public.source_points
+  for select to authenticated
+  using (public.can_access_site(site_id));
+
+drop policy if exists "insert source_points via site" on public.source_points;
+create policy "insert source_points via site" on public.source_points
+  for insert to authenticated
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "update source_points via site" on public.source_points;
+create policy "update source_points via site" on public.source_points
+  for update to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "access inlet_points via site" on public.inlet_points;
+
+drop policy if exists "select inlet_points via site" on public.inlet_points;
+create policy "select inlet_points via site" on public.inlet_points
+  for select to authenticated
+  using (public.can_access_site(site_id));
+
+drop policy if exists "insert inlet_points via site" on public.inlet_points;
+create policy "insert inlet_points via site" on public.inlet_points
+  for insert to authenticated
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "update inlet_points via site" on public.inlet_points;
+create policy "update inlet_points via site" on public.inlet_points
+  for update to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "access duct_loras via site" on public.duct_loras;
+
+drop policy if exists "select duct_loras via site" on public.duct_loras;
+create policy "select duct_loras via site" on public.duct_loras
+  for select to authenticated
+  using (public.can_access_site(site_id));
+
+drop policy if exists "insert duct_loras via site" on public.duct_loras;
+create policy "insert duct_loras via site" on public.duct_loras
+  for insert to authenticated
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "update duct_loras via site" on public.duct_loras;
+create policy "update duct_loras via site" on public.duct_loras
+  for update to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "access gateways via site" on public.gateways;
+
+drop policy if exists "select gateways via site" on public.gateways;
+create policy "select gateways via site" on public.gateways
+  for select to authenticated
+  using (public.can_access_site(site_id));
+
+drop policy if exists "insert gateways via site" on public.gateways;
+create policy "insert gateways via site" on public.gateways
+  for insert to authenticated
+  with check (public.can_access_site(site_id));
+
+drop policy if exists "update gateways via site" on public.gateways;
+create policy "update gateways via site" on public.gateways
+  for update to authenticated
+  using (public.can_access_site(site_id))
+  with check (public.can_access_site(site_id));
+
+-- No DELETE policy on any of the four (or on photos) — deliberate, see the
+-- doc block above.
