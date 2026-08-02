@@ -678,6 +678,29 @@ class SyncService {
       await _repository.upsertBomManualEntriesFromRemote(
         await _remote.fetchBomManualEntries(),
       );
+      // Immutable BoM history (Full sync Group 3). Order is load-bearing:
+      // local sqlite enforces foreign keys, so each parent row must exist
+      // before its lines — snapshots before snapshot_lines, revisions before
+      // revision_lines, manual-edit snapshots before their lines — and all
+      // of them after sites, which every parent here references.
+      await _repository.upsertBomSnapshotsFromRemote(
+        await _remote.fetchBomSnapshots(),
+      );
+      await _repository.upsertBomSnapshotLinesFromRemote(
+        await _remote.fetchBomSnapshotLines(),
+      );
+      await _repository.upsertBomRevisionsFromRemote(
+        await _remote.fetchBomRevisions(),
+      );
+      await _repository.upsertBomRevisionLinesFromRemote(
+        await _remote.fetchBomRevisionLines(),
+      );
+      await _repository.upsertBomManualEditSnapshotsFromRemote(
+        await _remote.fetchBomManualEditSnapshots(),
+      );
+      await _repository.upsertBomManualEditSnapshotLinesFromRemote(
+        await _remote.fetchBomManualEditSnapshotLines(),
+      );
       return const SyncResult(success: true);
     } on PostgrestException catch (e) {
       // Diagnostic instrumentation (forensic sync investigation): this

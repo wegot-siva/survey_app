@@ -477,6 +477,43 @@ abstract class SurveyRepository {
     List<Map<String, dynamic>> remoteRows,
   );
 
+  // ---- Immutable BoM history pulls (Full sync Group 3) ---------------------
+  //
+  // These six tables were push-only until this slice, which meant a survey's
+  // finalized BoM and its entire revision history existed only on the device
+  // that created them — invisible to every other device and lost on
+  // reinstall. Each is a plain upsert-by-id merge: they're immutable by
+  // design (no delete path anywhere in the app), so unlike
+  // [upsertBomManualEntriesFromRemote] there's no tombstone to check, and
+  // unlike [upsertSitesFromRemote] no absence-based reconcile either.
+  //
+  // Callers must pull each parent before its lines — local storage enforces
+  // the foreign key.
+
+  Future<void> upsertBomSnapshotsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
+
+  Future<void> upsertBomSnapshotLinesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
+
+  Future<void> upsertBomRevisionsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
+
+  Future<void> upsertBomRevisionLinesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
+
+  Future<void> upsertBomManualEditSnapshotsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
+
+  Future<void> upsertBomManualEditSnapshotLinesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
+
   // ---- BoM snapshots (Finalize — immutable, frozen BoM) --------------------
   //
   // Version 1 only in this slice — no revisions/re-finalize flow. Once a

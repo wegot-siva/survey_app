@@ -1261,6 +1261,93 @@ class SqfliteSurveyRepository implements SurveyRepository {
     remoteRows,
     idColumn: 'id',
     boolColumns: const [],
+    // Full sync Group 3 (Slice 3d): same explicit tombstone as Group 2's
+    // tables — this is the only BoM table with a delete path.
+    deletedAtColumn: 'deleted_at',
+  );
+
+  // ---- Immutable BoM history (Full sync Group 3) --------------------------
+  //
+  // Plain upserts: these six tables have no delete path anywhere in the app,
+  // so there is no tombstone column to check and nothing for absence-based
+  // reconcile to do (it stays off, as for every RLS-scoped table). Each
+  // remote row's columns map 1:1 onto the local table — the remote schema is
+  // a wire-format contract with SupabaseSurveyDataSource's
+  // _bomXToRemoteRow mappers, and enum-ish values (group_code 'A'..'G',
+  // source 'auto'|'manual', sensor_size/sensor_type names, ISO-8601
+  // timestamps) are stored as the same strings on both sides.
+  //
+  // hasPendingDelete: false on all six — none of these local tables has that
+  // column, precisely because none of them can be deleted.
+  //
+  // Pull ORDER matters and is the caller's job (see
+  // SyncService.pullCoreSurveyData): local sqlite enforces foreign keys, so
+  // each parent must land before its lines.
+
+  @override
+  Future<void> upsertBomSnapshotsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'bom_snapshots',
+    remoteRows,
+    idColumn: 'id',
+    boolColumns: const [],
+    hasPendingDelete: false,
+  );
+
+  @override
+  Future<void> upsertBomSnapshotLinesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'bom_snapshot_lines',
+    remoteRows,
+    idColumn: 'id',
+    boolColumns: const [],
+    hasPendingDelete: false,
+  );
+
+  @override
+  Future<void> upsertBomRevisionsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'bom_revisions',
+    remoteRows,
+    idColumn: 'id',
+    boolColumns: const [],
+    hasPendingDelete: false,
+  );
+
+  @override
+  Future<void> upsertBomRevisionLinesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'bom_revision_lines',
+    remoteRows,
+    idColumn: 'id',
+    boolColumns: const [],
+    hasPendingDelete: false,
+  );
+
+  @override
+  Future<void> upsertBomManualEditSnapshotsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'bom_manual_edit_snapshots',
+    remoteRows,
+    idColumn: 'id',
+    boolColumns: const [],
+    hasPendingDelete: false,
+  );
+
+  @override
+  Future<void> upsertBomManualEditSnapshotLinesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) => _pullAndReconcile(
+    'bom_manual_edit_snapshot_lines',
+    remoteRows,
+    idColumn: 'id',
+    boolColumns: const [],
+    hasPendingDelete: false,
   );
 
   @override

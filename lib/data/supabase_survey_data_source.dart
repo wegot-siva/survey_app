@@ -196,12 +196,21 @@ class SupabaseSurveyDataSource {
     String ownerType,
   ) async {
     final deletedAt = DateTime.now().toUtc().toIso8601String();
-    await _client.from(table).update({'deleted_at': deletedAt}).eq('id', id);
+    await _tombstone(table, id, deletedAt);
     await _client
         .from('photos')
         .update({'deleted_at': deletedAt})
         .eq('owner_type', ownerType)
         .eq('owner_id', id);
+  }
+
+  /// Tombstones row [id] of [table] — the no-photos half of
+  /// [_tombstoneWithPhotos], for a table that owns no photos at all.
+  Future<void> _tombstone(String table, String id, [String? deletedAt]) async {
+    await _client
+        .from(table)
+        .update({'deleted_at': deletedAt ?? DateTime.now().toUtc().toIso8601String()})
+        .eq('id', id);
   }
 
   /// Upserts the per-site footer (idempotent, keyed by site_id). Parent site
@@ -329,6 +338,40 @@ class SupabaseSurveyDataSource {
   Future<List<Map<String, dynamic>>> fetchBomManualEntries() =>
       _fetchAllRows('bom_manual_entries');
 
+  // ---- Immutable BoM history (Full sync Group 3) --------------------------
+  //
+  // These six were push-only until this slice: a survey's finalized BoM and
+  // its whole revision history lived only on the device that created it, so
+  // a reinstall or a second device saw nothing. They're immutable by design
+  // (no delete path anywhere in the app, and no DELETE policy), so their
+  // pulls are plain upserts — no tombstone, no absence-based reconcile.
+  //
+  // RLS scopes all six through the owning survey: the three parent tables
+  // directly via can_access_site(survey_id), and the three line tables one
+  // hop further via can_access_bom_snapshot / can_access_bom_revision /
+  // can_access_bom_manual_edit_snapshot, which resolve the parent's own
+  // survey_id (see schema.sql's Slice 2g block). So a line row is returned
+  // iff its parent snapshot/revision is visible — the caller never has to
+  // filter by parent itself.
+
+  Future<List<Map<String, dynamic>>> fetchBomSnapshots() =>
+      _fetchAllRows('bom_snapshots');
+
+  Future<List<Map<String, dynamic>>> fetchBomSnapshotLines() =>
+      _fetchAllRows('bom_snapshot_lines');
+
+  Future<List<Map<String, dynamic>>> fetchBomRevisions() =>
+      _fetchAllRows('bom_revisions');
+
+  Future<List<Map<String, dynamic>>> fetchBomRevisionLines() =>
+      _fetchAllRows('bom_revision_lines');
+
+  Future<List<Map<String, dynamic>>> fetchBomManualEditSnapshots() =>
+      _fetchAllRows('bom_manual_edit_snapshots');
+
+  Future<List<Map<String, dynamic>>> fetchBomManualEditSnapshotLines() =>
+      _fetchAllRows('bom_manual_edit_snapshot_lines');
+
   /// Upserts a Material Master change-log entry by its id (idempotent). Not
   /// site-scoped, and not FK'd to the material row either (a delete's own
   /// audit entry must survive the row's removal).
@@ -378,11 +421,18 @@ class SupabaseSurveyDataSource {
         .upsert(_bomManualEntryToRemoteRow(entry));
   }
 
-  /// Deletes a BoM manual entry by id (idempotent — a no-op if it was never
-  /// pushed, or already deleted remotely).
-  Future<void> deleteBomManualEntry(String id) async {
-    await _client.from('bom_manual_entries').delete().eq('id', id);
-  }
+  /// Marks a BoM manual entry deleted by id — a `deleted_at` tombstone, not
+  /// a real `DELETE`, for the same reason as [deleteSourcePoint]. This is the
+  /// only BoM table with a delete path at all; the other six are immutable.
+  ///
+  /// No photos cascade, unlike Group 2's tables: a manual entry owns no
+  /// photos. There is no [PhotoOwner] token for one, no app path creates
+  /// such a row, and the local delete path (SqfliteSurveyRepository
+  /// .deleteBomManualEntry) touches only its own table — where the Group 2
+  /// deletes each additionally delete their own photos. Cascading here would
+  /// mean inventing an ownership relationship the app doesn't have.
+  Future<void> deleteBomManualEntry(String id) =>
+      _tombstone('bom_manual_entries', id);
 
   /// Upserts a BoM snapshot by its id (idempotent). The parent site must
   /// already have been pushed (FK).

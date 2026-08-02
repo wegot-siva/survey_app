@@ -1015,7 +1015,110 @@ class InMemorySurveyRepository implements SurveyRepository {
       pendingDeleteIds: _pendingDeleteBomManualEntryIds,
       remoteRows: remoteRows,
       fromRow: _bomManualEntryFromRemoteRow,
+      hasDeletedAt: true,
     );
+  }
+
+  // ---- Immutable BoM history pulls (Full sync Group 3) ---------------------
+  //
+  // Plain upserts — no tombstone, no absence-reconcile (see the interface
+  // doc). Written by hand rather than via _upsertFromRemoteById because this
+  // stub keys its BoM stores by something other than the row's own id
+  // (snapshots by surveyId, line lists by their parent's id), so there's no
+  // single `Map<String, T>` to merge into generically. A row with an
+  // unsynced local edit is still protected, exactly as everywhere else.
+
+  @override
+  Future<void> upsertBomSnapshotsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    for (final row in remoteRows) {
+      if (_dirtyBomSnapshotIds.contains(row['id'] as String)) continue;
+      final snapshot = _bomSnapshotFromRemoteRow(row);
+      _bomSnapshots[snapshot.surveyId] = snapshot;
+    }
+  }
+
+  @override
+  Future<void> upsertBomSnapshotLinesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async => _replaceLinesByParent(
+    store: _bomSnapshotLines,
+    dirtyIds: _dirtyBomSnapshotLineIds,
+    remoteRows: remoteRows,
+    parentKey: 'snapshot_id',
+    fromRow: _bomSnapshotLineFromRemoteRow,
+    idOf: (l) => l.id,
+  );
+
+  @override
+  Future<void> upsertBomRevisionsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    for (final row in remoteRows) {
+      final id = row['id'] as String;
+      if (_dirtyBomRevisionIds.contains(id)) continue;
+      _bomRevisions[id] = _bomRevisionFromRemoteRow(row);
+    }
+  }
+
+  @override
+  Future<void> upsertBomRevisionLinesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async => _replaceLinesByParent(
+    store: _bomRevisionLines,
+    dirtyIds: _dirtyBomRevisionLineIds,
+    remoteRows: remoteRows,
+    parentKey: 'revision_id',
+    fromRow: _bomRevisionLineFromRemoteRow,
+    idOf: (l) => l.id,
+  );
+
+  @override
+  Future<void> upsertBomManualEditSnapshotsFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    for (final row in remoteRows) {
+      final id = row['id'] as String;
+      if (_dirtyBomManualEditSnapshotIds.contains(id)) continue;
+      _bomManualEditSnapshots[id] = _bomManualEditSnapshotFromRemoteRow(row);
+    }
+  }
+
+  @override
+  Future<void> upsertBomManualEditSnapshotLinesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async => _replaceLinesByParent(
+    store: _bomManualEditSnapshotLines,
+    dirtyIds: _dirtyBomManualEditSnapshotLineIds,
+    remoteRows: remoteRows,
+    parentKey: 'snapshot_id',
+    fromRow: _bomManualEditSnapshotLineFromRemoteRow,
+    idOf: (l) => l.id,
+  );
+
+  /// Merges incoming line rows into a parent-keyed list store, replacing a
+  /// line with the same id and appending one this stub hasn't seen. A line
+  /// with an unsynced local edit keeps its local version.
+  void _replaceLinesByParent<T>({
+    required Map<String, List<T>> store,
+    required Set<String> dirtyIds,
+    required List<Map<String, dynamic>> remoteRows,
+    required String parentKey,
+    required T Function(Map<String, dynamic>) fromRow,
+    required String Function(T) idOf,
+  }) {
+    for (final row in remoteRows) {
+      final id = row['id'] as String;
+      if (dirtyIds.contains(id)) continue;
+      final lines = store.putIfAbsent(row[parentKey] as String, () => <T>[]);
+      final index = lines.indexWhere((l) => idOf(l) == id);
+      if (index >= 0) {
+        lines[index] = fromRow(row);
+      } else {
+        lines.add(fromRow(row));
+      }
+    }
   }
 
   @override
@@ -1505,6 +1608,97 @@ Gateway _gatewayFromRemoteRow(Map<String, dynamic> r) {
     simCoverage: _enumByName(SimCoverage.values, r['sim_coverage'] as String?),
     uninterruptedPowerSource: r['uninterrupted_power_source'] as bool?,
     mountingHardwareNeeded: (r['mounting_hardware_needed'] as String?) ?? '',
+  );
+}
+
+BomSnapshot _bomSnapshotFromRemoteRow(Map<String, dynamic> r) {
+  return BomSnapshot(
+    id: r['id'] as String,
+    surveyId: r['survey_id'] as String,
+    version: (r['version'] as num?)?.toInt() ?? 1,
+    status: (r['status'] as String?) ?? kBomSnapshotStatusFinal,
+    finalizedBy: (r['finalized_by'] as String?) ?? '',
+    finalizedByUserId: r['finalized_by_user_id'] as String?,
+    finalizedAt:
+        DateTime.tryParse((r['finalized_at'] as String?) ?? '') ?? DateTime(1970),
+  );
+}
+
+BomSnapshotLine _bomSnapshotLineFromRemoteRow(Map<String, dynamic> r) {
+  return BomSnapshotLine(
+    id: r['id'] as String,
+    snapshotId: r['snapshot_id'] as String,
+    sku: (r['sku'] as String?) ?? '',
+    item: (r['item'] as String?) ?? '',
+    materialName: (r['material_name'] as String?) ?? '',
+    itemLabel: (r['item_label'] as String?) ?? '',
+    sensorSize: _enumByName(SensorSize.values, r['sensor_size'] as String?),
+    sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
+    unit: (r['unit'] as String?) ?? '',
+    qty: (r['qty'] as num?)?.toDouble() ?? 0,
+    group: _materialGroupFromCode(r['group_code'] as String?),
+    source:
+        _enumByName(BomSnapshotSource.values, r['source'] as String?) ??
+        BomSnapshotSource.auto,
+  );
+}
+
+BomRevision _bomRevisionFromRemoteRow(Map<String, dynamic> r) {
+  return BomRevision(
+    id: r['id'] as String,
+    surveyId: r['survey_id'] as String,
+    version: (r['version'] as num?)?.toInt() ?? 0,
+    reason: (r['reason'] as String?) ?? '',
+    createdBy: (r['created_by'] as String?) ?? '',
+    createdByUserId: r['created_by_user_id'] as String?,
+    createdAt:
+        DateTime.tryParse((r['created_at'] as String?) ?? '') ?? DateTime(1970),
+  );
+}
+
+BomRevisionLine _bomRevisionLineFromRemoteRow(Map<String, dynamic> r) {
+  return BomRevisionLine(
+    id: r['id'] as String,
+    revisionId: r['revision_id'] as String,
+    sku: (r['sku'] as String?) ?? '',
+    item: (r['item'] as String?) ?? '',
+    materialName: (r['material_name'] as String?) ?? '',
+    itemLabel: (r['item_label'] as String?) ?? '',
+    sensorSize: _enumByName(SensorSize.values, r['sensor_size'] as String?),
+    sensorType: _enumByName(SensorType.values, r['sensor_type'] as String?),
+    unit: (r['unit'] as String?) ?? '',
+    qtyDelta: (r['qty_delta'] as num?)?.toDouble() ?? 0,
+    group: _materialGroupFromCode(r['group_code'] as String?),
+  );
+}
+
+BomManualEditSnapshot _bomManualEditSnapshotFromRemoteRow(
+  Map<String, dynamic> r,
+) {
+  return BomManualEditSnapshot(
+    id: r['id'] as String,
+    surveyId: r['survey_id'] as String,
+    version: (r['version'] as num?)?.toInt() ?? 0,
+    basedOnVersion: (r['based_on_version'] as num?)?.toInt() ?? 0,
+    editedBy: (r['edited_by'] as String?) ?? '',
+    editedAt:
+        DateTime.tryParse((r['edited_at'] as String?) ?? '') ?? DateTime(1970),
+    reason: (r['reason'] as String?) ?? '',
+  );
+}
+
+BomManualEditSnapshotLine _bomManualEditSnapshotLineFromRemoteRow(
+  Map<String, dynamic> r,
+) {
+  return BomManualEditSnapshotLine(
+    id: r['id'] as String,
+    snapshotId: r['snapshot_id'] as String,
+    sku: (r['sku'] as String?) ?? '',
+    itemName: (r['item_name'] as String?) ?? '',
+    description: (r['description'] as String?) ?? '',
+    unit: (r['unit'] as String?) ?? '',
+    qty: (r['qty'] as num?)?.toDouble() ?? 0,
+    group: _materialGroupFromCode(r['group_code'] as String?),
   );
 }
 

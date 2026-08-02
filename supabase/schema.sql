@@ -1957,3 +1957,48 @@ create policy "update gateways via site" on public.gateways
 
 -- No DELETE policy on any of the four (or on photos) — deliberate, see the
 -- doc block above.
+
+-- ---------------------------------------------------------------------------
+-- Full sync Group 3 (Slice 3d) — bom_manual_entries delete tombstone, and
+-- pull-sync for the six immutable BoM tables.
+--
+-- Part 1: bom_manual_entries gets the same deleted_at tombstone as Group 2
+-- (source_points/inlet_points/duct_loras/gateways), for the same reason — it
+-- is the one BoM table with a real delete path (removing a manual line
+-- before finalize, BomGroupManualSectionScreen), and that delete was pushed
+-- as a real remote DELETE, so it propagated upward and stopped there while
+-- every other device kept the row forever. DELETE is dropped from its
+-- policy set, so a hard delete is refused at the database level rather than
+-- merely unused. RLS SELECT does NOT filter deleted_at, and must never be
+-- changed to: reconcile can only act on a tombstone it can see.
+--
+-- Unlike Group 2's four tables, bom_manual_entries owns NO photos — there is
+-- no PhotoOwner token for it (see survey_photo.dart: the six owner types are
+-- source_point, inlet_point, gateway, footer, duct_lora, client_inputs), no
+-- app path creates one, and its local delete path does not touch the photos
+-- table at all (unlike deleteSourcePoint et al, which each delete their own
+-- photos transactionally). So there is deliberately no photos cascade here —
+-- adding one would be inventing an ownership relationship the app does not
+-- have.
+--
+-- Part 2: the six immutable BoM tables (bom_snapshots, bom_snapshot_lines,
+-- bom_revisions, bom_revision_lines, bom_manual_edit_snapshots,
+-- bom_manual_edit_snapshot_lines) get NO schema change at all — they need
+-- none. Their pull is new app-side code only; the SELECT policies they need
+-- already exist (Slice 2g), including the two-hop can_access_bom_snapshot /
+-- can_access_bom_revision / can_access_bom_manual_edit_snapshot helpers that
+-- scope the three line tables through their parent's survey_id. They are
+-- immutable by design — no delete path anywhere in the app, and already no
+-- DELETE policy — so they get no deleted_at column and no tombstone logic.
+-- Absence-based reconcile stays off for them as for every RLS-scoped table.
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+alter table public.bom_manual_entries add column if not exists deleted_at timestamptz;
+
+-- Supersedes the Slice 2g DELETE grant — "delete" is now an UPDATE that sets
+-- deleted_at, which the existing update policy above already permits.
+drop policy if exists "delete bom_manual_entries via site" on public.bom_manual_entries;
+
+-- No DELETE policy on bom_manual_entries, and none on any of the six
+-- immutable BoM tables — deliberate, see the doc block above.
