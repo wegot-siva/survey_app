@@ -2002,3 +2002,185 @@ drop policy if exists "delete bom_manual_entries via site" on public.bom_manual_
 
 -- No DELETE policy on bom_manual_entries, and none on any of the six
 -- immutable BoM tables — deliberate, see the doc block above.
+
+-- ---------------------------------------------------------------------------
+-- Scheduled purge of expired photo tombstones (Storage cleanup).
+--
+-- WHERE THIS LIVES: nowhere in the Flutter app. This is server-side
+-- infrastructure — a pg_cron job calling the function below. A maintainer
+-- reading lib/ will find no trace of it, which is exactly why it is
+-- documented here at length. If photos start disappearing from Storage,
+-- this is what did it.
+--
+-- WHY SERVER-SIDE: the app cannot do this. Slice 2h grants storage.objects
+-- SELECT and INSERT only, so a client DELETE is refused (verified: HTTP 403
+-- AccessDenied). That is deliberate and must stay — it is what stops a
+-- compromised or buggy client destroying survey evidence. Cleanup therefore
+-- runs with the service role, which only the database has.
+--
+-- WHY NOT PURE SQL: deleting a row from storage.objects does NOT free the
+-- underlying file — Supabase Storage keeps metadata in Postgres and the
+-- bytes in object storage, and only the Storage API removes both. A SQL-only
+-- job would orphan every file permanently AND destroy the metadata needed to
+-- ever find them again. So the object deletion goes over HTTP via pg_net.
+--
+-- THE 90-DAY GRACE (see `grace` below): a tombstone is how other devices
+-- learn a photo was deleted. Purging the photos row immediately would mean a
+-- device that happened to be offline never sees the tombstone and keeps its
+-- local copy forever. 90 days is the window a field device has to come back
+-- online and reconcile. A device offline LONGER than that will keep its
+-- local copy indefinitely — an accepted edge case, not an oversight.
+--
+-- TWO PHASES, and why the retry requirement needs no error handling:
+--
+--   Phase A fires a Storage DELETE for every expired tombstone whose object
+--           still exists.
+--   Phase B hard-deletes the photos row only for expired tombstones whose
+--           object is already GONE.
+--
+-- The presence of the storage.objects row is itself the success signal, so
+-- a failed delete simply leaves the object in place, Phase B skips that
+-- photo, and Phase A retries on the next run. That sidesteps pg_net being
+-- asynchronous (it returns a request id, not a result) — no response
+-- correlation, no two-phase commit, no partial-failure states.
+--
+-- ORDER MATTERS: object first, row second, never the reverse.
+-- can_access_photo_object() resolves an object's site by looking up the
+-- photos row; once that row is gone the object is invisible to everyone
+-- including Admin, and unreachable for cleanup. Phase B's condition
+-- guarantees the row only ever goes after the object already has.
+--
+-- SECRETS: the service role key is read from Supabase Vault at call time and
+-- never appears in this file, the repo, or the app binary (the client only
+-- ever gets the anon key, via --dart-define-from-file=.env). Create both
+-- secrets once per project, in Dashboard -> Project Settings -> Vault:
+--
+--     service_role_key  = the project's service_role JWT
+--     project_url       = https://<project-ref>.supabase.co   (no trailing /)
+--
+-- project_url is a secret only for convenience — it keeps this file
+-- environment-agnostic so the same schema.sql can be applied to staging.
+--
+-- APPLYING THIS: run the statements below as SEPARATE SQL Editor
+-- executions, not as one pasted block. The editor wraps an execution in a
+-- transaction, so a failure in the cron statements at the bottom silently
+-- rolls back the function at the top — it reports success and leaves you
+-- with nothing. That happened twice while this was first deployed; the
+-- symptom is `42883: function ... does not exist` right after a "successful"
+-- run.
+--
+-- REQUIRES pg_net (the HTTP call) and pg_cron (the schedule). Create them
+-- explicitly and one at a time — the Dashboard's Extensions toggle silently
+-- failed to take during deployment, and `create extension` at least errors
+-- loudly. Verify with:
+--     select extname, extversion from pg_extension
+--      where extname in ('pg_net', 'pg_cron');
+-- pg_cron installs only in the `postgres` database. pg_net must be 0.7+ for
+-- net.http_delete to exist (deployed against 0.20.3).
+-- Re-runnable / idempotent.
+-- ---------------------------------------------------------------------------
+
+create extension if not exists pg_net;
+
+create extension if not exists pg_cron;
+
+create or replace function public.purge_expired_photo_tombstones(
+  grace               interval default interval '90 days',
+  max_deletes_per_run integer  default 500
+)
+returns table (storage_deletes_fired integer, rows_purged integer)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  service_key text;
+  base_url    text;
+  fired       integer := 0;
+  purged      integer := 0;
+  rec         record;
+begin
+  select decrypted_secret into service_key
+    from vault.decrypted_secrets where name = 'service_role_key';
+  select decrypted_secret into base_url
+    from vault.decrypted_secrets where name = 'project_url';
+
+  -- Fail loudly rather than firing unauthenticated requests that would 403
+  -- forever while looking like the job "ran".
+  if service_key is null or base_url is null then
+    raise exception 'purge_expired_photo_tombstones: missing Vault secret'
+      using hint = 'Create Vault secrets named service_role_key and '
+                   'project_url — see the doc block in schema.sql.';
+  end if;
+
+  -- ---- Phase A: delete the Storage object -------------------------------
+  -- Capped per run so a large backlog drains over several nights instead of
+  -- queueing thousands of concurrent HTTP requests in pg_net. Oldest first,
+  -- so nothing can be starved indefinitely.
+  for rec in
+    select p.remote_path
+      from public.photos p
+      join storage.objects o
+        on o.bucket_id = 'survey-photos'
+       and o.name = p.remote_path
+     where p.deleted_at is not null
+       and p.deleted_at < now() - grace
+     order by p.deleted_at
+     limit max_deletes_per_run
+  loop
+    perform net.http_delete(
+      url     := base_url || '/storage/v1/object/survey-photos/' || rec.remote_path,
+      headers := jsonb_build_object(
+        'Authorization', 'Bearer ' || service_key,
+        'apikey',        service_key
+      )
+    );
+    fired := fired + 1;
+  end loop;
+
+  -- ---- Phase B: purge the row, only once its object is gone -------------
+  -- A null/blank remote_path means the photo was removed before it ever
+  -- uploaded — there is no object, so nothing to wait for.
+  with purgeable as (
+    select p.id
+      from public.photos p
+     where p.deleted_at is not null
+       and p.deleted_at < now() - grace
+       and (
+         p.remote_path is null
+         or p.remote_path = ''
+         or not exists (
+           select 1 from storage.objects o
+            where o.bucket_id = 'survey-photos'
+              and o.name = p.remote_path
+         )
+       )
+  )
+  delete from public.photos p
+   using purgeable
+   where p.id = purgeable.id;
+  get diagnostics purged = row_count;
+
+  return query select fired, purged;
+end;
+$$;
+
+-- SECURITY DEFINER + reads Vault, so it must not be callable by app roles.
+-- Postgres grants EXECUTE to PUBLIC on new functions by default; revoke it
+-- so only the cron job's owner (postgres) can run this. Without this line
+-- any authenticated user could trigger a purge via PostgREST RPC.
+revoke all on function public.purge_expired_photo_tombstones(interval, integer)
+  from public, anon, authenticated;
+
+-- Daily at 03:17 UTC — off-peak, and an odd minute so it doesn't pile up
+-- with every other cron job in the world scheduled on the hour.
+select cron.unschedule('purge-expired-photo-tombstones')
+ where exists (
+   select 1 from cron.job where jobname = 'purge-expired-photo-tombstones'
+ );
+
+select cron.schedule(
+  'purge-expired-photo-tombstones',
+  '17 3 * * *',
+  $job$ select public.purge_expired_photo_tombstones(); $job$
+);
