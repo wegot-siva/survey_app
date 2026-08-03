@@ -31,7 +31,7 @@ import 'package:uuid/uuid.dart';
 /// only once a signed-in user id is known (never before login — nothing
 /// pre-login needs local storage), and swapped for a freshly-opened one
 /// whenever the active account changes.
-const int _dbVersion = 29;
+const int _dbVersion = 30;
 
 String _dbFileNameFor(String userId) => 'survey_app_$userId.db';
 
@@ -551,6 +551,34 @@ Future<Database> openAppDatabaseInDirectory(
           'ALTER TABLE blocks ADD COLUMN sync_blocked INTEGER NOT NULL DEFAULT 0',
         );
       }
+      // v29 -> v30: photos gains pending_delete, the tombstone every other
+      // per-row-deletable table already had.
+      //
+      // Without it, removing a single photo from a form had nowhere to
+      // record the intent: setPhotos hard-deleted the row outright, so the
+      // push queue (which only ever sees rows that still exist and are
+      // dirty) could never learn a delete had happened, no deleted_at was
+      // ever written remotely, and the row stayed live on the server. That
+      // was invisible while photos were push-only — it just left a remote
+      // orphan — but Full sync Group 4 added the photos pull, and a live
+      // remote row with no local counterpart is exactly what the pull's
+      // insert branch is for. The removed photo came back, image and all,
+      // on the user's own next sync (confirmed on-device, and reproduced
+      // against real sqlite before this fix).
+      //
+      // Deliberately no backfill: a photo already removed before this
+      // upgrade is gone locally with no record that it ever existed, so
+      // there is nothing to mark. Those rows stay live remotely and will
+      // re-appear once on the next pull, after which removing them again
+      // tombstones them properly. A blanket UPDATE here could not tell
+      // "deleted by the user" from "never had it" anyway — and blanket
+      // dirty-marking migrations are exactly what created the stuck-row
+      // backlog behind sync_blocked (see the v29 note above).
+      if (oldVersion < 30) {
+        await db.execute(
+          'ALTER TABLE photos ADD COLUMN pending_delete INTEGER NOT NULL DEFAULT 0',
+        );
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -804,15 +832,16 @@ Future<void> _createFootersTable(Database db) async {
 Future<void> _createPhotosTable(Database db) async {
   await db.execute('''
     CREATE TABLE photos (
-      id          TEXT PRIMARY KEY,
-      owner_type  TEXT NOT NULL,
-      owner_id    TEXT NOT NULL,
-      slot        TEXT NOT NULL,
-      position    INTEGER NOT NULL DEFAULT 0,
-      local_path  TEXT,
-      remote_path TEXT,
-      site_id     TEXT,
-      dirty       INTEGER NOT NULL DEFAULT 1
+      id             TEXT PRIMARY KEY,
+      owner_type     TEXT NOT NULL,
+      owner_id       TEXT NOT NULL,
+      slot           TEXT NOT NULL,
+      position       INTEGER NOT NULL DEFAULT 0,
+      local_path     TEXT,
+      remote_path    TEXT,
+      site_id        TEXT,
+      dirty          INTEGER NOT NULL DEFAULT 1,
+      pending_delete INTEGER NOT NULL DEFAULT 0
     )
   ''');
   await db.execute(

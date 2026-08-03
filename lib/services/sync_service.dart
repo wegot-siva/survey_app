@@ -526,6 +526,24 @@ class SyncService {
       // row's failure here, instead of throwing out past pushRow and
       // aborting the rest of this sync run via the outer try/catch below.
       var photos = 0;
+      // Removals first, same order as every other table's tombstone push: a
+      // photo the user deleted must reach Supabase as a deleted_at write
+      // before anything else touches that row. The local row and its image
+      // file are only destroyed once the remote write is confirmed, so a
+      // delete interrupted by going offline is retried next sync instead of
+      // being silently lost (and, before this existed, silently undone by
+      // the pull).
+      for (final photo in await _repository.getPendingDeletePhotos()) {
+        final ok = await pushRow('photos/${photo.id} (delete)', () async {
+          await _remote.deletePhoto(photo.id);
+          await _repository.hardDeletePhoto(photo.id);
+          final localPath = photo.localPath;
+          if (localPath != null && localPath.isNotEmpty) {
+            await _photoFiles.deleteLocalFile(localPath);
+          }
+        });
+        if (ok) photos++;
+      }
       for (final photo in await _repository.getAllPhotos(dirtyOnly: true)) {
         debugPrint(
           'sync: photo ${photo.id} local=${photo.localPath} '

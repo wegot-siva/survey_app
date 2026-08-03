@@ -1402,11 +1402,17 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
   // ---- Photos (polymorphic, slot-based) -------------------------------------
 
+  /// A photo removed by the user is tombstoned rather than deleted (see
+  /// [setPhotos]), so every read path has to filter it out — the row lives
+  /// on only until its remote delete is confirmed, and must never be shown
+  /// or re-pushed in the meantime. Same convention as blocks' pending_delete.
+  static const _photoNotDeleted = 'pending_delete = 0';
+
   @override
   Future<List<SurveyPhoto>> getPhotos(String ownerType, String ownerId) async {
     final rows = await _db.query(
       'photos',
-      where: 'owner_type = ? AND owner_id = ?',
+      where: 'owner_type = ? AND owner_id = ? AND $_photoNotDeleted',
       whereArgs: [ownerType, ownerId],
       orderBy: 'slot, position, rowid',
     );
@@ -1433,10 +1439,23 @@ class SqfliteSurveyRepository implements SurveyRepository {
           .where((p) => p.id.isNotEmpty)
           .map((p) => p.id)
           .toList();
-      // Delete any existing rows for this owner that aren't in the kept set.
+      // Any existing row for this owner that isn't in the kept set was
+      // removed by the user. TOMBSTONED, not hard-deleted: the row stays
+      // physically present (pending_delete = 1, dirty = 1) until its remote
+      // deleted_at push is confirmed, exactly like blocks and every Group 2
+      // table.
+      //
+      // Hard-deleting here is what caused photo resurrection: it destroyed
+      // the only record that a delete was wanted, so nothing was ever
+      // pushed, the remote row stayed live, and the Group 4 pull re-inserted
+      // it — the user's own next sync undid their deletion. Keeping the row
+      // is also precisely what makes the pull skip it: _pullAndReconcile
+      // treats a pending_delete row as protected, so an incoming live remote
+      // row can't clobber or resurrect it.
       final placeholders = List.filled(keepIds.length, '?').join(', ');
-      await txn.delete(
+      await txn.update(
         'photos',
+        {'pending_delete': 1, 'dirty': 1},
         where: keepIds.isEmpty
             ? 'owner_type = ? AND owner_id = ?'
             : 'owner_type = ? AND owner_id = ? AND id NOT IN ($placeholders)',
@@ -1471,12 +1490,33 @@ class SqfliteSurveyRepository implements SurveyRepository {
 
   @override
   Future<List<SurveyPhoto>> getAllPhotos({bool dirtyOnly = false}) async {
+    // Tombstoned rows are excluded from the upsert queue specifically:
+    // re-pushing one would rewrite the very row whose deletion is pending
+    // and resurrect it remotely. They leave via getPendingDeletePhotos.
     final rows = await _db.query(
       'photos',
-      where: dirtyOnly ? 'dirty = 1' : null,
+      where: dirtyOnly ? 'dirty = 1 AND $_photoNotDeleted' : _photoNotDeleted,
       orderBy: 'rowid',
     );
     return rows.map(_photoFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<List<SurveyPhoto>> getPendingDeletePhotos() async {
+    // Returns whole photos, not just ids (unlike blocks' equivalent), so the
+    // caller also gets local_path — the file has to be deleted alongside the
+    // row, and after the hard delete that path is gone.
+    final rows = await _db.query(
+      'photos',
+      where: 'pending_delete = 1',
+      orderBy: 'rowid',
+    );
+    return rows.map(_photoFromRow).toList(growable: false);
+  }
+
+  @override
+  Future<void> hardDeletePhoto(String id) async {
+    await _db.delete('photos', where: 'id = ?', whereArgs: [id]);
   }
 
   @override
@@ -1530,7 +1570,12 @@ class SqfliteSurveyRepository implements SurveyRepository {
       remoteRows,
       idColumn: 'id',
       boolColumns: const [],
-      hasPendingDelete: false,
+      // A photo the user removed is still physically present locally, marked
+      // pending_delete, until its remote tombstone lands. That makes it
+      // protected here — which is exactly what stops the pull re-inserting
+      // (resurrecting) it from the still-live remote row in the window
+      // before the delete is pushed.
+      hasPendingDelete: true,
       deletedAtColumn: 'deleted_at',
       captureColumnsOnDelete: const ['local_path'],
       onRowDeleted: (row) {
@@ -1561,10 +1606,13 @@ class SqfliteSurveyRepository implements SurveyRepository {
     // but whose bytes this device has never had (pulled from another
     // device). Rows still awaiting their first upload are the opposite case
     // (local_path set, remote_path null) and are excluded.
+    // Tombstoned rows are excluded: a photo the user just deleted must not
+    // have its image fetched back down while its delete is still in flight.
     final rows = await _db.query(
       'photos',
       where: "remote_path IS NOT NULL AND remote_path != '' "
-          "AND (local_path IS NULL OR local_path = '')",
+          "AND (local_path IS NULL OR local_path = '') "
+          'AND $_photoNotDeleted',
       orderBy: 'rowid',
     );
     return rows.map(_photoFromRow).toList(growable: false);

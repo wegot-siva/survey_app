@@ -414,6 +414,20 @@ class SupabaseSurveyDataSource {
     await _client.from('photos').upsert(_photoToRemoteRow(photo));
   }
 
+  /// Marks a photo deleted by id — a `deleted_at` tombstone via UPDATE, not
+  /// a real DELETE (photos has no DELETE policy at all — Slice 2e — so this
+  /// is also the only delete the database permits).
+  ///
+  /// Used when the user removes a single photo from a form, which no cascade
+  /// covers: the Groups 2-3 cascade only fires when a photo's *owner* is
+  /// deleted. Without this the removal was never pushed at all, and Group
+  /// 4's pull resurrected the photo from the still-live remote row.
+  /// Idempotent — re-tombstoning, or tombstoning a photo that was removed
+  /// before it ever uploaded, is a harmless no-op affecting zero rows.
+  ///
+  /// The Storage object is deliberately left in place; see [downloadPhoto].
+  Future<void> deletePhoto(String id) => _tombstone('photos', id);
+
   /// Every photo metadata row this account can see (RLS scopes it by
   /// can_access_site(site_id) — Slice 2e). Includes tombstoned rows: the
   /// SELECT policy deliberately does not filter `deleted_at`, because pull

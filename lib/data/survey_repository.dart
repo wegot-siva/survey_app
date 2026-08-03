@@ -437,6 +437,20 @@ abstract class SurveyRepository {
     List<Map<String, dynamic>> remoteRows,
   );
 
+  /// Photos the user removed that still need their delete pushed —
+  /// tombstoned locally (see [setPhotos]) and physically present until the
+  /// remote `deleted_at` write is confirmed, so a failed or offline sync
+  /// retries instead of silently losing the deletion.
+  ///
+  /// Returns whole photos rather than ids so the caller also has
+  /// `localPath`: the image file has to go with the row, and once
+  /// [hardDeletePhoto] runs that path is unrecoverable.
+  Future<List<SurveyPhoto>> getPendingDeletePhotos();
+
+  /// Removes a tombstoned photo row for real. Call only once its remote
+  /// delete has succeeded — the mirror of [hardDeleteBlock].
+  Future<void> hardDeletePhoto(String id);
+
   /// Records where a pulled photo's downloaded file landed on this device.
   ///
   /// Distinct from [updatePhoto], which treats the write as a user edit and

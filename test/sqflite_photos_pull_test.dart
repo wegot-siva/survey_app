@@ -19,6 +19,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:survey_app/data/sqflite_survey_repository.dart';
+import 'package:survey_app/models/survey_photo.dart';
 import 'package:survey_app/services/id_service.dart';
 import 'package:survey_app/services/photo_file_store.dart';
 
@@ -33,15 +34,16 @@ void main() {
     db = await databaseFactory.openDatabase(inMemoryDatabasePath);
     await db.execute('''
       CREATE TABLE photos (
-        id          TEXT PRIMARY KEY,
-        owner_type  TEXT NOT NULL,
-        owner_id    TEXT NOT NULL,
-        slot        TEXT NOT NULL,
-        position    INTEGER NOT NULL DEFAULT 0,
-        local_path  TEXT,
-        remote_path TEXT,
-        site_id     TEXT,
-        dirty       INTEGER NOT NULL DEFAULT 1
+        id             TEXT PRIMARY KEY,
+        owner_type     TEXT NOT NULL,
+        owner_id       TEXT NOT NULL,
+        slot           TEXT NOT NULL,
+        position       INTEGER NOT NULL DEFAULT 0,
+        local_path     TEXT,
+        remote_path    TEXT,
+        site_id        TEXT,
+        dirty          INTEGER NOT NULL DEFAULT 1,
+        pending_delete INTEGER NOT NULL DEFAULT 0
       )
     ''');
     repo = SqfliteSurveyRepository(db, IdService());
@@ -71,6 +73,7 @@ void main() {
     String? remotePath = 'photos/x.jpg',
     int dirty = 0,
     int position = 0,
+    int pendingDelete = 0,
   }) => db.insert('photos', {
     'id': id,
     'owner_type': 'source_point',
@@ -81,6 +84,7 @@ void main() {
     'remote_path': remotePath,
     'site_id': 'site-1',
     'dirty': dirty,
+    'pending_delete': pendingDelete,
   });
 
   group('photos pull', () {
@@ -237,6 +241,131 @@ void main() {
 
       expect((await db.query('photos')).single['dirty'], 1);
     });
+  });
+
+  // ---- single-photo removal (the resurrection fix) -----------------------
+  //
+  // Removing ONE photo from a form is not covered by the Groups 2-3 cascade,
+  // which only fires when a photo's owner is deleted. Before this fix the
+  // local row was hard-deleted outright: nothing could push the delete, the
+  // remote row stayed live, and the Group 4 pull re-inserted it — the user's
+  // own next sync silently undid their deletion (reproduced on-device).
+
+  group('removing a single photo', () {
+    test(
+      'tombstones the row instead of destroying it, so the delete is still '
+      'pushable',
+      () async {
+        await insertLocal('keep', localPath: '/data/photos/keep.jpg');
+        await insertLocal('remove', localPath: '/data/photos/remove.jpg', position: 1);
+
+        await repo.setPhotos('source_point', 'sp-1', [
+          const SurveyPhoto(
+            id: 'keep',
+            ownerType: 'source_point',
+            ownerId: 'sp-1',
+            slot: 'power_source',
+            localPath: '/data/photos/keep.jpg',
+            remotePath: 'photos/x.jpg',
+            siteId: 'site-1',
+          ),
+        ]);
+
+        final raw = await db.query('photos', where: 'id = ?', whereArgs: ['remove']);
+        expect(raw, hasLength(1), reason: 'row must survive until the push');
+        expect(raw.single['pending_delete'], 1);
+        expect(raw.single['dirty'], 1);
+      },
+    );
+
+    test('hides it from the UI immediately', () async {
+      await insertLocal('remove', localPath: '/data/photos/remove.jpg');
+      await repo.setPhotos('source_point', 'sp-1', const []);
+
+      expect(await repo.getPhotos('source_point', 'sp-1'), isEmpty);
+    });
+
+    test('keeps it out of the upsert queue but in the delete queue', () async {
+      await insertLocal('remove', localPath: '/data/photos/remove.jpg');
+      await repo.setPhotos('source_point', 'sp-1', const []);
+
+      expect(
+        (await repo.getAllPhotos(dirtyOnly: true)).map((p) => p.id),
+        isNot(contains('remove')),
+        reason: 're-upserting it would resurrect it remotely',
+      );
+      final pending = await repo.getPendingDeletePhotos();
+      expect(pending.map((p) => p.id), ['remove']);
+      expect(pending.single.localPath, '/data/photos/remove.jpg',
+          reason: 'caller needs the path to delete the file too');
+    });
+
+    test(
+      'THE REGRESSION: a pull does NOT resurrect it while its delete is '
+      'still pending',
+      () async {
+        await insertLocal('remove', localPath: '/data/photos/remove.jpg');
+        await repo.setPhotos('source_point', 'sp-1', const []);
+
+        // Remote row is still live — the delete hasn't been pushed yet.
+        await repo.upsertPhotosFromRemote([remoteRow('remove')]);
+
+        expect(await repo.getPhotos('source_point', 'sp-1'), isEmpty);
+        final raw = await db.query('photos', where: 'id = ?', whereArgs: ['remove']);
+        expect(raw.single['pending_delete'], 1, reason: 'still tombstoned');
+      },
+    );
+
+    test('its image is not re-downloaded while the delete is pending', () async {
+      await insertLocal('remove', localPath: null); // pulled, no file yet
+      await repo.setPhotos('source_point', 'sp-1', const []);
+
+      expect(await repo.getPhotosMissingLocalFile(), isEmpty);
+    });
+
+    test('hardDeletePhoto removes it for real, after the remote ack', () async {
+      await insertLocal('remove', localPath: '/data/photos/remove.jpg');
+      await repo.setPhotos('source_point', 'sp-1', const []);
+
+      await repo.hardDeletePhoto('remove');
+
+      expect(await db.query('photos'), isEmpty);
+      expect(await repo.getPendingDeletePhotos(), isEmpty);
+    });
+
+    test(
+      'a photo that was never on this device still pulls in normally — the '
+      'fix must not over-correct into skipping legitimate inserts',
+      () async {
+        await insertLocal('remove', localPath: '/data/photos/remove.jpg');
+        await repo.setPhotos('source_point', 'sp-1', const []);
+
+        await repo.upsertPhotosFromRemote([
+          remoteRow('remove'), // tombstoned locally — must stay hidden
+          remoteRow('brand-new'), // never seen here — must arrive
+        ]);
+
+        expect(
+          (await repo.getPhotos('source_point', 'sp-1')).map((p) => p.id),
+          ['brand-new'],
+        );
+      },
+    );
+
+    test(
+      'the owner-deleted cascade still works — a remote tombstone removes a '
+      'clean local photo exactly as before',
+      () async {
+        await insertLocal('cascaded', localPath: '/data/photos/c.jpg');
+
+        final orphaned = await repo.upsertPhotosFromRemote([
+          remoteRow('cascaded', deletedAt: '2026-01-01T00:00:00Z'),
+        ]);
+
+        expect(await db.query('photos'), isEmpty);
+        expect(orphaned, ['/data/photos/c.jpg']);
+      },
+    );
   });
 
   group('PhotoFileStore.deleteLocalFile', () {

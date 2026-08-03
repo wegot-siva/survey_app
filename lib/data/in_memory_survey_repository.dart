@@ -78,6 +78,10 @@ class InMemorySurveyRepository implements SurveyRepository {
   final Set<String> _pendingDeleteMaterialMasterItemIds = {};
   final Set<String> _dirtyMaterialMasterAuditIds = {};
   final Set<String> _dirtyPhotoIds = {};
+
+  /// Photos the user removed, awaiting their remote tombstone push — the
+  /// stub's mirror of the local photos.pending_delete column.
+  final Set<String> _pendingDeletePhotoIds = {};
   final Set<String> _dirtyBomManualEntryIds = {};
   final Set<String> _dirtyBomSnapshotIds = {};
   final Set<String> _dirtyBomSnapshotLineIds = {};
@@ -885,7 +889,12 @@ class InMemorySurveyRepository implements SurveyRepository {
   Future<List<SurveyPhoto>> getPhotos(String ownerType, String ownerId) async {
     final list =
         _photos.values
-            .where((p) => p.ownerType == ownerType && p.ownerId == ownerId)
+            .where(
+              (p) =>
+                  p.ownerType == ownerType &&
+                  p.ownerId == ownerId &&
+                  !_pendingDeletePhotoIds.contains(p.id),
+            )
             .toList()
           ..sort((a, b) {
             final bySlot = a.slot.compareTo(b.slot);
@@ -901,14 +910,16 @@ class InMemorySurveyRepository implements SurveyRepository {
     List<SurveyPhoto> photos,
   ) async {
     final keepIds = photos.where((p) => p.id.isNotEmpty).map((p) => p.id).toSet();
-    _photos.removeWhere((id, p) {
-      final drop =
-          p.ownerType == ownerType &&
-          p.ownerId == ownerId &&
-          !keepIds.contains(id);
-      if (drop) _dirtyPhotoIds.remove(id);
-      return drop;
-    });
+    // Tombstone rather than drop — mirrors SqfliteSurveyRepository.setPhotos;
+    // see there for why hard-deleting resurrected the photo on the next pull.
+    for (final entry in _photos.entries) {
+      if (entry.value.ownerType == ownerType &&
+          entry.value.ownerId == ownerId &&
+          !keepIds.contains(entry.key)) {
+        _pendingDeletePhotoIds.add(entry.key);
+        _dirtyPhotoIds.add(entry.key);
+      }
+    }
     for (final photo in photos) {
       if (photo.id.isEmpty) {
         final stored = photo.copyWithId(_idService.newId());
@@ -930,8 +941,24 @@ class InMemorySurveyRepository implements SurveyRepository {
   @override
   Future<List<SurveyPhoto>> getAllPhotos({bool dirtyOnly = false}) async =>
       _photos.values
-          .where((p) => !dirtyOnly || _dirtyPhotoIds.contains(p.id))
+          .where(
+            (p) =>
+                !_pendingDeletePhotoIds.contains(p.id) &&
+                (!dirtyOnly || _dirtyPhotoIds.contains(p.id)),
+          )
           .toList(growable: false);
+
+  @override
+  Future<List<SurveyPhoto>> getPendingDeletePhotos() async => _photos.values
+      .where((p) => _pendingDeletePhotoIds.contains(p.id))
+      .toList(growable: false);
+
+  @override
+  Future<void> hardDeletePhoto(String id) async {
+    _photos.remove(id);
+    _pendingDeletePhotoIds.remove(id);
+    _dirtyPhotoIds.remove(id);
+  }
 
   @override
   Future<void> updatePhoto(SurveyPhoto photo) async {
@@ -951,7 +978,13 @@ class InMemorySurveyRepository implements SurveyRepository {
     final orphanedFiles = <String>[];
     for (final row in remoteRows) {
       final id = row['id'] as String;
-      if (_dirtyPhotoIds.contains(id)) continue; // unsynced local edit wins
+      // Unsynced local edit — or an unpushed local removal — wins. The
+      // latter is what stops a live remote row resurrecting a photo the
+      // user just deleted.
+      if (_dirtyPhotoIds.contains(id) ||
+          _pendingDeletePhotoIds.contains(id)) {
+        continue;
+      }
       if (row['deleted_at'] != null) {
         final removed = _photos.remove(id);
         final path = removed?.localPath;
