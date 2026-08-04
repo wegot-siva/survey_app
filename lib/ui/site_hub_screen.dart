@@ -8,6 +8,7 @@ import '../models/site.dart';
 import '../models/survey_status.dart';
 import '../models/user_role.dart';
 import '../services/session_controller.dart';
+import '../services/survey_completeness.dart';
 import '../services/sync_service.dart';
 import 'bom_preview_screen.dart';
 import 'client_inputs_screen.dart';
@@ -216,9 +217,35 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   /// what the Approver will act on in a later slice. Available any time before
   /// submission (covers re-opening a survey that's still "assigned" too, in
   /// case the auto in-progress transition didn't fire for some reason).
-  /// Submits directly — no confirmation dialog (it only ever asked yes/no,
-  /// it never validated anything, so there's nothing to preserve).
+  ///
+  /// Warns about empty sections and names them, but lets the engineer
+  /// override. Deliberately a warning rather than a hard block, unlike
+  /// Finalize's Group A safety net (BomPreviewScreen's `canFinalize`): that
+  /// rule is unambiguous — a point either resolves to an active Group A
+  /// material or it doesn't — whereas which survey sections are genuinely
+  /// mandatory is not settled (see evaluateSurveyCompleteness's doc). A
+  /// wrong blocking rule would strand an engineer on-site, unable to submit
+  /// real work; a wrong warning is just a dialog they dismiss. The
+  /// override also keeps legitimately-unusual sites workable — one with no
+  /// Duct LoRa run, say.
+  ///
+  /// If nothing is empty the survey submits straight through, so the common
+  /// case is unchanged: no dialog, one tap.
   Future<void> _markSubmitted(Site site) async {
+    final completeness = evaluateSurveyCompleteness(
+      site: site,
+      sourcePointCount: _sourcePointCount,
+      inletPointCount: _inletPointCount,
+      ductLoraCount: _ductLoraCount,
+      gatewayCount: _gatewayCount,
+      footerFilled: _footerFilled,
+    );
+    if (!completeness.isComplete) {
+      final proceed = await _confirmIncompleteSubmission(completeness);
+      if (proceed != true) return;
+      if (!mounted) return;
+    }
+
     await widget.repository.updateSite(
       site.copyWith(status: SurveyStatus.submitted),
     );
@@ -227,6 +254,52 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
       const SnackBar(content: Text('Survey submitted.')),
     );
     await _load();
+  }
+
+  /// Lists exactly which sections are empty and asks whether to submit
+  /// anyway — the same "name what's missing" shape as the Group A banner on
+  /// the BoM screen, so the two read consistently.
+  Future<bool?> _confirmIncompleteSubmission(
+    SurveyCompletenessResult completeness,
+  ) {
+    final count = completeness.gaps.length;
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Some sections are empty'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$count section${count == 1 ? ' has' : 's have'} nothing '
+              'recorded:',
+            ),
+            const SizedBox(height: 12),
+            for (final gap in completeness.gaps)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('• ${gap.description}'),
+              ),
+            const SizedBox(height: 12),
+            const Text(
+              'You can still submit — only do so if these genuinely do not '
+              'apply to this site.',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Go back'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Submit anyway'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Sales' "Edit assignee" action — only ever offered while [site] is still
