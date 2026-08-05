@@ -5,6 +5,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:survey_app/data/auth_repository.dart';
@@ -44,6 +45,17 @@ class _FakeAuthRepository implements AuthRepository {
   Stream<AuthenticatedUser?> get authStateChanges => _controller.stream;
 }
 
+
+/// The home screen pops a modal "Built without credentials." dialog whenever
+/// SupabaseService isn't configured, which it never is under test. It sits in
+/// the Overlay absorbing pointers, so any tap-based test must clear it first —
+/// assertions-only tests never noticed.
+Future<void> _dismissCredentialsDialog(WidgetTester tester) async {
+  if (find.text('Built without credentials.').evaluate().isEmpty) return;
+  await tester.tap(find.widgetWithText(TextButton, 'OK'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('shows empty Sites home screen once signed in', (tester) async {
     final repository = InMemorySurveyRepository(IdService());
@@ -73,46 +85,102 @@ void main() {
     expect(find.text('Sam Sales (Sales)'), findsOneWidget);
   });
 
-  testWidgets('Approver sees every site, like Sales and Admin', (tester) async {
-    final repository = InMemorySurveyRepository(IdService());
-    final supabaseService = SupabaseService();
-    final auth = _FakeAuthRepository({
-      'anna@co.com:pw': const AuthenticatedUser(
-        userId: 'u2',
-        fullName: 'Anna Approver',
-        role: UserRole.approver,
-      ),
-    });
-    final session = SessionController(auth);
-    await session.login('anna@co.com', 'pw');
+  testWidgets(
+    'Approver opens on Pending (submitted only), and All still shows every '
+    'site — full visibility is grouped, never removed',
+    (tester) async {
+      final repository = InMemorySurveyRepository(IdService());
+      final supabaseService = SupabaseService();
+      final auth = _FakeAuthRepository({
+        'anna@co.com:pw': const AuthenticatedUser(
+          userId: 'u2',
+          fullName: 'Anna Approver',
+          role: UserRole.approver,
+        ),
+      });
+      final session = SessionController(auth);
+      await session.login('anna@co.com', 'pw');
 
-    final ready = await repository.createSite(
-      name: 'Ready for review',
-      blocks: const [],
-    );
-    await repository.updateSite(
-      ready.copyWith(assignedTo: 'Ravi Kumar', status: 'submitted'),
-    );
-    final notReady = await repository.createSite(
-      name: 'Still in progress',
-      blocks: const [],
-    );
-    await repository.updateSite(
-      notReady.copyWith(assignedTo: 'Priya Sharma', status: 'in_progress'),
-    );
+      final ready = await repository.createSite(
+        name: 'Ready for review',
+        blocks: const [],
+      );
+      await repository.updateSite(
+        ready.copyWith(assignedTo: 'Ravi Kumar', status: 'submitted'),
+      );
+      final notReady = await repository.createSite(
+        name: 'Still in progress',
+        blocks: const [],
+      );
+      await repository.updateSite(
+        notReady.copyWith(assignedTo: 'Priya Sharma', status: 'in_progress'),
+      );
 
-    await tester.pumpWidget(
-      SurveyApp(
-        supabaseService: supabaseService,
-        session: session,
-        repositoryFor: (_) async => repository,
-      ),
-    );
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        SurveyApp(
+          supabaseService: supabaseService,
+          session: session,
+          repositoryFor: (_) async => repository,
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.text('Ready for review'), findsOneWidget);
-    expect(find.text('Still in progress'), findsOneWidget);
-  });
+      // Lands on Pending: only the submitted survey, which is the one the
+      // Approver can actually act on.
+      expect(find.text('Ready for review'), findsOneWidget);
+      expect(find.text('Still in progress'), findsNothing);
+
+      await _dismissCredentialsDialog(tester);
+
+      // The full list is one visible tap away — the Approver's RLS-granted
+      // visibility is unchanged, only grouped.
+      await tester.tap(find.widgetWithText(Tab, 'All'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Ready for review'), findsOneWidget);
+      expect(find.text('Still in progress'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'Approver with nothing submitted sees an explanation, not a blank screen',
+    (tester) async {
+      final repository = InMemorySurveyRepository(IdService());
+      final supabaseService = SupabaseService();
+      final auth = _FakeAuthRepository({
+        'anna@co.com:pw': const AuthenticatedUser(
+          userId: 'u2',
+          fullName: 'Anna Approver',
+          role: UserRole.approver,
+        ),
+      });
+      final session = SessionController(auth);
+      await session.login('anna@co.com', 'pw');
+
+      final site = await repository.createSite(
+        name: 'Still in progress',
+        blocks: const [],
+      );
+      await repository.updateSite(site.copyWith(status: 'in_progress'));
+
+      await tester.pumpWidget(
+        SurveyApp(
+          supabaseService: supabaseService,
+          session: session,
+          repositoryFor: (_) async => repository,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await _dismissCredentialsDialog(tester);
+      expect(find.textContaining('Nothing waiting for approval'), findsOneWidget);
+      expect(find.text('Still in progress'), findsNothing);
+
+      await tester.tap(find.widgetWithText(Tab, 'All'));
+      await tester.pumpAndSettle();
+      expect(find.text('Still in progress'), findsOneWidget);
+    },
+  );
 
   testWidgets('Engineer sees only their assigned surveys', (tester) async {
     final repository = InMemorySurveyRepository(IdService());

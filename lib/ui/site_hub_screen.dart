@@ -10,6 +10,7 @@ import '../models/user_role.dart';
 import '../services/session_controller.dart';
 import '../services/survey_completeness.dart';
 import '../services/sync_service.dart';
+import 'approver_review_screen.dart';
 import 'bom_preview_screen.dart';
 import 'client_inputs_screen.dart';
 import 'duct_loras_list_screen.dart';
@@ -113,6 +114,23 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
           repository: widget.repository,
           site: site,
           isAdmin: _isAdmin,
+        ),
+      ),
+    );
+    await _load();
+  }
+
+  /// Opens the same read-only review screen the home list routes to, so
+  /// approval has exactly one implementation regardless of how the Approver
+  /// got here. Reloads afterwards, since approving changes the status this
+  /// screen displays (and hides the button that opened it).
+  Future<void> _openReview(Site site) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ApproverReviewScreen(
+          repository: widget.repository,
+          siteId: site.id,
+          session: widget.session,
         ),
       ),
     );
@@ -443,6 +461,15 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
         site?.status == SurveyStatus.assigned ||
         site?.status == SurveyStatus.inProgress;
     final canReassign = site?.status == SurveyStatus.assigned;
+    // Approve is offered here only for a survey actually awaiting approval —
+    // `submitted` is the one status that means that. Admin is included
+    // alongside Approver deliberately: Admin already has every other
+    // site-management capability on this screen, and had no way to unblock a
+    // survey otherwise. Engineer and Sales never see it.
+    final canApproveHere =
+        site != null &&
+        (isApprover || isAdmin) &&
+        site.status == SurveyStatus.submitted;
 
     return Scaffold(
       appBar: AppBar(
@@ -582,6 +609,25 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
                       onPressed: () => _markSubmitted(site),
                       icon: const Icon(Icons.check_circle_outline),
                       label: const Text('Submit for Approval'),
+                    ),
+                  ),
+                ],
+                // Approve path for a submitted survey. Previously the ONLY
+                // route to the review screen was tapping the row on the home
+                // list, and only while the status was exactly `submitted` —
+                // so an Approver who arrived here any other way found no
+                // Approve action and no explanation. Opens the same
+                // ApproverReviewScreen rather than duplicating the approval
+                // logic, so there stays exactly one place a survey can be
+                // approved.
+                if (canApproveHere) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => _openReview(site),
+                      icon: const Icon(Icons.rule),
+                      label: const Text('Review & Approve'),
                     ),
                   ),
                 ],

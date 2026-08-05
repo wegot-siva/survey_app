@@ -769,6 +769,132 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Approver's home, split into "Pending" and "All".
+  ///
+  /// Pending is `submitted` only — the single status that means "waiting for
+  /// approval" (see [SurveyStatus.order]), and the same status the row tap
+  /// requires before it will open the review screen. Defaults to Pending
+  /// (tab 0) so an Approver lands on their actual queue rather than on 30
+  /// sites they have no action for.
+  ///
+  /// Deliberately tabs rather than a default-on filter toggle: hiding most
+  /// of the list behind an easily-missed switch is what made an approved
+  /// site look deleted to Sales, and "All" sitting visibly alongside means
+  /// nothing ever appears to have vanished. Approver keeps full visibility —
+  /// this is display grouping only, no change to what RLS permits.
+  Widget _buildApproverGroupedList(List<Site> sites) {
+    final pending = sites
+        .where((s) => s.status == SurveyStatus.submitted)
+        .toList(growable: false);
+
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          TabBar(
+            tabs: [
+              _tabLabelWithBadge(context, 'Pending', pending.length),
+              _tabLabelWithBadge(context, 'All', sites.length),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                _genericSiteList(
+                  pending,
+                  emptyMessage: 'Nothing waiting for approval.\n'
+                      'Surveys appear here once an engineer submits them.',
+                ),
+                _genericSiteList(sites),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The plain (ungrouped) site list — Approver's two tabs and Admin's whole
+  /// screen both render through this, so a row looks and behaves identically
+  /// wherever it appears.
+  ///
+  /// [emptyMessage] is what a legitimately-empty *subset* says. Without it an
+  /// empty Pending tab would be a blank screen indistinguishable from a
+  /// failed load.
+  Widget _genericSiteList(List<Site> sites, {String? emptyMessage}) {
+    if (sites.isEmpty && emptyMessage != null) {
+      return RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
+              child: Text(
+                emptyMessage,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Theme.of(context).hintColor),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView.separated(
+        itemCount: sites.length,
+        separatorBuilder: (_, _) => const Divider(height: 1),
+        itemBuilder: (context, i) {
+          final site = sites[i];
+          final hasInputs = site.clientInputs != null;
+          final role = widget.session.currentRole;
+          final isSales = role == UserRole.sales;
+          final isEngineer = role == UserRole.engineer;
+          final isApprover = role == UserRole.approver;
+          final isReadyForSales =
+              site.status == SurveyStatus.approved ||
+              site.status == SurveyStatus.released;
+          // Human label ("In progress"), not the raw stored value
+          // ("in_progress") — this is the line an Approver scans to tell
+          // states apart without opening each site.
+          final statusLabel = SurveyStatus.label(site.status);
+          return ListTile(
+            leading: const Icon(Icons.location_city_outlined),
+            title: Text(site.name),
+            subtitle: Text(
+              isSales
+                  ? (isReadyForSales
+                        ? 'Approved · ready  ·  Assigned to: '
+                              '${site.assignedTo ?? 'Unassigned'}'
+                        : 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
+                              '· Status: $statusLabel')
+                  : isEngineer
+                  ? 'Status: $statusLabel'
+                  : isApprover
+                  ? 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
+                        '· Status: $statusLabel'
+                  : '${site.blocks.length} block(s)  ·  Status: $statusLabel  ·  '
+                        '${hasInputs ? 'Client inputs saved' : 'No client inputs yet'}',
+            ),
+            trailing: isSales && isReadyForSales
+                ? const Icon(Icons.check_circle, color: Colors.green)
+                : const Icon(Icons.chevron_right),
+            // Approver only gets the read-only review screen once a survey
+            // is actually submitted; for any earlier status (e.g. one they
+            // just created and assigned) they open the Site Hub, same as
+            // Sales, which is where reassignment lives. Site Hub now offers
+            // its own Approve path for a submitted site, so landing there
+            // is no longer a dead end either.
+            onTap: () => (isApprover && site.status == SurveyStatus.submitted)
+                ? _openReview(site)
+                : _openSite(site),
+            onLongPress: _canManageSites ? () => _showSiteActions(site) : null,
+          );
+        },
+      ),
+    );
+  }
+
   /// A tab label paired with a small Material [Badge] showing [count] —
   /// replaces baking the count into the label text itself, which could
   /// overflow a tab's narrow (1/3 of screen width) slot on small devices,
@@ -1053,58 +1179,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? _buildEngineerGroupedList(_filteredSites)
                 : widget.session.currentRole == UserRole.sales
                 ? _buildSalesGroupedList(_filteredSites)
-                : RefreshIndicator(
-                    onRefresh: _load,
-                    child: ListView.separated(
-                      itemCount: _filteredSites.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (context, i) {
-                        final site = _filteredSites[i];
-                        final hasInputs = site.clientInputs != null;
-                        final role = widget.session.currentRole;
-                        final isSales = role == UserRole.sales;
-                        final isEngineer = role == UserRole.engineer;
-                        final isApprover = role == UserRole.approver;
-                        final isReadyForSales =
-                            site.status == SurveyStatus.approved ||
-                            site.status == SurveyStatus.released;
-                        return ListTile(
-                          leading: const Icon(Icons.location_city_outlined),
-                          title: Text(site.name),
-                          subtitle: Text(
-                            isSales
-                                ? (isReadyForSales
-                                      ? 'Approved · ready  ·  Assigned to: '
-                                            '${site.assignedTo ?? 'Unassigned'}'
-                                      : 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
-                                            '· Status: ${site.status ?? 'Not assigned'}')
-                                : isEngineer
-                                ? 'Status: ${site.status ?? 'Not assigned'}'
-                                : isApprover
-                                ? 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
-                                      '· Status: ${site.status ?? 'Not assigned'}'
-                                : '${site.blocks.length} block(s)  •  '
-                                      '${hasInputs ? 'Client inputs saved' : 'No client inputs yet'}',
-                          ),
-                          trailing: isSales && isReadyForSales
-                              ? const Icon(Icons.check_circle, color: Colors.green)
-                              : const Icon(Icons.chevron_right),
-                          // Approver only gets the read-only review screen
-                          // once a survey is actually submitted; for any
-                          // earlier status (e.g. one they just created and
-                          // assigned) they open the Site Hub, same as Sales,
-                          // which is where reassignment lives.
-                          onTap: () =>
-                              (isApprover && site.status == SurveyStatus.submitted)
-                              ? _openReview(site)
-                              : _openSite(site),
-                          onLongPress: _canManageSites
-                              ? () => _showSiteActions(site)
-                              : null,
-                        );
-                      },
-                    ),
-                  ),
+                : widget.session.currentRole == UserRole.approver
+                ? _buildApproverGroupedList(_filteredSites)
+                : _genericSiteList(_filteredSites),
           ),
         ],
       ),
