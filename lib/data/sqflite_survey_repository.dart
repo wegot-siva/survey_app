@@ -883,11 +883,34 @@ class SqfliteSurveyRepository implements SurveyRepository {
             continue; // Unsynced local edit/delete — leave it, don't clobber.
           }
         }
-        await txn.insert(
+        // UPDATE-if-exists / INSERT-if-new, deliberately NOT
+        // ConflictAlgorithm.replace.
+        //
+        // SQLite implements INSERT OR REPLACE as DELETE-then-INSERT. With
+        // `PRAGMA foreign_keys = ON` (see app_database.dart's onConfigure)
+        // that DELETE fires source_points.material_id's and
+        // inlet_points.material_id's ON DELETE SET NULL — so every survey
+        // point referencing a material had its sensor selection silently
+        // wiped by the catalog pull, on EVERY sync. The row was then pushed
+        // back up as null, propagating the loss to Supabase and to every
+        // other device.
+        //
+        // That was the "Group A material disappears after reopening" bug:
+        // the selection survived any number of reopens and showed correctly
+        // in the BoM, right up until the next sync ran. An UPDATE touches
+        // no foreign key actions, so referencing survey data is untouched.
+        final updated = await txn.update(
           'material_master_items',
           {..._materialMasterItemToRow(item), 'dirty': 0},
-          conflictAlgorithm: ConflictAlgorithm.replace,
+          where: 'id = ?',
+          whereArgs: [item.id],
         );
+        if (updated == 0) {
+          await txn.insert(
+            'material_master_items',
+            {..._materialMasterItemToRow(item), 'dirty': 0},
+          );
+        }
       }
 
       // Reconciliation: a row that's active locally (not dirty, not already
