@@ -1,8 +1,13 @@
 // Contract tests for reassignment, exercised through the in-memory
-// repository: reassignSurvey must only work while a survey is 'assigned',
-// must write one audit row recording old/new assignee (both the real
-// account id and its display-name snapshot — Slice 1c), and must leave
-// other surveys' status/assignment untouched.
+// repository: reassignSurvey must write one audit row recording old/new
+// assignee (both the real account id and its display-name snapshot — Slice
+// 1c), and must leave other surveys' status/assignment untouched.
+//
+// Reassignment is deliberately allowed in EVERY status, including after the
+// engineer has started work. The old 'assigned'-only rule read to users as an
+// arbitrary reassignment limit (the button vanished the moment the engineer
+// opened the survey), so the handover risk is now surfaced as a UI warning
+// rather than a hard block — see SurveyRepository's reassignment doc.
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -47,45 +52,79 @@ void main() {
     expect(log.single.siteId, site.id);
   });
 
-  test('reassigning a non-"assigned" survey throws and changes nothing', () async {
-    final site = await repo.createSite(name: 'Site B', blocks: const []);
+  // The core of the "reassignment limit" fix: every one of these used to
+  // throw, which is what made reassignment look capped after an engineer
+  // opened the survey.
+  for (final status in [
+    SurveyStatus.inProgress,
+    SurveyStatus.submitted,
+    SurveyStatus.approved,
+  ]) {
+    test('a survey already in "$status" can still be reassigned', () async {
+      final site = await repo.createSite(name: 'Site $status');
+      await repo.updateSite(
+        site.copyWith(
+          assignedTo: 'Ravi Kumar',
+          assignedToUserId: 'eng-ravi',
+          status: status,
+        ),
+      );
+
+      await repo.reassignSurvey(
+        siteId: site.id,
+        newAssigneeUserId: 'eng-priya',
+        newAssignee: 'Priya Sharma',
+        changedByRole: 'Sales',
+      );
+
+      final updated = await repo.getSiteById(site.id);
+      expect(updated!.assignedTo, 'Priya Sharma');
+      expect(updated.assignedToUserId, 'eng-priya');
+      // Reassigning is a handover, not a workflow reset — the survey keeps
+      // whatever progress it had.
+      expect(updated.status, status);
+      expect(await repo.getSurveyAssignmentAuditLog(site.id), hasLength(1));
+    });
+  }
+
+  test('a survey with no status set can be reassigned', () async {
+    final site = await repo.createSite(name: 'Site C');
+    // Never assigned at all — status is null.
+
+    await repo.reassignSurvey(
+      siteId: site.id,
+      newAssigneeUserId: 'eng-priya',
+      newAssignee: 'Priya Sharma',
+      changedByRole: 'Sales',
+    );
+
+    final updated = await repo.getSiteById(site.id);
+    expect(updated!.assignedToUserId, 'eng-priya');
+  });
+
+  test('an in-progress survey can be reassigned repeatedly — there is no '
+      'cap on how many times a survey changes hands', () async {
+    final site = await repo.createSite(name: 'Site D');
     await repo.updateSite(
       site.copyWith(
-        assignedTo: 'Ravi Kumar',
-        assignedToUserId: 'eng-ravi',
+        assignedTo: 'Engineer 0',
+        assignedToUserId: 'eng-0',
         status: SurveyStatus.inProgress,
       ),
     );
 
-    await expectLater(
-      () => repo.reassignSurvey(
+    for (var i = 1; i <= 6; i++) {
+      await repo.reassignSurvey(
         siteId: site.id,
-        newAssigneeUserId: 'eng-priya',
-        newAssignee: 'Priya Sharma',
+        newAssigneeUserId: 'eng-$i',
+        newAssignee: 'Engineer $i',
         changedByRole: 'Sales',
-      ),
-      throwsStateError,
-    );
+      );
+    }
 
-    final unchanged = await repo.getSiteById(site.id);
-    expect(unchanged!.assignedTo, 'Ravi Kumar');
-    expect(unchanged.assignedToUserId, 'eng-ravi');
-    expect(await repo.getSurveyAssignmentAuditLog(site.id), isEmpty);
-  });
-
-  test('reassigning a survey with no status set throws', () async {
-    final site = await repo.createSite(name: 'Site C', blocks: const []);
-    // Never assigned at all — status is null.
-
-    await expectLater(
-      () => repo.reassignSurvey(
-        siteId: site.id,
-        newAssigneeUserId: 'eng-priya',
-        newAssignee: 'Priya Sharma',
-        changedByRole: 'Sales',
-      ),
-      throwsStateError,
-    );
+    final updated = await repo.getSiteById(site.id);
+    expect(updated!.assignedToUserId, 'eng-6');
+    expect(await repo.getSurveyAssignmentAuditLog(site.id), hasLength(6));
   });
 
   test('reassignment log is scoped per survey and ordered newest first',

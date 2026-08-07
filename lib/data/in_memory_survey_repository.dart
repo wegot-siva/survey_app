@@ -18,7 +18,6 @@ import '../models/source_point.dart';
 import '../models/survey_assignment_audit_entry.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
-import '../models/survey_status.dart';
 import '../services/block_diff.dart';
 import '../services/id_service.dart';
 import '../services/material_master_audit_builder.dart';
@@ -111,9 +110,19 @@ class InMemorySurveyRepository implements SurveyRepository {
   Future<Site> createSite({
     required String name,
     List<String> blocks = const [],
+    String address = '',
+    String clientName = '',
+    String clientContact = '',
   }) async {
     final id = _idService.newId();
-    _sites[id] = Site(id: id, name: name, blocks: const []);
+    _sites[id] = Site(
+      id: id,
+      name: name,
+      blocks: const [],
+      address: address,
+      clientName: clientName,
+      clientContact: clientContact,
+    );
     _dirtySiteIds.add(id);
     _applyBlockDiff(id, blocks);
     final site = _sites[id]!.copyWith(blocks: _activeBlockLabels(id));
@@ -1447,13 +1456,6 @@ class InMemorySurveyRepository implements SurveyRepository {
     if (site == null) {
       throw StateError('Cannot reassign: site "$siteId" not found.');
     }
-    if (site.status != SurveyStatus.assigned) {
-      throw StateError(
-        'Cannot reassign: survey "$siteId" is not in "assigned" status '
-        '(current: ${site.status ?? 'none'}).',
-      );
-    }
-
     final oldAssignee = site.assignedTo;
     final oldAssigneeUserId = site.assignedToUserId;
     _sites[siteId] = site.copyWith(

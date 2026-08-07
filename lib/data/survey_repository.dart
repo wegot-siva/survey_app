@@ -35,7 +35,20 @@ abstract class SurveyRepository {
   Future<Site?> getSiteById(String id);
 
   /// Creates and persists a new site, returning the stored instance.
-  Future<Site> createSite({required String name, List<String> blocks});
+  /// Creates a site. Only [name] is mandatory — [address], [clientName] and
+  /// [clientContact] are the same Sales-owned metadata
+  /// [EditSiteDetailsScreen] edits, accepted here too so creating a site and
+  /// immediately reopening it to fill them in isn't the normal path. They are
+  /// deliberately NOT the engineer's on-site Client Inputs (note
+  /// `ClientInputs.clientPocName`/`clientPocContact` are a different,
+  /// similarly-named pair owned by a different role).
+  Future<Site> createSite({
+    required String name,
+    List<String> blocks,
+    String address,
+    String clientName,
+    String clientContact,
+  });
 
   Future<void> updateSite(Site site);
 
@@ -687,16 +700,31 @@ abstract class SurveyRepository {
   // SyncService.fetchEngineerRoster, which queries `profiles` directly —
   // there's no local, offline-capable roster table anymore; picking an
   // engineer to assign/reassign to needs a network connection, same
-  // trade-off already accepted for sign-in itself). Reassignment is only
-  // meaningful while a survey is still 'assigned' — enforced here (throws
-  // StateError otherwise), not just hidden in the UI — and each change
-  // writes one audit row recording who it moved from/to, by both real
-  // account id and display-name snapshot.
+  // trade-off already accepted for sign-in itself). Each change writes one
+  // audit row recording who it moved from/to, by both real account id and
+  // display-name snapshot.
+  //
+  // Reassignment is deliberately NOT restricted by survey status. It used to
+  // throw unless the survey was still 'assigned', which read to users as an
+  // arbitrary "you can only reassign 2-3 times" limit: the button simply
+  // vanished the moment the engineer opened the survey (status -> in
+  // progress). Handing a survey over mid-work is a real operational need
+  // (an engineer falls sick, leaves, or is reassigned to another site), so
+  // the rule now lives entirely in the UI's warning, not in a hard block.
+  //
+  // The trade-off this accepts is a genuine one, and the UI warns about it
+  // (see SiteHubScreen._confirmReassignInProgress): work the OUTGOING
+  // engineer has not yet synced can no longer be pushed once the handover
+  // lands, because every survey table's RLS is scoped by can_access_site()
+  // — their push is rejected (42501), the row goes sync_blocked, and the
+  // next pull reconciles it away. Nothing app-side can force another
+  // device to push first, so this is surfaced as an informed choice rather
+  // than prevented.
 
   /// Reassigns [siteId] to [newAssigneeUserId] (a real `profiles.id`, with
   /// [newAssignee] as its display-name snapshot) and writes one audit entry.
-  /// Throws [StateError] if the site doesn't exist or its status isn't
-  /// 'assigned'.
+  /// Allowed in any status. Throws [StateError] only if the site doesn't
+  /// exist.
   Future<void> reassignSurvey({
     required String siteId,
     required String newAssigneeUserId,

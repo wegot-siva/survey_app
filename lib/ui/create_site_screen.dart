@@ -4,9 +4,13 @@ import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
 import 'sync_scope.dart';
+import 'widgets/form_fields.dart';
 
-/// Create a new site: a name only — blocks are added later, during the
-/// survey, via Site Hub's "Blocks" section.
+/// Create a new site: the Sales-owned site metadata (name, address, client
+/// name, client contact — the same set [EditSiteDetailsScreen] edits), of
+/// which only the name is required. Blocks are added later, during the
+/// survey, via Site Hub's "Blocks" section, and the engineer's on-site
+/// Client Inputs are a separate section they fill themselves.
 class CreateSiteScreen extends StatefulWidget {
   const CreateSiteScreen({super.key, required this.repository});
 
@@ -18,11 +22,17 @@ class CreateSiteScreen extends StatefulWidget {
 
 class _CreateSiteScreenState extends State<CreateSiteScreen> {
   final _nameController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _clientNameController = TextEditingController();
+  final _clientContactController = TextEditingController();
   bool _saving = false;
 
   @override
   void dispose() {
     _nameController.dispose();
+    _addressController.dispose();
+    _clientNameController.dispose();
+    _clientContactController.dispose();
     super.dispose();
   }
 
@@ -36,7 +46,12 @@ class _CreateSiteScreenState extends State<CreateSiteScreen> {
     }
 
     setState(() => _saving = true);
-    await widget.repository.createSite(name: name);
+    await widget.repository.createSite(
+      name: name,
+      address: _addressController.text.trim(),
+      clientName: _clientNameController.text.trim(),
+      clientContact: _clientContactController.text.trim(),
+    );
     if (!mounted) return;
     // Sync strictly after the local write and after the pop — see
     // client_inputs_screen.dart's _save for the full reasoning. A newly
@@ -62,6 +77,20 @@ class _CreateSiteScreenState extends State<CreateSiteScreen> {
               labelText: 'Site name',
               border: OutlineInputBorder(),
             ),
+          ),
+          const SizedBox(height: 16),
+          AppTextField(
+            controller: _addressController,
+            label: 'Address (optional)',
+            maxLines: 2,
+          ),
+          AppTextField(
+            controller: _clientNameController,
+            label: 'Client name (optional)',
+          ),
+          AppTextField(
+            controller: _clientContactController,
+            label: 'Client contact (optional)',
           ),
           const SizedBox(height: 24),
           FilledButton.icon(

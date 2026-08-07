@@ -9,6 +9,7 @@ import '../models/survey_status.dart';
 import '../services/sync_service.dart';
 import 'client_inputs_screen.dart';
 import 'sync_scope.dart';
+import 'widgets/form_fields.dart';
 
 /// Sales' "New survey" flow (Roles & Assignment — Slice B). Approver also
 /// uses this screen unmodified, for the same Sales-like create+assign
@@ -35,6 +36,9 @@ class AssignSurveyScreen extends StatefulWidget {
 
 class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
   final _nameController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _clientNameController = TextEditingController();
+  final _clientContactController = TextEditingController();
 
   Site? _createdSite;
   Engineer? _engineer;
@@ -47,6 +51,9 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _addressController.dispose();
+    _clientNameController.dispose();
+    _clientContactController.dispose();
     super.dispose();
   }
 
@@ -85,7 +92,12 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
     }
 
     setState(() => _saving = true);
-    final site = await widget.repository.createSite(name: name);
+    final site = await widget.repository.createSite(
+      name: name,
+      address: _addressController.text.trim(),
+      clientName: _clientNameController.text.trim(),
+      clientContact: _clientContactController.text.trim(),
+    );
     if (!mounted) return;
     setState(() {
       _createdSite = site;
@@ -159,7 +171,8 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
       padding: const EdgeInsets.all(16),
       children: [
         const _Hint(
-          'Step 1 of 2 — create the site, then assign it to an engineer.',
+          'Step 1 of 2 — create the site, then assign it to an engineer. '
+          'Only the site name is required.',
         ),
         const SizedBox(height: 16),
         TextField(
@@ -169,6 +182,20 @@ class _AssignSurveyScreenState extends State<AssignSurveyScreen> {
             labelText: 'Site name',
             border: OutlineInputBorder(),
           ),
+        ),
+        const SizedBox(height: 16),
+        AppTextField(
+          controller: _addressController,
+          label: 'Address (optional)',
+          maxLines: 2,
+        ),
+        AppTextField(
+          controller: _clientNameController,
+          label: 'Client name (optional)',
+        ),
+        AppTextField(
+          controller: _clientContactController,
+          label: 'Client contact (optional)',
         ),
         const SizedBox(height: 24),
         FilledButton.icon(

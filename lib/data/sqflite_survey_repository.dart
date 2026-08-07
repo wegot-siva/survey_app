@@ -20,7 +20,6 @@ import '../models/source_point.dart';
 import '../models/survey_assignment_audit_entry.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
-import '../models/survey_status.dart';
 import '../services/block_diff.dart';
 import '../services/id_service.dart';
 import '../services/material_master_audit_builder.dart';
@@ -78,13 +77,30 @@ class SqfliteSurveyRepository implements SurveyRepository {
   Future<Site> createSite({
     required String name,
     List<String> blocks = const [],
+    String address = '',
+    String clientName = '',
+    String clientContact = '',
   }) async {
     final id = _idService.newId();
     await _db.transaction((txn) async {
-      await txn.insert('sites', {'id': id, 'name': name, 'dirty': 1});
+      await txn.insert('sites', {
+        'id': id,
+        'name': name,
+        'address': address,
+        'client_name': clientName,
+        'client_contact': clientContact,
+        'dirty': 1,
+      });
       await _applyBlockDiff(txn, id, blocks);
     });
-    return Site(id: id, name: name, blocks: List.unmodifiable(blocks));
+    return Site(
+      id: id,
+      name: name,
+      blocks: List.unmodifiable(blocks),
+      address: address,
+      clientName: clientName,
+      clientContact: clientContact,
+    );
   }
 
   @override
@@ -2023,7 +2039,7 @@ class SqfliteSurveyRepository implements SurveyRepository {
   }) async {
     final rows = await _db.query(
       'sites',
-      columns: ['assigned_to', 'assigned_to_user_id', 'status'],
+      columns: ['assigned_to', 'assigned_to_user_id'],
       where: 'id = ?',
       whereArgs: [siteId],
       limit: 1,
@@ -2033,13 +2049,6 @@ class SqfliteSurveyRepository implements SurveyRepository {
     }
     final oldAssignee = rows.first['assigned_to'] as String?;
     final oldAssigneeUserId = rows.first['assigned_to_user_id'] as String?;
-    final status = rows.first['status'] as String?;
-    if (status != SurveyStatus.assigned) {
-      throw StateError(
-        'Cannot reassign: survey "$siteId" is not in "assigned" status '
-        '(current: ${status ?? 'none'}).',
-      );
-    }
 
     await _db.transaction((txn) async {
       await txn.update(

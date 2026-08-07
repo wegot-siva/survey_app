@@ -49,7 +49,10 @@ void main() {
     expect(find.text('Blocks'), findsNothing);
     expect(find.text('Add block'), findsNothing);
 
-    await tester.enterText(find.byType(TextField), 'Test Site');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Site name'),
+      'Test Site',
+    );
     await tester.tap(find.text('Save site'));
     await tester.pumpAndSettle();
 
@@ -57,6 +60,65 @@ void main() {
     expect(sites, hasLength(1));
     expect(sites.first.name, 'Test Site');
     expect(sites.first.blocks, isEmpty);
+
+    syncController.dispose();
+  });
+
+  testWidgets('Address/client name/client contact are saved at creation', (
+    tester,
+  ) async {
+    final repository = InMemorySurveyRepository(IdService());
+    final (widget, syncController) = _wrapped(
+      CreateSiteScreen(repository: repository),
+    );
+    await tester.pumpWidget(widget);
+
+    await tester.enterText(find.widgetWithText(TextField, 'Site name'), 'Acme');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Address (optional)'),
+      '12 Industrial Rd',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Client name (optional)'),
+      'Acme Pvt Ltd',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Client contact (optional)'),
+      '+91 99999 00000',
+    );
+    await tester.tap(find.text('Save site'));
+    await tester.pumpAndSettle();
+
+    final site = (await repository.getSites()).single;
+    expect(site.name, 'Acme');
+    expect(site.address, '12 Industrial Rd');
+    expect(site.clientName, 'Acme Pvt Ltd');
+    expect(site.clientContact, '+91 99999 00000');
+
+    syncController.dispose();
+  });
+
+  testWidgets('Only the site name is mandatory — the rest may be left blank', (
+    tester,
+  ) async {
+    final repository = InMemorySurveyRepository(IdService());
+    final (widget, syncController) = _wrapped(
+      CreateSiteScreen(repository: repository),
+    );
+    await tester.pumpWidget(widget);
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Site name'),
+      'Name Only',
+    );
+    await tester.tap(find.text('Save site'));
+    await tester.pumpAndSettle();
+
+    final site = (await repository.getSites()).single;
+    expect(site.name, 'Name Only');
+    expect(site.address, '');
+    expect(site.clientName, '');
+    expect(site.clientContact, '');
 
     syncController.dispose();
   });

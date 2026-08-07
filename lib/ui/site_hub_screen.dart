@@ -25,12 +25,31 @@ import 'sync_scope.dart';
 import 'theme/app_theme.dart';
 
 /// Completion state for one Site Hub section, shown as the row's trailing
-/// indicator. For sections backed by an open-ended count (source points,
-/// inlet points, duct LoRa, gateways) [partial] means at least one entry
-/// exists but fewer than the site's block count — [complete] once the count
-/// reaches or exceeds it. Binary sections (client inputs, footer, blocks,
-/// BoM) only ever report [empty] or [complete].
-enum _SectionStatus { empty, partial, complete }
+/// indicator: [empty] means nothing has been recorded, [complete] means
+/// something has.
+///
+/// Deliberately two states, matching [evaluateSurveyCompleteness] exactly —
+/// the one rule that decides whether Submit warns about a section. There used
+/// to be a third, `partial`, for the count-backed sections (source points,
+/// inlet points, duct LoRa, gateways): "at least one entry, but fewer than
+/// the site's block count". It was removed because the one-record-per-block
+/// assumption behind it was never a real domain rule and produced states no
+/// engineer could act on:
+///
+///   * Gateways can't reach it. [Gateway.blocksCovered] is a Set — one
+///     gateway deliberately covers many blocks — so a correctly surveyed site
+///     showed amber forever, and the only way to "fix" it was to invent
+///     redundant hardware records.
+///   * Adding a block silently downgraded finished sections, since the target
+///     moved while the section itself hadn't changed.
+///   * It contradicted Submit, which only ever flags sections with nothing at
+///     all in them: an amber section submitted with no warning, so the hub
+///     said "incomplete" while Submit said "fine".
+///
+/// How many records exist is still shown — as the row's subtitle ("3
+/// recorded"), which states the count outright instead of encoding it in a
+/// colour.
+enum _SectionStatus { empty, complete }
 
 /// Actions in Site Hub's "Manage site" overflow menu — see [canReassignRole].
 enum _SiteManageAction { editDetails, delete }
@@ -94,14 +113,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     });
   }
 
-  /// Status for an open-ended count section: complete once [count] reaches
-  /// the number of blocks on the site (or once it's non-zero, if the site
-  /// has no blocks defined yet).
-  _SectionStatus _countStatus(int count, int blockCount) {
-    if (count == 0) return _SectionStatus.empty;
-    final target = blockCount > 0 ? blockCount : 1;
-    return count >= target ? _SectionStatus.complete : _SectionStatus.partial;
-  }
+  /// Status for a count-backed section: anything recorded counts as done.
+  /// Same rule [evaluateSurveyCompleteness] applies, so this indicator and
+  /// the Submit warning can never disagree — see [_SectionStatus].
+  _SectionStatus _countStatus(int count) =>
+      count == 0 ? _SectionStatus.empty : _SectionStatus.complete;
 
   /// Gates the Admin-only "Fill test data" dev/QA shortcut on every survey
   /// section screen — see e.g. [ClientInputsScreen.isAdmin].
@@ -320,12 +336,16 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     );
   }
 
-  /// Sales' "Edit assignee" action — only ever offered while [site] is still
-  /// 'assigned' (gated by the caller), so a reassignment can never happen
-  /// after an engineer has started work. The engineer roster is a live
+  /// Sales' "Edit assignee" action — offered in every status, so a survey can
+  /// be handed over mid-work (see SurveyRepository's reassignment doc for why
+  /// the old 'assigned'-only gate was removed). The engineer roster is a live
   /// Supabase query (real accounts — see SyncService.fetchEngineerRoster),
   /// so loading it can fail (no network); shown as an error dialog rather
   /// than silently offering an empty picker.
+  ///
+  /// Reassigning a survey the engineer has already started carries a real
+  /// risk of losing anything they haven't synced yet, so that case asks for
+  /// confirmation first — see [_confirmReassignInProgress].
   Future<void> _editAssignee(Site site) async {
     final List<Engineer> engineers;
     try {
@@ -347,6 +367,14 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
       ),
     );
     if (newEngineer == null || newEngineer.id == site.assignedToUserId) return;
+
+    // Only 'assigned' means the outgoing engineer definitely has nothing in
+    // progress — every later status means they may have unsynced work that
+    // the handover will strand.
+    if (site.status != null && site.status != SurveyStatus.assigned) {
+      final proceed = await _confirmReassignInProgress(site, newEngineer);
+      if (proceed != true) return;
+    }
 
     try {
       await widget.repository.reassignSurvey(
@@ -374,6 +402,52 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
         SnackBar(content: Text('Could not reassign: $e')),
       );
     }
+  }
+
+  /// Confirms handing over a survey the current engineer has already started.
+  ///
+  /// The warning is specific rather than generic because the risk is real and
+  /// not obvious: every survey table's RLS is scoped by can_access_site(), so
+  /// the moment this lands, anything the outgoing engineer recorded but hasn't
+  /// synced can never be pushed — their writes are rejected and the rows are
+  /// reconciled off their device. Their already-synced work is safe and stays
+  /// on the survey; it does not follow them.
+  Future<bool?> _confirmReassignInProgress(Site site, Engineer newEngineer) {
+    final current = site.assignedTo ?? 'the current engineer';
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hand over a started survey?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$current has already started this survey. '
+              'Everything they have synced stays on the survey and '
+              '${newEngineer.name} will see it.',
+            ),
+            const SizedBox(height: 12),
+            Text(
+              "Anything still only on $current's device — recorded while "
+              'offline and not synced yet — will be lost. Ask them to sync '
+              'before you continue if you are not sure.',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text('Reassign to ${newEngineer.name}'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openAssignmentLog(Site site) async {
@@ -460,7 +534,9 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     final canSubmit =
         site?.status == SurveyStatus.assigned ||
         site?.status == SurveyStatus.inProgress;
-    final canReassign = site?.status == SurveyStatus.assigned;
+    // No status gate: a survey can be handed over at any point in its life
+    // (see _editAssignee). Reassigning a started survey warns first rather
+    // than being blocked.
     // Approve is offered here only for a survey actually awaiting approval —
     // `submitted` is the one status that means that. Admin is included
     // alongside Approver deliberately: Admin already has every other
@@ -481,7 +557,7 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
               onPressed: () => _openAssignmentLog(site),
               icon: const Icon(Icons.history),
             ),
-          if (site != null && canReassignRole && canReassign)
+          if (site != null && canReassignRole)
             IconButton(
               tooltip: 'Edit assignee',
               onPressed: () => _editAssignee(site),
@@ -557,28 +633,28 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
                   icon: Icons.water_drop_outlined,
                   title: 'Source points',
                   subtitle: '$_sourcePointCount recorded',
-                  status: _countStatus(_sourcePointCount, site.blocks.length),
+                  status: _countStatus(_sourcePointCount),
                   onTap: () => _openSourcePoints(site),
                 ),
                 _SectionTile(
                   icon: Icons.input_outlined,
                   title: 'Inlet points',
                   subtitle: '$_inletPointCount recorded',
-                  status: _countStatus(_inletPointCount, site.blocks.length),
+                  status: _countStatus(_inletPointCount),
                   onTap: () => _openInletPoints(site),
                 ),
                 _SectionTile(
                   icon: Icons.router_outlined,
                   title: 'Duct LoRa',
                   subtitle: '$_ductLoraCount recorded',
-                  status: _countStatus(_ductLoraCount, site.blocks.length),
+                  status: _countStatus(_ductLoraCount),
                   onTap: () => _openDuctLoras(site),
                 ),
                 _SectionTile(
                   icon: Icons.cell_tower_outlined,
                   title: 'Gateway',
                   subtitle: '$_gatewayCount recorded',
-                  status: _countStatus(_gatewayCount, site.blocks.length),
+                  status: _countStatus(_gatewayCount),
                   onTap: () => _openGateways(site),
                 ),
                 _SectionTile(
@@ -690,10 +766,6 @@ class _SectionTile extends StatelessWidget {
       _SectionStatus.empty => Icon(
         Icons.radio_button_unchecked,
         color: scheme.outline,
-      ),
-      _SectionStatus.partial => const Icon(
-        Icons.adjust,
-        color: AppStatusColors.partial,
       ),
       _SectionStatus.complete => const Icon(
         Icons.check_circle,
