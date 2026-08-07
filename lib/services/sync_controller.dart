@@ -130,6 +130,7 @@ class SyncController extends ChangeNotifier {
     this._syncService, {
     this.autoDebounce = defaultAutoDebounce,
     this.autoCooldown = defaultAutoCooldown,
+    this.successRevert = defaultSuccessRevert,
   });
 
   final SyncService _syncService;
@@ -149,7 +150,8 @@ class SyncController extends ChangeNotifier {
   /// AppBar's "needs attention" label shows.
   int get blockedCount => _blockedCount;
 
-  /// Reverts [status] to [SyncStatus.idle] 45s after a fully clean success.
+  /// Reverts [status] to [SyncStatus.idle] [successRevert] after a fully
+  /// clean success, restoring the normal Sync button.
   /// Restarted (not stacked) on every new success, so only the most recent
   /// run's timer ever fires. Deliberately NOT applied to [SyncStatus.partial]
   /// or [SyncStatus.failure] — both are standing issues the user may need to
@@ -174,8 +176,16 @@ class SyncController extends ChangeNotifier {
   /// rows. Manual sync always bypasses this.
   static const defaultAutoCooldown = Duration(seconds: 30);
 
+  /// How long a clean success stays on screen before [status] falls back to
+  /// [SyncStatus.idle] and the AppBar shows the normal Sync button again.
+  /// Long enough to be read, short enough not to linger — the confirmation
+  /// has been seen by then, and the persistent green label otherwise reads
+  /// as a state the user has to do something about.
+  static const defaultSuccessRevert = Duration(seconds: 10);
+
   final Duration autoDebounce;
   final Duration autoCooldown;
+  final Duration successRevert;
 
   Timer? _debounceTimer;
 
@@ -329,7 +339,7 @@ class SyncController extends ChangeNotifier {
       _lastSyncedAt = DateTime.now();
       _blockedCount = 0;
       _revertTimer?.cancel();
-      _revertTimer = Timer(const Duration(seconds: 45), () {
+      _revertTimer = Timer(successRevert, () {
         _setStatus(SyncStatus.idle);
       });
     } else if (fullySynced) {

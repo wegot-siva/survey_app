@@ -559,7 +559,7 @@ class _BomPreviewScreenState extends State<BomPreviewScreen> {
                       RadioListTile<_ExportFormat>(
                         contentPadding: EdgeInsets.zero,
                         dense: true,
-                        title: Text('Standard (Lumax)'),
+                        title: Text('Standard'),
                         value: _ExportFormat.lumax,
                       ),
                       RadioListTile<_ExportFormat>(

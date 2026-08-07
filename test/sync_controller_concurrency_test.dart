@@ -341,4 +341,49 @@ void main() {
     expect(await pending, isNull);
     expect(service.pushCalls, 0);
   });
+
+  group('success auto-revert', () {
+    test('production reverts a clean success to idle after 10 seconds', () {
+      expect(SyncController.defaultSuccessRevert, const Duration(seconds: 10));
+    });
+
+    test('a clean success falls back to idle once the window elapses, '
+        'restoring the normal Sync button', () async {
+      final service = _FakeSyncService();
+      // Same approach as the debounce/cooldown windows above: shortened real
+      // duration, since the revert is a plain Timer and this asserts on the
+      // status it leaves behind, not on the exact wall-clock delay.
+      final controller = SyncController(
+        service,
+        autoDebounce: _debounce,
+        autoCooldown: _cooldown,
+        successRevert: const Duration(milliseconds: 120),
+      );
+
+      await controller.requestSync(manual: true);
+      expect(controller.status, SyncStatus.success);
+
+      await _past(const Duration(milliseconds: 120));
+      expect(controller.status, SyncStatus.idle);
+      controller.dispose();
+    });
+
+    test('a FAILED run never auto-reverts — it is a standing issue the user '
+        'still has to act on', () async {
+      final service = _FakeSyncService()..pushSucceeds = false;
+      final controller = SyncController(
+        service,
+        autoDebounce: _debounce,
+        autoCooldown: _cooldown,
+        successRevert: const Duration(milliseconds: 120),
+      );
+
+      await controller.requestSync(manual: true);
+      expect(controller.status, SyncStatus.failure);
+
+      await _past(const Duration(milliseconds: 120));
+      expect(controller.status, SyncStatus.failure);
+      controller.dispose();
+    });
+  });
 }
