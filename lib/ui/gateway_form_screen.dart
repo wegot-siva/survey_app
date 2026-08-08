@@ -177,7 +177,11 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
     final list = <SurveyPhoto>[];
     for (var i = 0; i < _locationPhotos.length; i++) {
       final draft = _locationPhotos[i];
-      if (draft.localPath == null) continue;
+      // A draft with no local file yet (pulled from another device, image
+      // still downloading) MUST still appear here. SurveyRepository.setPhotos
+      // tombstones every existing row absent from this list, so skipping it
+      // would delete the photo remotely and on every other device — for the
+      // sole reason that its bytes hadn't arrived yet.
       list.add(
         SurveyPhoto(
           id: draft.id,
@@ -446,9 +450,11 @@ class _GatewayFormScreenState extends State<GatewayFormScreen> {
           MultiPhotoCaptureField(
             label: 'Gateway location',
             photos: [
+              // Every draft, including any whose image is still downloading —
+              // the callbacks below are index-based, so this list must stay 1:1
+              // with the model list.
               for (final d in _locationPhotos)
-                if (d.localPath != null)
-                  PhotoView(d.localPath!, uploaded: d.uploaded),
+                PhotoView(d.localPath, uploaded: d.uploaded),
             ],
             onAdded: _onLocationAdded,
             onRemoved: _onLocationRemoved,

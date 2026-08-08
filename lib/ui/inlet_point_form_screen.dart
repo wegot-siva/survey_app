@@ -287,7 +287,12 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
       final drafts = entry.value;
       for (var i = 0; i < drafts.length; i++) {
         final draft = drafts[i];
-        if (draft.localPath == null) continue;
+        // A draft with no local file yet (pulled from another device, image
+        // still downloading) MUST still appear here.
+        // SurveyRepository.setPhotos tombstones every existing row absent
+        // from this list, so skipping it would delete the photo remotely and
+        // on every other device — for the sole reason that its bytes hadn't
+        // arrived yet.
         list.add(
           SurveyPhoto(
             id: draft.id,
@@ -311,8 +316,11 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
     return MultiPhotoCaptureField(
       label: label,
       photos: [
+        // Every draft, including any whose image is still downloading —
+        // the callbacks below are index-based, so this list must stay 1:1
+        // with the model list.
         for (final d in drafts)
-          if (d.localPath != null) PhotoView(d.localPath!, uploaded: d.uploaded),
+          PhotoView(d.localPath, uploaded: d.uploaded),
       ],
       onAdded: (p) => _onPhotoAdded(slot, p),
       onRemoved: (i) => _onPhotoRemoved(slot, i),

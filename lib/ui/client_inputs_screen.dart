@@ -204,7 +204,11 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
     final list = <SurveyPhoto>[];
     for (var i = 0; i < _drawingPhotos.length; i++) {
       final draft = _drawingPhotos[i];
-      if (draft.localPath == null) continue;
+      // A draft with no local file yet (pulled from another device, image
+      // still downloading) MUST still appear here. SurveyRepository.setPhotos
+      // tombstones every existing row absent from this list, so skipping it
+      // would delete the photo remotely and on every other device — for the
+      // sole reason that its bytes hadn't arrived yet.
       list.add(
         SurveyPhoto(
           id: draft.id,
@@ -468,9 +472,11 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
                 MultiPhotoCaptureField(
                   label: 'Attach drawings (photo/scan)',
                   photos: [
+                    // Every draft, including any whose image is still
+                    // downloading — the callbacks below are index-based, so
+                    // this list must stay 1:1 with _drawingPhotos.
                     for (final d in _drawingPhotos)
-                      if (d.localPath != null)
-                        PhotoView(d.localPath!, uploaded: d.uploaded),
+                      PhotoView(d.localPath, uploaded: d.uploaded),
                   ],
                   onAdded: _onDrawingAdded,
                   onRemoved: _onDrawingRemoved,

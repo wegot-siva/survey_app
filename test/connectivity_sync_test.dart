@@ -58,6 +58,13 @@ class _FakeSyncService implements SyncService {
   @override
   Future<List<Engineer>> fetchEngineerRoster() async => const [];
 
+  /// Photo files are fetched by the controller after a run completes,
+  /// outside the sync it reports on. Stubbed as a no-op: these tests are
+  /// about the controller's run/status behaviour, and the real download's
+  /// own guarantees are covered by photo_download_deferred_test.dart.
+  @override
+  Future<void> downloadMissingPhotoFilesInBackground() async {}
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

@@ -150,7 +150,11 @@ class _FooterScreenState extends State<FooterScreen> {
     final list = <SurveyPhoto>[];
     for (var i = 0; i < _sitePhotos.length; i++) {
       final draft = _sitePhotos[i];
-      if (draft.localPath == null) continue;
+      // A draft with no local file yet (pulled from another device, image
+      // still downloading) MUST still appear here. SurveyRepository.setPhotos
+      // tombstones every existing row absent from this list, so skipping it
+      // would delete the photo remotely and on every other device — for the
+      // sole reason that its bytes hadn't arrived yet.
       list.add(
         SurveyPhoto(
           id: draft.id,
@@ -386,9 +390,11 @@ class _FooterScreenState extends State<FooterScreen> {
                 MultiPhotoCaptureField(
                   label: 'Site photos / videos',
                   photos: [
+                    // Every draft, including any whose image is still downloading —
+                    // the callbacks below are index-based, so this list must stay 1:1
+                    // with the model list.
                     for (final p in _sitePhotos)
-                      if (p.localPath != null)
-                        PhotoView(p.localPath!, uploaded: p.uploaded),
+                      PhotoView(p.localPath, uploaded: p.uploaded),
                   ],
                   onAdded: _onPhotoAdded,
                   onRemoved: _onPhotoRemoved,

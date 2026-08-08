@@ -328,6 +328,23 @@ class SyncController extends ChangeNotifier {
       'manual=$manual pushOnly=$pushOnly',
     );
 
+    // Photo image files are fetched after the run, never inside it.
+    //
+    // Deliberately not awaited: the sync is genuinely finished at this point
+    // — every row of metadata is stored and pushed — and holding the status
+    // on "syncing" while ~1 MB images trickle in made a 5.6 s pull take
+    // 25.6 s on device. The download is single-flight and swallows its own
+    // errors (see downloadMissingPhotoFilesInBackground), so nothing here
+    // can fail the run that already succeeded, and a run starting while an
+    // earlier download is still going joins it instead of duplicating it.
+    //
+    // Skipped for a push-only run: that path exists for a process about to
+    // be suspended (see requestBackgroundPush), which is the worst possible
+    // moment to start pulling images.
+    if (!pushOnly) {
+      unawaited(_syncService.downloadMissingPhotoFilesInBackground());
+    }
+
     // "Fully synced" is NOT push.success — pushAll() isolates per-row
     // failures and still returns success:true with those rows left dirty
     // (see syncFullySucceeded's doc). Reporting a partial push or a failed

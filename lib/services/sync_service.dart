@@ -1002,15 +1002,14 @@ class SyncService {
           () => plan[i].apply(fetched[i]),
         );
       }
-      // Timed as its own step, and reported separately from the table pulls
-      // above, because it's the one part of this method that transfers files
-      // rather than rows — at ~1 MB and ~1 s per photo it can dominate the
-      // whole run while every table above looks fast.
-      final downloaded = await perf.step(
-        'photoFiles',
-        downloadMissingPhotoFiles,
-      );
-      debugPrint('$_perfTag pullCore/photoFiles downloaded $downloaded');
+      // Photo FILES are deliberately NOT downloaded here — see
+      // [downloadMissingPhotoFilesInBackground], which the sync run starts
+      // once it has finished. Measured on device, downloading them inline
+      // cost 20.0 s for 12 photos (~1 MB and ~1.7 s each) against a 5.6 s
+      // pull: the metadata was long since safe locally while the run was
+      // still held open transferring images. It is also the one cost here
+      // that is bandwidth-bound rather than round-trip-bound, so no amount
+      // of batching or concurrency in this method would have touched it.
       perf.done();
       return const SyncResult(success: true);
     } on PostgrestException catch (e) {
@@ -1058,6 +1057,55 @@ class SyncService {
       throw StateError('Supabase failed to initialize. Check your keys in .env.');
     }
     return _remote.fetchEngineerRoster();
+  }
+
+  /// Tracks an in-progress background photo download so a second request
+  /// joins it rather than starting a duplicate pass over the same rows.
+  Future<void>? _photoDownloadInFlight;
+
+  /// Starts a photo-file download pass that does NOT block the caller, and
+  /// returns a future for it so tests (and a future "downloading N photos"
+  /// indicator) can await completion if they want to.
+  ///
+  /// The sync run kicks this off after it has already reported its outcome —
+  /// photo metadata is fully synced by then, so the user's data is safe and
+  /// the run is honestly complete; only the images are still arriving. That
+  /// is the whole point of the change: on device, downloading 12 photos
+  /// inline added 20.0 s to a 5.6 s pull.
+  ///
+  /// Single-flight, because syncs can overlap in ways this must not: a
+  /// manual tap during the 30 s cooldown, an auto-sync on reconnect, or a
+  /// second run starting while a slow download is still going. Two
+  /// concurrent passes would see the same rows from
+  /// [SurveyRepository.getPhotosMissingLocalFile] (nothing is marked until
+  /// each file lands) and download every image twice.
+  ///
+  /// Never throws: [downloadMissingPhotoFiles] already isolates per-photo
+  /// failures, and anything escaping it is logged here rather than left to
+  /// surface as an unhandled async error in whatever zone happened to start
+  /// the run.
+  Future<void> downloadMissingPhotoFilesInBackground() {
+    final existing = _photoDownloadInFlight;
+    if (existing != null) return existing;
+
+    final run = () async {
+      final sw = Stopwatch()..start();
+      try {
+        final downloaded = await downloadMissingPhotoFiles();
+        if (downloaded > 0) {
+          debugPrint(
+            '$_perfTag photoFiles/background downloaded $downloaded '
+            'in ${sw.elapsedMilliseconds}ms',
+          );
+        }
+      } catch (e) {
+        debugPrint('sync: background photo download failed: $e');
+      }
+    }()
+        .whenComplete(() => _photoDownloadInFlight = null);
+
+    _photoDownloadInFlight = run;
+    return run;
   }
 
   /// Fetches the image bytes for every photo this device has metadata for

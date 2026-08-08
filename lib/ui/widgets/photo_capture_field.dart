@@ -18,10 +18,28 @@ class PhotoDraft {
 }
 
 /// A single captured photo's view state for [MultiPhotoCaptureField].
+///
+/// [localPath] is nullable because a photo's metadata and its image file
+/// arrive separately: a photo pulled from another device exists as a row
+/// well before its bytes finish downloading in the background (see
+/// SyncService.downloadMissingPhotoFilesInBackground). Such a photo renders
+/// as a "downloading" placeholder rather than being hidden.
+///
+/// Hiding it — which is what every caller used to do, via
+/// `if (d.localPath != null)` — was actively unsafe, because the callers'
+/// callbacks are index-based: filtering the displayed list while indexing
+/// the unfiltered one meant removing one photo deleted a different one. It
+/// also meant a form's save list silently omitted the pending photo, and
+/// SurveyRepository.setPhotos tombstones anything absent from the list it's
+/// given — so merely opening and saving a form during the download window
+/// would have deleted the photo from Supabase and every other device.
+/// Keeping the display list 1:1 with the model list is what makes both of
+/// those impossible.
 class PhotoView {
   const PhotoView(this.localPath, {this.uploaded = false});
 
-  final String localPath;
+  /// Where the image file lives, or null while it is still downloading.
+  final String? localPath;
   final bool uploaded;
 }
 
@@ -177,23 +195,31 @@ class _Thumb extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final localPath = photo.localPath;
     return Stack(
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: GestureDetector(
-            onTap: onEdit ?? onView,
-            child: Image.file(
-              File(photo.localPath),
-              height: 96,
-              width: 96,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => SizedBox(
-                height: 96,
-                width: 96,
-                child: _UnavailableThumb(),
-              ),
-            ),
+            // No file yet means nothing to open or mark up. The remove
+            // affordance below stays live: deleting a photo whose image is
+            // still downloading is a perfectly reasonable thing to want, and
+            // is now safe because the displayed list matches the model list
+            // index for index.
+            onTap: localPath == null ? null : (onEdit ?? onView),
+            child: localPath == null
+                ? const _PendingThumb()
+                : Image.file(
+                    File(localPath),
+                    height: 96,
+                    width: 96,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => SizedBox(
+                      height: 96,
+                      width: 96,
+                      child: _UnavailableThumb(),
+                    ),
+                  ),
           ),
         ),
         if (onRemove != null)
@@ -221,7 +247,9 @@ class _Thumb extends StatelessWidget {
             color: Colors.white,
           ),
         ),
-        if (onEdit != null)
+        // Hidden while the image is still downloading — there is no file for
+        // the markup editor to open.
+        if (onEdit != null && localPath != null)
           // The visual badge stays small (unchanged), but its tappable area
           // is padded out to close to Material's 44dp minimum touch target —
           // a precise tap on the tiny icon alone was unreliable. Anchored at
@@ -250,6 +278,36 @@ class _Thumb extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// A photo whose metadata has synced but whose image is still downloading in
+/// the background. Distinct from [_UnavailableThumb], which means the file
+/// was expected to be here and isn't — this one is a normal, transient state
+/// that resolves itself, so it reads as progress rather than as an error.
+class _PendingThumb extends StatelessWidget {
+  const _PendingThumb();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 96,
+      width: 96,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      alignment: Alignment.center,
+      child: const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            height: 18,
+            width: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(height: 6),
+          Text('Downloading', style: TextStyle(fontSize: 10)),
+        ],
+      ),
     );
   }
 }
