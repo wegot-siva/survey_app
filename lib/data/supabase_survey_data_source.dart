@@ -247,39 +247,89 @@ class SupabaseSurveyDataSource {
   /// `.select()` to return everything — PostgREST caps an unbounded request
   /// at a server-configured max-rows (commonly 1000), and the plumbing
   /// catalog import alone is expected to add ~1000 rows on top of what's
-  /// already here. Advances by the actual row count received each page
-  /// (not the nominal page size), so this stays correct even if the server
-  /// enforces a smaller cap than requested; stops only on a genuinely empty
-  /// page, so it can never mistake a capped page for the end of the table.
+  /// already here. See [_fetchAllRows] for how the page count is established
+  /// up front from `count=exact`, and why a short page is never treated as
+  /// the end of the table.
   Future<List<MaterialMasterItem>> fetchMaterialMasterItems() async {
     return (await _fetchAllRows(
       'material_master_items',
     )).map((r) => _materialMasterItemFromRemoteRow(r)).toList();
   }
 
-  /// Fetches every row of [table], paginated the same way
-  /// [fetchMaterialMasterItems] always has — see that method's doc for why
-  /// pagination is explicit rather than trusted to a single `.select()`, and
-  /// why the caller (here, [SurveyRepository]'s `upsertXFromRemote` methods)
-  /// must always receive the complete table, never a partial page, before
-  /// reconciling local deletes against it. Shared by every "Phase 1" pull —
-  /// sites, client_inputs, footers, source_points, inlet_points, duct_loras,
-  /// gateways, bom_manual_entries — returning raw rows rather than a typed
-  /// model, since [SqfliteSurveyRepository]'s pull-reconcile helper only ever
-  /// needs to write these columns straight into the matching local table
-  /// (see its own doc for the one real conversion needed: Postgres booleans
-  /// -> local SQLite 0/1).
-  Future<List<Map<String, dynamic>>> _fetchAllRows(String table) async {
+  /// How many pages of one table may be in flight at once, once a table is
+  /// big enough to need more than one.
+  ///
+  /// Deliberately small, because this multiplies with the caller's own
+  /// concurrency: SyncService fetches up to 6 tables at a time, so the
+  /// worst case here is 6 x 4 = 24 simultaneous requests. Measured against
+  /// this project's Supabase, latency stayed flat up to 24 concurrent reads,
+  /// so that is the ceiling this was sized against rather than a guess.
+  ///
+  /// At present data volumes every table fits in a single page, so this path
+  /// does not execute at all — it exists for the hundreds-of-sites case.
+  static const int _pageConcurrency = 4;
+
+  /// Fetches every row of [table] — see [fetchMaterialMasterItems] for why
+  /// the caller (here, [SurveyRepository]'s `upsertXFromRemote` methods) must
+  /// always receive the complete table, never a partial page, before
+  /// reconciling local deletes against it. Shared by every "Phase 1" pull,
+  /// returning raw rows rather than a typed model, since
+  /// [SqfliteSurveyRepository]'s pull-reconcile helper only ever needs to
+  /// write these columns straight into the matching local table (see its own
+  /// doc for the one real conversion needed: Postgres booleans -> SQLite
+  /// 0/1).
+  ///
+  /// The first request carries `count=exact`, which PostgREST answers with
+  /// the total row count of the whole table — it "respects filters but
+  /// ignores modifiers", so a ranged request still reports the full total,
+  /// not the size of the page it returned. Knowing the total up front is
+  /// what removes the wasted request this used to end on: the old loop could
+  /// only recognise the end of a table by asking for one more page and
+  /// getting nothing back, so EVERY table cost one entirely empty
+  /// round-trip. With 17 tables pulled per sync that was 17 requests
+  /// returning zero rows — measured at ~4.8s of a ~9.6s pull.
+  ///
+  /// Deliberately NOT `page.length < pageSize` as the stop condition, which
+  /// would be the obvious way to drop that request without a count: PostgREST
+  /// caps an unbounded request at a server-configured max-rows, so a short
+  /// page can mean "the server capped you", not "the table ended" — and
+  /// treating a capped page as the end would silently hand the caller a
+  /// partial table, which for sites and blocks (the two pulls that reconcile
+  /// deletes by absence) means deleting every local row that didn't fit in
+  /// page one. For the same reason the page size used to walk the rest of the
+  /// table is the length actually returned, not the length requested.
+  ///
+  /// [orderBy] must be a column that exists on [table] and is unique — the
+  /// pages are separate requests, and without a deterministic sort Postgres
+  /// is free to return rows in a different order each time, which lets a row
+  /// appear on two pages or on neither. Defaults to `id`; the two tables
+  /// keyed on the site instead (client_inputs, footers) have no `id` column
+  /// at all and pass `site_id`.
+  Future<List<Map<String, dynamic>>> _fetchAllRows(
+    String table, {
+    String orderBy = 'id',
+  }) async {
     const pageSize = 500;
-    final all = <Map<String, dynamic>>[];
-    var offset = 0;
-    while (true) {
-      final page = await _client.from(table).select().range(offset, offset + pageSize - 1);
-      if (page.isEmpty) break;
-      all.addAll(page.map((r) => Map<String, dynamic>.from(r)));
-      offset += page.length;
-    }
-    return all;
+
+    final first = await _client
+        .from(table)
+        .select()
+        .order(orderBy, ascending: true)
+        .range(0, pageSize - 1)
+        .count(CountOption.exact);
+
+    return paginateRemainingPages(
+      total: first.count,
+      firstPage: [for (final r in first.data) Map<String, dynamic>.from(r)],
+      pageConcurrency: _pageConcurrency,
+      fetchPage: (offset, limit) async => (await _client
+              .from(table)
+              .select()
+              .order(orderBy, ascending: true)
+              .range(offset, offset + limit - 1))
+          .map((r) => Map<String, dynamic>.from(r))
+          .toList(),
+    );
   }
 
   /// Every site row (id/name/status/assigned_to/assigned_to_user_id/
@@ -319,11 +369,17 @@ class SupabaseSurveyDataSource {
   }
 
   /// Every Client inputs row, keyed by site_id (not its own id).
+  /// Ordered by site_id: client_inputs is keyed on the site (one row per
+  /// site) and has no `id` column, so _fetchAllRows' default sort would be a
+  /// 400 the moment this table ever needed a second page.
   Future<List<Map<String, dynamic>>> fetchClientInputs() =>
-      _fetchAllRows('client_inputs');
+      _fetchAllRows('client_inputs', orderBy: 'site_id');
 
   /// Every Footer row, keyed by site_id (not its own id).
-  Future<List<Map<String, dynamic>>> fetchFooters() => _fetchAllRows('footers');
+  /// Ordered by site_id for the same reason as [fetchClientInputs] — footers
+  /// is keyed on the site and has no `id` column.
+  Future<List<Map<String, dynamic>>> fetchFooters() =>
+      _fetchAllRows('footers', orderBy: 'site_id');
 
   Future<List<Map<String, dynamic>>> fetchSourcePoints() =>
       _fetchAllRows('source_points');
@@ -649,6 +705,64 @@ Map<String, Object?> _footerToRemoteRow(String siteId, Footer f) {
     'survey_date': f.surveyDate?.toIso8601String(),
     'surveyor_name': f.surveyorName,
   };
+}
+
+/// Fetches one page of a table: [limit] rows starting at [offset].
+typedef PageFetcher = Future<List<Map<String, dynamic>>> Function(
+  int offset,
+  int limit,
+);
+
+/// Walks the pages of a table after the first one, given the total row count
+/// the first response reported.
+///
+/// Deliberately separate from [SupabaseSurveyDataSource] and its Supabase
+/// client: the interesting behaviour here is arithmetic with several edge
+/// cases that are easy to get subtly wrong and impossible to observe from
+/// outside — a total that divides exactly by the page size (must NOT cost a
+/// trailing empty request), a server returning fewer rows than asked for,
+/// and an empty table. Welded to the client, none of that could be tested at
+/// all; as a plain function over a [PageFetcher], all of it can.
+///
+/// Returns [firstPage] plus every remaining row, so the caller always
+/// receives the complete table — which is load-bearing, since sites' and
+/// blocks' pulls reconcile deletes by absence and would remove local rows
+/// that merely failed to be fetched.
+Future<List<Map<String, dynamic>>> paginateRemainingPages({
+  required int total,
+  required List<Map<String, dynamic>> firstPage,
+  required PageFetcher fetchPage,
+  int pageConcurrency = 4,
+}) async {
+  final all = [...firstPage];
+
+  // The common case by far, and the whole point of asking for a count: one
+  // request and no empty follow-up. Also covers a genuinely empty table, and
+  // guards the division below against a zero-length page.
+  if (all.isEmpty || all.length >= total) return all;
+
+  // What the server was actually willing to return, which may be less than
+  // was asked for — PostgREST caps at a configured max-rows. Stepping by the
+  // requested size instead would skip every row in the gap.
+  final effectivePageSize = all.length;
+  final offsets = [
+    for (var o = effectivePageSize; o < total; o += effectivePageSize) o,
+  ];
+
+  // Bounded batches rather than one Future.wait over every offset: a table
+  // needing 20 pages must not open 20 connections at once, especially while
+  // the caller is fetching other tables concurrently.
+  for (var i = 0; i < offsets.length; i += pageConcurrency) {
+    final pages = await Future.wait([
+      for (final offset in offsets.skip(i).take(pageConcurrency))
+        fetchPage(offset, effectivePageSize),
+    ]);
+    for (final page in pages) {
+      all.addAll(page);
+    }
+  }
+
+  return all;
 }
 
 Map<String, Object?> _photoToRemoteRow(SurveyPhoto p) {
