@@ -18,6 +18,7 @@ import 'edit_site_details_screen.dart';
 import 'material_master_group_list_screen.dart';
 import 'site_hub_screen.dart';
 import 'sync_scope.dart';
+import 'widgets/refresh_bar.dart';
 import 'theme/app_theme.dart';
 
 /// Entries in the AppBar's overflow menu — Search and Sync stay directly
@@ -53,7 +54,11 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<Site> _sites = const [];
+  /// True only until the very first read completes — after that the
+  /// screen already has content worth keeping on screen, and a reload
+  /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  bool _refreshing = false;
 
   final _searchController = TextEditingController();
 
@@ -137,12 +142,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (!_loading) setState(() => _refreshing = true);
     final sites = await widget.repository.getSites();
     if (!mounted) return;
     setState(() {
       _sites = _visibleSites(sites);
       _loading = false;
+      _refreshing = false;
     });
   }
 
@@ -877,7 +883,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         '${hasInputs ? 'Client inputs saved' : 'No client inputs yet'}',
             ),
             trailing: isSales && isReadyForSales
-                ? const Icon(Icons.check_circle, color: Colors.green)
+                ? const Icon(Icons.check_circle, color: AppStatusColors.complete)
                 : const Icon(Icons.chevron_right),
             // Approver only gets the read-only review screen once a survey
             // is actually submitted; for any earlier status (e.g. one they
@@ -956,7 +962,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return ListTile(
       leading: const Icon(Icons.location_city_outlined),
       title: Text(site.name),
-      subtitle: Text('Status: ${site.status ?? 'Not assigned'}'),
+      subtitle: Text('Status: ${SurveyStatus.label(site.status)}'),
       trailing: const Icon(Icons.chevron_right),
       onTap: () => _openSite(site),
     );
@@ -1051,10 +1057,10 @@ class _HomeScreenState extends State<HomeScreen> {
             ? 'Approved · ready  ·  Assigned to: '
                   '${site.assignedTo ?? 'Unassigned'}'
             : 'Assigned to: ${site.assignedTo ?? 'Unassigned'} '
-                  '· Status: ${site.status ?? 'Not assigned'}',
+                  '· Status: ${SurveyStatus.label(site.status)}',
       ),
       trailing: isReadyForSales
-          ? const Icon(Icons.check_circle, color: Colors.green)
+          ? const Icon(Icons.check_circle, color: AppStatusColors.complete)
           : const Icon(Icons.chevron_right),
       onTap: () => _openSite(site),
       onLongPress: _canManageSites ? () => _showSiteActions(site) : null,
@@ -1077,6 +1083,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        bottom: RefreshBar(active: _refreshing),
         title: _searchOpen
             ? TextField(
                 controller: _searchController,

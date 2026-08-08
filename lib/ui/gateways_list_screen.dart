@@ -4,6 +4,7 @@ import '../data/survey_repository.dart';
 import '../models/gateway.dart';
 import '../models/site.dart';
 import 'gateway_form_screen.dart';
+import 'widgets/refresh_bar.dart';
 
 /// Lists a site's gateways with add / edit / delete.
 class GatewaysListScreen extends StatefulWidget {
@@ -29,7 +30,11 @@ class GatewaysListScreen extends StatefulWidget {
 
 class _GatewaysListScreenState extends State<GatewaysListScreen> {
   List<Gateway> _gateways = const [];
+  /// True only until the very first read completes — after that the
+  /// screen already has content worth keeping on screen, and a reload
+  /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  bool _refreshing = false;
 
   @override
   void initState() {
@@ -38,12 +43,13 @@ class _GatewaysListScreenState extends State<GatewaysListScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (!_loading) setState(() => _refreshing = true);
     final gateways = await widget.repository.getGateways(widget.site.id);
     if (!mounted) return;
     setState(() {
       _gateways = gateways;
       _loading = false;
+      _refreshing = false;
     });
   }
 
@@ -106,7 +112,10 @@ class _GatewaysListScreenState extends State<GatewaysListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Gateways')),
+      appBar: AppBar(
+        title: const Text('Gateways'),
+        bottom: RefreshBar(active: _refreshing),
+      ),
       floatingActionButton: widget.readOnly
           ? null
           : FloatingActionButton.extended(
@@ -127,6 +136,9 @@ class _GatewaysListScreenState extends State<GatewaysListScreen> {
               ),
             )
           : ListView.separated(
+              // Clears the extended FAB, which would otherwise sit on top of
+              // the last row and block its overflow menu.
+              padding: const EdgeInsets.only(bottom: 88),
               itemCount: _gateways.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (context, i) {

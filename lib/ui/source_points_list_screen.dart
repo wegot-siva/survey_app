@@ -5,6 +5,7 @@ import '../data/survey_repository.dart';
 import '../models/site.dart';
 import '../models/source_point.dart';
 import 'source_point_form_screen.dart';
+import 'widgets/refresh_bar.dart';
 
 /// Lists a site's source points with add / edit / delete.
 class SourcePointsListScreen extends StatefulWidget {
@@ -30,7 +31,11 @@ class SourcePointsListScreen extends StatefulWidget {
 
 class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
   List<SourcePoint> _points = const [];
+  /// True only until the very first read completes — after that the
+  /// screen already has content worth keeping on screen, and a reload
+  /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  bool _refreshing = false;
 
   @override
   void initState() {
@@ -39,12 +44,13 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (!_loading) setState(() => _refreshing = true);
     final points = await widget.repository.getSourcePoints(widget.site.id);
     if (!mounted) return;
     setState(() {
       _points = points;
       _loading = false;
+      _refreshing = false;
     });
   }
 
@@ -136,7 +142,10 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Source points')),
+      appBar: AppBar(
+        title: const Text('Source points'),
+        bottom: RefreshBar(active: _refreshing),
+      ),
       floatingActionButton: widget.readOnly
           ? null
           : FloatingActionButton.extended(
@@ -157,6 +166,9 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
               ),
             )
           : ListView.separated(
+              // Clears the extended FAB, which would otherwise sit on top of
+              // the last row and block its overflow menu.
+              padding: const EdgeInsets.only(bottom: 88),
               itemCount: _points.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (context, i) {

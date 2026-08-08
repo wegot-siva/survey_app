@@ -4,6 +4,7 @@ import '../data/survey_repository.dart';
 import '../models/duct_lora.dart';
 import '../models/site.dart';
 import 'duct_lora_form_screen.dart';
+import 'widgets/refresh_bar.dart';
 
 /// Lists a site's Duct LoRa units with add / edit / delete.
 class DuctLorasListScreen extends StatefulWidget {
@@ -30,7 +31,11 @@ class DuctLorasListScreen extends StatefulWidget {
 class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
   List<DuctLora> _units = const [];
   List<String> _availableSeries = const [];
+  /// True only until the very first read completes — after that the
+  /// screen already has content worth keeping on screen, and a reload
+  /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  bool _refreshing = false;
 
   @override
   void initState() {
@@ -39,7 +44,7 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (!_loading) setState(() => _refreshing = true);
     final units = await widget.repository.getDuctLoras(widget.site.id);
     // Series options come from the Series values used on the site's inlets.
     final inlets = await widget.repository.getInletPoints(widget.site.id);
@@ -55,6 +60,7 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
       _units = units;
       _availableSeries = series;
       _loading = false;
+      _refreshing = false;
     });
   }
 
@@ -116,7 +122,10 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Duct LoRa')),
+      appBar: AppBar(
+        title: const Text('Duct LoRa'),
+        bottom: RefreshBar(active: _refreshing),
+      ),
       floatingActionButton: widget.readOnly
           ? null
           : FloatingActionButton.extended(
@@ -137,6 +146,9 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
               ),
             )
           : ListView.separated(
+              // Clears the extended FAB, which would otherwise sit on top of
+              // the last row and block its overflow menu.
+              padding: const EdgeInsets.only(bottom: 88),
               itemCount: _units.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (context, i) {

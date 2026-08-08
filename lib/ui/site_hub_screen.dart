@@ -22,6 +22,7 @@ import 'manage_blocks_screen.dart';
 import 'source_points_list_screen.dart';
 import 'survey_assignment_audit_log_screen.dart';
 import 'sync_scope.dart';
+import 'widgets/refresh_bar.dart';
 import 'theme/app_theme.dart';
 
 /// Completion state for one Site Hub section, shown as the row's trailing
@@ -83,7 +84,11 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   int _gatewayCount = 0;
   bool _footerFilled = false;
   bool _bomGenerated = false;
+  /// True only until the very first read completes — after that the
+  /// screen already has content worth keeping on screen, and a reload
+  /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  bool _refreshing = false;
 
   @override
   void initState() {
@@ -92,7 +97,7 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (!_loading) setState(() => _refreshing = true);
     final site = await widget.repository.getSiteById(widget.siteId);
     final sourcePoints = await widget.repository.getSourcePoints(widget.siteId);
     final inletPoints = await widget.repository.getInletPoints(widget.siteId);
@@ -110,6 +115,7 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
       _footerFilled = footer != null;
       _bomGenerated = bomSnapshot != null;
       _loading = false;
+      _refreshing = false;
     });
   }
 
@@ -550,6 +556,7 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(site?.name ?? 'Site'),
+        bottom: RefreshBar(active: _refreshing),
         actions: [
           if (site != null && canReassignRole)
             IconButton(

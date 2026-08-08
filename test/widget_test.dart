@@ -226,7 +226,11 @@ void main() {
 
     expect(find.text('Mine'), findsOneWidget);
     expect(find.text('Not mine'), findsNothing);
-    expect(find.text('Status: assigned'), findsOneWidget);
+    // The human label, not the raw `sites.status` value the DB stores —
+    // this row used to render "Status: assigned" (and "in_progress" once
+    // work started) while every other screen showed the friendly form.
+    expect(find.text('Status: Assigned'), findsOneWidget);
+    expect(find.text('Status: assigned'), findsNothing);
   });
 
   testWidgets('boots to the login screen when logged out', (tester) async {

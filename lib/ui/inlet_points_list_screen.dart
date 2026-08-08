@@ -5,6 +5,7 @@ import '../data/survey_repository.dart';
 import '../models/inlet_point.dart';
 import '../models/site.dart';
 import 'inlet_point_form_screen.dart';
+import 'widgets/refresh_bar.dart';
 
 /// Lists a site's inlet points with add / edit / delete.
 class InletPointsListScreen extends StatefulWidget {
@@ -30,7 +31,11 @@ class InletPointsListScreen extends StatefulWidget {
 
 class _InletPointsListScreenState extends State<InletPointsListScreen> {
   List<InletPoint> _points = const [];
+  /// True only until the very first read completes — after that the
+  /// screen already has content worth keeping on screen, and a reload
+  /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  bool _refreshing = false;
 
   @override
   void initState() {
@@ -39,12 +44,13 @@ class _InletPointsListScreenState extends State<InletPointsListScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (!_loading) setState(() => _refreshing = true);
     final points = await widget.repository.getInletPoints(widget.site.id);
     if (!mounted) return;
     setState(() {
       _points = points;
       _loading = false;
+      _refreshing = false;
     });
   }
 
@@ -137,7 +143,10 @@ class _InletPointsListScreenState extends State<InletPointsListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Inlet points')),
+      appBar: AppBar(
+        title: const Text('Inlet points'),
+        bottom: RefreshBar(active: _refreshing),
+      ),
       floatingActionButton: widget.readOnly
           ? null
           : FloatingActionButton.extended(
@@ -158,6 +167,9 @@ class _InletPointsListScreenState extends State<InletPointsListScreen> {
               ),
             )
           : ListView.separated(
+              // Clears the extended FAB, which would otherwise sit on top of
+              // the last row and block its overflow menu.
+              padding: const EdgeInsets.only(bottom: 88),
               itemCount: _points.length,
               separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (context, i) {

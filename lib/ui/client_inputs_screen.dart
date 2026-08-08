@@ -10,6 +10,7 @@ import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 import 'photo_markup_screen.dart';
 import 'sync_scope.dart';
+import 'widgets/form_error_focus.dart';
 import 'widgets/photo_capture_field.dart';
 
 /// The per-site "Client inputs" form. All fields are optional — partial
@@ -37,6 +38,10 @@ class ClientInputsScreen extends StatefulWidget {
 }
 
 class _ClientInputsScreenState extends State<ClientInputsScreen> {
+  /// Root of the scrollable form body — [FormErrorFocus] searches
+  /// under this for the first field left in error by a failed save.
+  final _formRoot = GlobalKey();
+
   // Text controllers
   late final TextEditingController _siteName;
   late final TextEditingController _pocName;
@@ -323,6 +328,10 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in the required fields.')),
       );
+      // The offending field is usually well off-screen from the Save button
+      // on these forms — take the user to it instead of leaving them to
+      // hunt for the red text.
+      FormErrorFocus.revealFirst(_formRoot);
       return;
     }
 
@@ -386,179 +395,183 @@ class _ClientInputsScreenState extends State<ClientInputsScreen> {
             ),
         ],
       ),
-      body: ListView(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        children: [
-          const _Hint(
-            'Fields marked * are required — everything else is optional.',
-          ),
-          const SizedBox(height: 16),
+        child: Column(
+          key: _formRoot,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _Hint(
+              'Fields marked * are required — everything else is optional.',
+            ),
+            const SizedBox(height: 16),
 
-          IgnorePointer(
-            ignoring: _viewOnly,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _text(_siteName, 'Site name *', errorText: _siteNameError),
-                _dropdown<InformationSource>(
-                  label: 'Information source *',
-                  value: _informationSource,
-                  items: InformationSource.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _informationSource = v),
-                  errorText: _informationSourceError,
-                ),
-                _text(
-                  _pocName,
-                  'Client POC name *',
-                  errorText: _pocNameError,
-                ),
-                _text(
-                  _pocContact,
-                  'Client POC phone/email *',
-                  errorText: _pocContactError,
-                ),
-                _text(
-                  _goal,
-                  'Goal of installation *',
-                  maxLines: 2,
-                  errorText: _goalError,
-                ),
+            IgnorePointer(
+              ignoring: _viewOnly,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _text(_siteName, 'Site name *', errorText: _siteNameError),
+                  _dropdown<InformationSource>(
+                    label: 'Information source *',
+                    value: _informationSource,
+                    items: InformationSource.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _informationSource = v),
+                    errorText: _informationSourceError,
+                  ),
+                  _text(
+                    _pocName,
+                    'Client POC name *',
+                    errorText: _pocNameError,
+                  ),
+                  _text(
+                    _pocContact,
+                    'Client POC phone/email *',
+                    errorText: _pocContactError,
+                  ),
+                  _text(
+                    _goal,
+                    'Goal of installation *',
+                    maxLines: 2,
+                    errorText: _goalError,
+                  ),
 
-                _Label('Water sources present *'),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final source in WaterSource.values)
-                      FilterChip(
-                        label: Text(source.label),
-                        selected: _waterSources.contains(source),
-                        onSelected: (sel) => setState(() {
-                          if (sel) {
-                            _waterSources.add(source);
-                          } else {
-                            _waterSources.remove(source);
-                          }
-                        }),
+                  _Label('Water sources present *'),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final source in WaterSource.values)
+                        FilterChip(
+                          label: Text(source.label),
+                          selected: _waterSources.contains(source),
+                          onSelected: (sel) => setState(() {
+                            if (sel) {
+                              _waterSources.add(source);
+                            } else {
+                              _waterSources.remove(source);
+                            }
+                          }),
+                        ),
+                    ],
+                  ),
+                  if (_waterSourcesError != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      _waterSourcesError!,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.error,
                       ),
-                  ],
-                ),
-                if (_waterSourcesError != null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    _waterSourcesError!,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.error,
                     ),
-                  ),
-                ],
-                const SizedBox(height: 16),
-
-                _dropdown<OhtHns>(
-                  label: 'OHT / HNS *',
-                  value: _ohtHns,
-                  items: OhtHns.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _ohtHns = v),
-                  errorText: _ohtHnsError,
-                ),
-
-                _yesNo(
-                  'Finalised plumbing drawings *',
-                  _finalisedDrawings,
-                  (v) => setState(() => _finalisedDrawings = v),
-                  errorText: _finalisedDrawingsError,
-                ),
-                MultiPhotoCaptureField(
-                  label: 'Attach drawings (photo/scan)',
-                  photos: [
-                    // Every draft, including any whose image is still
-                    // downloading — the callbacks below are index-based, so
-                    // this list must stay 1:1 with _drawingPhotos.
-                    for (final d in _drawingPhotos)
-                      PhotoView(d.localPath, uploaded: d.uploaded),
                   ],
-                  onAdded: _onDrawingAdded,
-                  onRemoved: _onDrawingRemoved,
-                  onEdit: _onDrawingEdit,
-                  onView: _onDrawingView,
-                  readOnly: _viewOnly,
-                ),
+                  const SizedBox(height: 16),
 
-                _text(
-                  _pointsIdentified,
-                  'No. of points identified by client *',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  errorText: _pointsIdentifiedError,
-                ),
-                _text(
-                  _pressure,
-                  'Max & continuous pressure at all points *',
-                  errorText: _pressureError,
-                ),
-
-                _yesNo(
-                  'Pressure boosters in system *',
-                  _pressureBoosters,
-                  (v) => setState(() => _pressureBoosters = v),
-                  errorText: _pressureBoostersError,
-                ),
-
-                _text(_materials, 'Materials & brand guidelines', maxLines: 2),
-
-                _yesNo(
-                  'Rework requirements *',
-                  _reworkRequired,
-                  (v) => setState(() => _reworkRequired = v),
-                  errorText: _reworkRequiredError,
-                ),
-                if (_reworkRequired == true)
-                  _text(
-                    _reworkDetails,
-                    'Rework details *',
-                    maxLines: 2,
-                    errorText: _reworkDetailsError,
+                  _dropdown<OhtHns>(
+                    label: 'OHT / HNS *',
+                    value: _ohtHns,
+                    items: OhtHns.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _ohtHns = v),
+                    errorText: _ohtHnsError,
                   ),
 
-                _text(
-                  _ageOfLines,
-                  'Age of plumbing lines *',
-                  errorText: _ageOfLinesError,
-                ),
-
-                _yesNo(
-                  'Aesthetic guidelines *',
-                  _aestheticGuidelines,
-                  (v) => setState(() => _aestheticGuidelines = v),
-                  errorText: _aestheticGuidelinesError,
-                ),
-                if (_aestheticGuidelines == true)
-                  _text(
-                    _aestheticDetails,
-                    'Aesthetic details *',
-                    maxLines: 2,
-                    errorText: _aestheticDetailsError,
+                  _yesNo(
+                    'Finalised plumbing drawings *',
+                    _finalisedDrawings,
+                    (v) => setState(() => _finalisedDrawings = v),
+                    errorText: _finalisedDrawingsError,
                   ),
-              ],
-            ),
-          ),
+                  MultiPhotoCaptureField(
+                    label: 'Attach drawings (photo/scan)',
+                    photos: [
+                      // Every draft, including any whose image is still
+                      // downloading — the callbacks below are index-based, so
+                      // this list must stay 1:1 with _drawingPhotos.
+                      for (final d in _drawingPhotos)
+                        PhotoView(d.localPath, uploaded: d.uploaded),
+                    ],
+                    onAdded: _onDrawingAdded,
+                    onRemoved: _onDrawingRemoved,
+                    onEdit: _onDrawingEdit,
+                    onView: _onDrawingView,
+                    readOnly: _viewOnly,
+                  ),
 
-          if (!_viewOnly) ...[
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              icon: _saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.save_outlined),
-              label: const Text('Save client inputs'),
+                  _text(
+                    _pointsIdentified,
+                    'No. of points identified by client *',
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    errorText: _pointsIdentifiedError,
+                  ),
+                  _text(
+                    _pressure,
+                    'Max & continuous pressure at all points *',
+                    errorText: _pressureError,
+                  ),
+
+                  _yesNo(
+                    'Pressure boosters in system *',
+                    _pressureBoosters,
+                    (v) => setState(() => _pressureBoosters = v),
+                    errorText: _pressureBoostersError,
+                  ),
+
+                  _text(_materials, 'Materials & brand guidelines', maxLines: 2),
+
+                  _yesNo(
+                    'Rework requirements *',
+                    _reworkRequired,
+                    (v) => setState(() => _reworkRequired = v),
+                    errorText: _reworkRequiredError,
+                  ),
+                  if (_reworkRequired == true)
+                    _text(
+                      _reworkDetails,
+                      'Rework details *',
+                      maxLines: 2,
+                      errorText: _reworkDetailsError,
+                    ),
+
+                  _text(
+                    _ageOfLines,
+                    'Age of plumbing lines *',
+                    errorText: _ageOfLinesError,
+                  ),
+
+                  _yesNo(
+                    'Aesthetic guidelines *',
+                    _aestheticGuidelines,
+                    (v) => setState(() => _aestheticGuidelines = v),
+                    errorText: _aestheticGuidelinesError,
+                  ),
+                  if (_aestheticGuidelines == true)
+                    _text(
+                      _aestheticDetails,
+                      'Aesthetic details *',
+                      maxLines: 2,
+                      errorText: _aestheticDetailsError,
+                    ),
+                ],
+              ),
             ),
+
+            if (!_viewOnly) ...[
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_outlined),
+                label: const Text('Save client inputs'),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

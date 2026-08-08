@@ -11,6 +11,7 @@ import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 import 'photo_markup_screen.dart';
 import 'sync_scope.dart';
+import 'widgets/form_error_focus.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
@@ -50,6 +51,10 @@ class SourcePointFormScreen extends StatefulWidget {
 }
 
 class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
+  /// Root of the scrollable form body — [FormErrorFocus] searches
+  /// under this for the first field left in error by a failed save.
+  final _formRoot = GlobalKey();
+
   late final TextEditingController _apartment;
   final _apartmentFocusNode = FocusNode();
   late final TextEditingController _inletDescription;
@@ -504,6 +509,10 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in the required fields.')),
       );
+      // The offending field is usually well off-screen from the Save button
+      // on these forms — take the user to it instead of leaving them to
+      // hunt for the red text.
+      FormErrorFocus.revealFirst(_formRoot);
       return;
     }
 
@@ -597,259 +606,263 @@ class _SourcePointFormScreenState extends State<SourcePointFormScreen> {
             ),
         ],
       ),
-      body: ListView(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        children: [
-          IgnorePointer(
-            ignoring: _viewOnly,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                AppDropdownField<String>(
-                  label: 'Block *',
-                  value: _block,
-                  items: widget.site.blocks,
-                  itemLabel: (b) => b,
-                  emptyHint:
-                      'No blocks on this site — add them via the site first.',
-                  onChanged: (v) => setState(() => _block = v),
-                  errorText: _blockError,
-                ),
-                AppTextField(
-                  controller: _apartment,
-                  focusNode: _apartmentFocusNode,
-                  label: 'Apartment *',
-                  errorText: _apartmentError,
-                ),
-                AppTextField(
-                  controller: _inletDescription,
-                  label: 'Inlet description',
-                  maxLines: 2,
-                ),
-
-                _loadingMaterials
-                    ? const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                        child: Center(child: CircularProgressIndicator()),
-                      )
-                    : AppDropdownField<MaterialMasterItem>(
-                        label: 'Sensor (Group A material) *',
-                        value: _selectedMaterial,
-                        items: _groupAMaterials,
-                        itemLabel: (m) => m.materialName,
-                        emptyHint:
-                            'No Group A materials yet — add one in Material '
-                            'Master first.',
-                        onChanged: _onMaterialChanged,
-                        errorText: _materialError,
-                      ),
-                AppDropdownField<SensorOd>(
-                  label: 'Sensor OD *',
-                  value: _sensorOd,
-                  items: SensorOd.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _sensorOd = v),
-                  errorText: _sensorOdError,
-                ),
-                AppDropdownField<PipeSize>(
-                  label: 'Pipe size *',
-                  value: _pipeSize,
-                  items: PipeSize.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _pipeSize = v),
-                  errorText: _pipeSizeError,
-                ),
-                AppDropdownField<PipeType>(
-                  label: 'Pipe type *',
-                  value: _pipeType,
-                  items: PipeType.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _pipeType = v),
-                  errorText: _pipeTypeError,
-                ),
-                AppTextField(
-                  controller: _qty,
-                  label: 'Qty *',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  errorText: _qtyError,
-                ),
-                YesNoField(
-                  label: 'Rework *',
-                  value: _rework,
-                  onChanged: (v) => setState(() => _rework = v),
-                  errorText: _reworkError,
-                ),
-                if (_rework == true)
+        child: Column(
+          key: _formRoot,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            IgnorePointer(
+              ignoring: _viewOnly,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AppDropdownField<String>(
+                    label: 'Block *',
+                    value: _block,
+                    items: widget.site.blocks,
+                    itemLabel: (b) => b,
+                    emptyHint:
+                        'No blocks on this site — add them via the site first.',
+                    onChanged: (v) => setState(() => _block = v),
+                    errorText: _blockError,
+                  ),
                   AppTextField(
-                    controller: _reworkDetails,
-                    label: 'Rework details *',
-                    maxLines: 2,
-                    errorText: _reworkDetailsError,
+                    controller: _apartment,
+                    focusNode: _apartmentFocusNode,
+                    label: 'Apartment *',
+                    errorText: _apartmentError,
                   ),
-
-                AppDropdownField<FlowDirection>(
-                  label: 'Flow direction *',
-                  value: _flowDirection,
-                  items: FlowDirection.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _flowDirection = v),
-                  errorText: _flowDirectionError,
-                ),
-
-                YesNoField(
-                  label: '10X clearance *',
-                  value: _clearance10x,
-                  onChanged: (v) => setState(() => _clearance10x = v),
-                  errorText: _clearance10xError,
-                ),
-                YesNoField(
-                  label: 'Pipe full *',
-                  value: _pipeFull,
-                  onChanged: (v) => setState(() => _pipeFull = v),
-                  errorText: _pipeFullError,
-                ),
-                YesNoField(
-                  label: 'Valve downstream *',
-                  value: _valveDownstream,
-                  onChanged: (v) => setState(() => _valveDownstream = v),
-                  errorText: _valveDownstreamError,
-                ),
-
-                YesNoField(
-                  label: 'Reducer spec *',
-                  value: _reducerSpec,
-                  onChanged: (v) => setState(() => _reducerSpec = v),
-                  errorText: _reducerSpecError,
-                ),
-                if (_reducerSpec == true)
                   AppTextField(
-                    controller: _reducerSpecDetails,
-                    label: 'Reducer spec details *',
+                    controller: _inletDescription,
+                    label: 'Inlet description',
                     maxLines: 2,
-                    errorText: _reducerSpecDetailsError,
                   ),
 
-                YesNoField(
-                  label: 'Downstream outlet above pipe (FIG1) *',
-                  labelTrailing: const ReferenceLink(
-                    asset: 'assets/figures/FIG1_pipe_full_outlet_above.png',
-                    title: 'FIG1',
+                  _loadingMaterials
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          child: Center(child: CircularProgressIndicator()),
+                        )
+                      : AppDropdownField<MaterialMasterItem>(
+                          label: 'Sensor (Group A material) *',
+                          value: _selectedMaterial,
+                          items: _groupAMaterials,
+                          itemLabel: (m) => m.materialName,
+                          emptyHint:
+                              'No Group A materials yet — add one in Material '
+                              'Master first.',
+                          onChanged: _onMaterialChanged,
+                          errorText: _materialError,
+                        ),
+                  AppDropdownField<SensorOd>(
+                    label: 'Sensor OD *',
+                    value: _sensorOd,
+                    items: SensorOd.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _sensorOd = v),
+                    errorText: _sensorOdError,
                   ),
-                  value: _downstreamOutletAbovePipeFig1,
-                  onChanged: (v) =>
-                      setState(() => _downstreamOutletAbovePipeFig1 = v),
-                  errorText: _downstreamOutletAbovePipeFig1Error,
-                ),
-                YesNoField(
-                  label: 'Air vent needed (FIG2) *',
-                  labelTrailing: const ReferenceLink(
-                    asset: 'assets/figures/FIG2_air_vent.png',
-                    title: 'FIG2',
+                  AppDropdownField<PipeSize>(
+                    label: 'Pipe size *',
+                    value: _pipeSize,
+                    items: PipeSize.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _pipeSize = v),
+                    errorText: _pipeSizeError,
                   ),
-                  value: _airVentNeededFig2,
-                  onChanged: (v) => setState(() => _airVentNeededFig2 = v),
-                  errorText: _airVentNeededFig2Error,
-                ),
-                YesNoField(
-                  label: 'Reverse flow *',
-                  value: _reverseFlow,
-                  onChanged: (v) => setState(() => _reverseFlow = v),
-                  errorText: _reverseFlowError,
-                ),
-                YesNoField(
-                  label: 'Distance from motor/pump (FIG3) *',
-                  labelTrailing: const ReferenceLink(
-                    asset:
-                        'assets/figures/FIG3_distance_motor_reducer_valve.png',
-                    title: 'FIG3',
+                  AppDropdownField<PipeType>(
+                    label: 'Pipe type *',
+                    value: _pipeType,
+                    items: PipeType.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _pipeType = v),
+                    errorText: _pipeTypeError,
                   ),
-                  value: _distanceFromMotorPumpFig3,
-                  onChanged: (v) =>
-                      setState(() => _distanceFromMotorPumpFig3 = v),
-                  errorText: _distanceFromMotorPumpFig3Error,
-                ),
-                YesNoField(
-                  label: 'No flexible pipe within 20X *',
-                  value: _noFlexiblePipeWithin20x,
-                  onChanged: (v) =>
-                      setState(() => _noFlexiblePipeWithin20x = v),
-                  errorText: _noFlexiblePipeWithin20xError,
-                ),
-
-                AppTextField(
-                  controller: _pressure,
-                  label: 'Max & continuous pressure (bar) *',
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                  ],
-                  errorText: _pressureError,
-                ),
-
-                YesNoField(
-                  label: 'Strainer / screen filter *',
-                  value: _strainerScreenFilter,
-                  onChanged: (v) => setState(() => _strainerScreenFilter = v),
-                  errorText: _strainerScreenFilterError,
-                ),
-                YesNoField(
-                  label: 'Chamber installation *',
-                  value: _chamberInstallation,
-                  onChanged: (v) => setState(() => _chamberInstallation = v),
-                  errorText: _chamberInstallationError,
-                ),
-
-                if (isWireless) ...[
-                  const FormSectionLabel('Wireless'),
-                  YesNoField(
-                    label: 'Antenna required *',
-                    value: _antennaRequired,
-                    onChanged: (v) => setState(() => _antennaRequired = v),
-                    errorText: _antennaRequiredError,
+                  AppTextField(
+                    controller: _qty,
+                    label: 'Qty *',
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    errorText: _qtyError,
                   ),
                   YesNoField(
-                    label: 'Transmitting part open to air *',
-                    value: _transmittingPartOpenToAir,
+                    label: 'Rework *',
+                    value: _rework,
+                    onChanged: (v) => setState(() => _rework = v),
+                    errorText: _reworkError,
+                  ),
+                  if (_rework == true)
+                    AppTextField(
+                      controller: _reworkDetails,
+                      label: 'Rework details *',
+                      maxLines: 2,
+                      errorText: _reworkDetailsError,
+                    ),
+
+                  AppDropdownField<FlowDirection>(
+                    label: 'Flow direction *',
+                    value: _flowDirection,
+                    items: FlowDirection.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _flowDirection = v),
+                    errorText: _flowDirectionError,
+                  ),
+
+                  YesNoField(
+                    label: '10X clearance *',
+                    value: _clearance10x,
+                    onChanged: (v) => setState(() => _clearance10x = v),
+                    errorText: _clearance10xError,
+                  ),
+                  YesNoField(
+                    label: 'Pipe full *',
+                    value: _pipeFull,
+                    onChanged: (v) => setState(() => _pipeFull = v),
+                    errorText: _pipeFullError,
+                  ),
+                  YesNoField(
+                    label: 'Valve downstream *',
+                    value: _valveDownstream,
+                    onChanged: (v) => setState(() => _valveDownstream = v),
+                    errorText: _valveDownstreamError,
+                  ),
+
+                  YesNoField(
+                    label: 'Reducer spec *',
+                    value: _reducerSpec,
+                    onChanged: (v) => setState(() => _reducerSpec = v),
+                    errorText: _reducerSpecError,
+                  ),
+                  if (_reducerSpec == true)
+                    AppTextField(
+                      controller: _reducerSpecDetails,
+                      label: 'Reducer spec details *',
+                      maxLines: 2,
+                      errorText: _reducerSpecDetailsError,
+                    ),
+
+                  YesNoField(
+                    label: 'Downstream outlet above pipe (FIG1) *',
+                    labelTrailing: const ReferenceLink(
+                      asset: 'assets/figures/FIG1_pipe_full_outlet_above.png',
+                      title: 'FIG1',
+                    ),
+                    value: _downstreamOutletAbovePipeFig1,
                     onChanged: (v) =>
-                        setState(() => _transmittingPartOpenToAir = v),
-                    errorText: _transmittingPartOpenToAirError,
+                        setState(() => _downstreamOutletAbovePipeFig1 = v),
+                    errorText: _downstreamOutletAbovePipeFig1Error,
                   ),
                   YesNoField(
-                    label: 'NRV feasibility *',
-                    value: _nrvFeasibility,
-                    onChanged: (v) => setState(() => _nrvFeasibility = v),
-                    errorText: _nrvFeasibilityError,
+                    label: 'Air vent needed (FIG2) *',
+                    labelTrailing: const ReferenceLink(
+                      asset: 'assets/figures/FIG2_air_vent.png',
+                      title: 'FIG2',
+                    ),
+                    value: _airVentNeededFig2,
+                    onChanged: (v) => setState(() => _airVentNeededFig2 = v),
+                    errorText: _airVentNeededFig2Error,
                   ),
+                  YesNoField(
+                    label: 'Reverse flow *',
+                    value: _reverseFlow,
+                    onChanged: (v) => setState(() => _reverseFlow = v),
+                    errorText: _reverseFlowError,
+                  ),
+                  YesNoField(
+                    label: 'Distance from motor/pump (FIG3) *',
+                    labelTrailing: const ReferenceLink(
+                      asset:
+                          'assets/figures/FIG3_distance_motor_reducer_valve.png',
+                      title: 'FIG3',
+                    ),
+                    value: _distanceFromMotorPumpFig3,
+                    onChanged: (v) =>
+                        setState(() => _distanceFromMotorPumpFig3 = v),
+                    errorText: _distanceFromMotorPumpFig3Error,
+                  ),
+                  YesNoField(
+                    label: 'No flexible pipe within 20X *',
+                    value: _noFlexiblePipeWithin20x,
+                    onChanged: (v) =>
+                        setState(() => _noFlexiblePipeWithin20x = v),
+                    errorText: _noFlexiblePipeWithin20xError,
+                  ),
+
+                  AppTextField(
+                    controller: _pressure,
+                    label: 'Max & continuous pressure (bar) *',
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                    errorText: _pressureError,
+                  ),
+
+                  YesNoField(
+                    label: 'Strainer / screen filter *',
+                    value: _strainerScreenFilter,
+                    onChanged: (v) => setState(() => _strainerScreenFilter = v),
+                    errorText: _strainerScreenFilterError,
+                  ),
+                  YesNoField(
+                    label: 'Chamber installation *',
+                    value: _chamberInstallation,
+                    onChanged: (v) => setState(() => _chamberInstallation = v),
+                    errorText: _chamberInstallationError,
+                  ),
+
+                  if (isWireless) ...[
+                    const FormSectionLabel('Wireless'),
+                    YesNoField(
+                      label: 'Antenna required *',
+                      value: _antennaRequired,
+                      onChanged: (v) => setState(() => _antennaRequired = v),
+                      errorText: _antennaRequiredError,
+                    ),
+                    YesNoField(
+                      label: 'Transmitting part open to air *',
+                      value: _transmittingPartOpenToAir,
+                      onChanged: (v) =>
+                          setState(() => _transmittingPartOpenToAir = v),
+                      errorText: _transmittingPartOpenToAirError,
+                    ),
+                    YesNoField(
+                      label: 'NRV feasibility *',
+                      value: _nrvFeasibility,
+                      onChanged: (v) => setState(() => _nrvFeasibility = v),
+                      errorText: _nrvFeasibilityError,
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
 
-          const FormSectionLabel('Photos'),
-          _photoField(PhotoSlot.inletMarked, 'Inlet marked'),
-          _photoField(PhotoSlot.powerSource, 'Power source'),
-          if (isWired) _photoField(PhotoSlot.wiringRouting, 'Wiring routing'),
-          if (isWireless)
-            _photoField(PhotoSlot.antennaRouting, 'Antenna routing'),
+            const FormSectionLabel('Photos'),
+            _photoField(PhotoSlot.inletMarked, 'Inlet marked'),
+            _photoField(PhotoSlot.powerSource, 'Power source'),
+            if (isWired) _photoField(PhotoSlot.wiringRouting, 'Wiring routing'),
+            if (isWireless)
+              _photoField(PhotoSlot.antennaRouting, 'Antenna routing'),
 
-          if (!_viewOnly) ...[
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              icon: _saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.save_outlined),
-              label: const Text('Save source point'),
-            ),
+            if (!_viewOnly) ...[
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_outlined),
+                label: const Text('Save source point'),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

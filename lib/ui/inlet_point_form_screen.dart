@@ -11,6 +11,7 @@ import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 import 'photo_markup_screen.dart';
 import 'sync_scope.dart';
+import 'widgets/form_error_focus.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
 
@@ -50,6 +51,10 @@ class InletPointFormScreen extends StatefulWidget {
 }
 
 class _InletPointFormScreenState extends State<InletPointFormScreen> {
+  /// Root of the scrollable form body — [FormErrorFocus] searches
+  /// under this for the first field left in error by a failed save.
+  final _formRoot = GlobalKey();
+
   late final TextEditingController _apartmentBhk;
   final _apartmentBhkFocusNode = FocusNode();
   late final TextEditingController _series;
@@ -458,6 +463,10 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in the required fields.')),
       );
+      // The offending field is usually well off-screen from the Save button
+      // on these forms — take the user to it instead of leaving them to
+      // hunt for the red text.
+      FormErrorFocus.revealFirst(_formRoot);
       return;
     }
 
@@ -543,211 +552,215 @@ class _InletPointFormScreenState extends State<InletPointFormScreen> {
             ),
         ],
       ),
-      body: ListView(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        children: [
-          IgnorePointer(
-            ignoring: _viewOnly,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                AppDropdownField<String>(
-                  label: 'Block *',
-                  value: _block,
-                  items: widget.site.blocks,
-                  itemLabel: (b) => b,
-                  emptyHint:
-                      'No blocks on this site — add them via the site first.',
-                  onChanged: (v) => setState(() => _block = v),
-                  errorText: _blockError,
-                ),
-                AppTextField(
-                  controller: _apartmentBhk,
-                  focusNode: _apartmentBhkFocusNode,
-                  label: 'Apartment (BHK) *',
-                  errorText: _apartmentBhkError,
-                ),
-                _loadingMaterials
-                    ? const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                        child: Center(child: CircularProgressIndicator()),
+        child: Column(
+          key: _formRoot,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            IgnorePointer(
+              ignoring: _viewOnly,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AppDropdownField<String>(
+                    label: 'Block *',
+                    value: _block,
+                    items: widget.site.blocks,
+                    itemLabel: (b) => b,
+                    emptyHint:
+                        'No blocks on this site — add them via the site first.',
+                    onChanged: (v) => setState(() => _block = v),
+                    errorText: _blockError,
+                  ),
+                  AppTextField(
+                    controller: _apartmentBhk,
+                    focusNode: _apartmentBhkFocusNode,
+                    label: 'Apartment (BHK) *',
+                    errorText: _apartmentBhkError,
+                  ),
+                  _loadingMaterials
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          child: Center(child: CircularProgressIndicator()),
+                        )
+                      : AppDropdownField<MaterialMasterItem>(
+                          label: 'Sensor (Group A material) *',
+                          value: _selectedMaterial,
+                          items: _groupAMaterials,
+                          itemLabel: (m) => m.materialName,
+                          emptyHint:
+                              'No Group A materials yet — add one in Material '
+                              'Master first.',
+                          onChanged: _onMaterialChanged,
+                          errorText: _materialError,
+                        ),
+                  AppTextField(
+                    controller: _series,
+                    label: 'Series *',
+                    errorText: _seriesError,
+                  ),
+                  AppDropdownField<SensorOd>(
+                    label: 'Sensor OD *',
+                    value: _sensorOd,
+                    items: SensorOd.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _sensorOd = v),
+                    errorText: _sensorOdError,
+                  ),
+                  AppDropdownField<PipeSize>(
+                    label: 'Pipe size *',
+                    value: _pipeSize,
+                    items: PipeSize.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _pipeSize = v),
+                    errorText: _pipeSizeError,
+                  ),
+                  AppDropdownField<PipeType>(
+                    label: 'Pipe type *',
+                    value: _pipeType,
+                    items: PipeType.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _pipeType = v),
+                    errorText: _pipeTypeError,
+                  ),
+                  AppTextField(
+                    controller: _qty,
+                    label: 'Qty *',
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    errorText: _qtyError,
+                  ),
+                  YesNoField(
+                    label: 'Rework *',
+                    value: _rework,
+                    onChanged: (v) => setState(() => _rework = v),
+                    errorText: _reworkError,
+                  ),
+                  if (_rework == true)
+                    AppTextField(
+                      controller: _reworkDetails,
+                      label: 'Rework details *',
+                      maxLines: 2,
+                      errorText: _reworkDetailsError,
+                    ),
+
+                  YesNoField(
+                    label: 'Linear distance & clearance 10X *',
+                    value: _linearDistanceClearance10x,
+                    onChanged: (v) =>
+                        setState(() => _linearDistanceClearance10x = v),
+                    errorText: _linearDistanceClearance10xError,
+                  ),
+                  YesNoField(
+                    label: 'Reverse flow *',
+                    value: _reverseFlow,
+                    onChanged: (v) => setState(() => _reverseFlow = v),
+                    errorText: _reverseFlowError,
+                  ),
+                  AppDropdownField<OhtHns>(
+                    label: 'OHT / HNS *',
+                    value: _ohtHns,
+                    items: _ohtHnsOptions,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _ohtHns = v),
+                    errorText: _ohtHnsError,
+                  ),
+                  YesNoField(
+                    label: 'Distance from motor/pump *',
+                    value: _distanceFromMotorPump,
+                    onChanged: (v) => setState(() => _distanceFromMotorPump = v),
+                    errorText: _distanceFromMotorPumpError,
+                  ),
+                  AppTextField(
+                    controller: _pressure,
+                    label: 'Max & continuous pressure (bar) *',
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                    errorText: _pressureError,
+                  ),
+                  YesNoField(
+                    label: 'Strainer / screen filter *',
+                    value: _strainerScreenFilter,
+                    onChanged: (v) => setState(() => _strainerScreenFilter = v),
+                    errorText: _strainerScreenFilterError,
+                  ),
+                  AppDropdownField<FlowDirection>(
+                    label: 'Flow direction *',
+                    value: _flowDirection,
+                    items: FlowDirection.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _flowDirection = v),
+                    errorText: _flowDirectionError,
+                  ),
+                  AppDropdownField<AccessMode>(
+                    label: 'Access mode *',
+                    value: _accessMode,
+                    items: AccessMode.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _accessMode = v),
+                    errorText: _accessModeError,
+                  ),
+                  AppDropdownField<CableRunLength>(
+                    label: 'Cable run length *',
+                    value: _cableRunLength,
+                    items: CableRunLength.values,
+                    itemLabel: (v) => v.label,
+                    onChanged: (v) => setState(() => _cableRunLength = v),
+                    errorText: _cableRunLengthError,
+                  ),
+                  YesNoField(
+                    label: 'Conduit clamping *',
+                    value: _conduitClamping,
+                    onChanged: (v) => setState(() => _conduitClamping = v),
+                    errorText: _conduitClampingError,
+                  ),
+                  YesNoField(
+                    label: 'Civil work needed *',
+                    value: _civilWorkNeeded,
+                    onChanged: (v) => setState(() => _civilWorkNeeded = v),
+                    errorText: _civilWorkNeededError,
+                  ),
+                  if (_civilWorkNeeded == true)
+                    AppTextField(
+                      controller: _civilWorkDetails,
+                      label: 'Civil work details *',
+                      maxLines: 2,
+                      errorText: _civilWorkDetailsError,
+                    ),
+                ],
+              ),
+            ),
+
+            const FormSectionLabel('Photos'),
+            _photoField(
+              PhotoSlot.shaftLocationMarked,
+              'Shaft / location marked',
+            ),
+            _photoField(PhotoSlot.cableRouting, 'Cable routing'),
+            _photoField(PhotoSlot.shaftAccess, 'Shaft access'),
+            _photoField(PhotoSlot.shaftInternal, 'Shaft internal'),
+
+            if (!_viewOnly) ...[
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : AppDropdownField<MaterialMasterItem>(
-                        label: 'Sensor (Group A material) *',
-                        value: _selectedMaterial,
-                        items: _groupAMaterials,
-                        itemLabel: (m) => m.materialName,
-                        emptyHint:
-                            'No Group A materials yet — add one in Material '
-                            'Master first.',
-                        onChanged: _onMaterialChanged,
-                        errorText: _materialError,
-                      ),
-                AppTextField(
-                  controller: _series,
-                  label: 'Series *',
-                  errorText: _seriesError,
-                ),
-                AppDropdownField<SensorOd>(
-                  label: 'Sensor OD *',
-                  value: _sensorOd,
-                  items: SensorOd.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _sensorOd = v),
-                  errorText: _sensorOdError,
-                ),
-                AppDropdownField<PipeSize>(
-                  label: 'Pipe size *',
-                  value: _pipeSize,
-                  items: PipeSize.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _pipeSize = v),
-                  errorText: _pipeSizeError,
-                ),
-                AppDropdownField<PipeType>(
-                  label: 'Pipe type *',
-                  value: _pipeType,
-                  items: PipeType.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _pipeType = v),
-                  errorText: _pipeTypeError,
-                ),
-                AppTextField(
-                  controller: _qty,
-                  label: 'Qty *',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  errorText: _qtyError,
-                ),
-                YesNoField(
-                  label: 'Rework *',
-                  value: _rework,
-                  onChanged: (v) => setState(() => _rework = v),
-                  errorText: _reworkError,
-                ),
-                if (_rework == true)
-                  AppTextField(
-                    controller: _reworkDetails,
-                    label: 'Rework details *',
-                    maxLines: 2,
-                    errorText: _reworkDetailsError,
-                  ),
-
-                YesNoField(
-                  label: 'Linear distance & clearance 10X *',
-                  value: _linearDistanceClearance10x,
-                  onChanged: (v) =>
-                      setState(() => _linearDistanceClearance10x = v),
-                  errorText: _linearDistanceClearance10xError,
-                ),
-                YesNoField(
-                  label: 'Reverse flow *',
-                  value: _reverseFlow,
-                  onChanged: (v) => setState(() => _reverseFlow = v),
-                  errorText: _reverseFlowError,
-                ),
-                AppDropdownField<OhtHns>(
-                  label: 'OHT / HNS *',
-                  value: _ohtHns,
-                  items: _ohtHnsOptions,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _ohtHns = v),
-                  errorText: _ohtHnsError,
-                ),
-                YesNoField(
-                  label: 'Distance from motor/pump *',
-                  value: _distanceFromMotorPump,
-                  onChanged: (v) => setState(() => _distanceFromMotorPump = v),
-                  errorText: _distanceFromMotorPumpError,
-                ),
-                AppTextField(
-                  controller: _pressure,
-                  label: 'Max & continuous pressure (bar) *',
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                  ],
-                  errorText: _pressureError,
-                ),
-                YesNoField(
-                  label: 'Strainer / screen filter *',
-                  value: _strainerScreenFilter,
-                  onChanged: (v) => setState(() => _strainerScreenFilter = v),
-                  errorText: _strainerScreenFilterError,
-                ),
-                AppDropdownField<FlowDirection>(
-                  label: 'Flow direction *',
-                  value: _flowDirection,
-                  items: FlowDirection.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _flowDirection = v),
-                  errorText: _flowDirectionError,
-                ),
-                AppDropdownField<AccessMode>(
-                  label: 'Access mode *',
-                  value: _accessMode,
-                  items: AccessMode.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _accessMode = v),
-                  errorText: _accessModeError,
-                ),
-                AppDropdownField<CableRunLength>(
-                  label: 'Cable run length *',
-                  value: _cableRunLength,
-                  items: CableRunLength.values,
-                  itemLabel: (v) => v.label,
-                  onChanged: (v) => setState(() => _cableRunLength = v),
-                  errorText: _cableRunLengthError,
-                ),
-                YesNoField(
-                  label: 'Conduit clamping *',
-                  value: _conduitClamping,
-                  onChanged: (v) => setState(() => _conduitClamping = v),
-                  errorText: _conduitClampingError,
-                ),
-                YesNoField(
-                  label: 'Civil work needed *',
-                  value: _civilWorkNeeded,
-                  onChanged: (v) => setState(() => _civilWorkNeeded = v),
-                  errorText: _civilWorkNeededError,
-                ),
-                if (_civilWorkNeeded == true)
-                  AppTextField(
-                    controller: _civilWorkDetails,
-                    label: 'Civil work details *',
-                    maxLines: 2,
-                    errorText: _civilWorkDetailsError,
-                  ),
-              ],
-            ),
-          ),
-
-          const FormSectionLabel('Photos'),
-          _photoField(
-            PhotoSlot.shaftLocationMarked,
-            'Shaft / location marked',
-          ),
-          _photoField(PhotoSlot.cableRouting, 'Cable routing'),
-          _photoField(PhotoSlot.shaftAccess, 'Shaft access'),
-          _photoField(PhotoSlot.shaftInternal, 'Shaft internal'),
-
-          if (!_viewOnly) ...[
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              icon: _saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.save_outlined),
-              label: const Text('Save inlet point'),
-            ),
+                    : const Icon(Icons.save_outlined),
+                label: const Text('Save inlet point'),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
