@@ -31,7 +31,7 @@ import 'package:uuid/uuid.dart';
 /// only once a signed-in user id is known (never before login — nothing
 /// pre-login needs local storage), and swapped for a freshly-opened one
 /// whenever the active account changes.
-const int _dbVersion = 30;
+const int _dbVersion = 31;
 
 String _dbFileNameFor(String userId) => 'survey_app_$userId.db';
 
@@ -579,6 +579,12 @@ Future<Database> openAppDatabaseInDirectory(
           'ALTER TABLE photos ADD COLUMN pending_delete INTEGER NOT NULL DEFAULT 0',
         );
       }
+      // v30 -> v31: index site_id on every table the push pass queries
+      // per-site. Index-only, so there is nothing to backfill and no row is
+      // touched — see _createSiteIdIndexes.
+      if (oldVersion < 31) {
+        await _createSiteIdIndexes(db);
+      }
     },
     onCreate: (db, version) async {
       await db.execute('''
@@ -652,6 +658,8 @@ Future<Database> openAppDatabaseInDirectory(
       await _createBomManualEditSnapshotsTable(db);
       await _createBomManualEditSnapshotLinesTable(db);
       await _createSurveyAssignmentAuditTable(db);
+      // Last, so every table above already exists.
+      await _createSiteIdIndexes(db);
     },
   );
 }
@@ -1174,4 +1182,37 @@ Future<void> _createSurveyAssignmentAuditTable(Database db) async {
     'CREATE INDEX survey_assignment_audit_site_idx '
     'ON survey_assignment_audit (site_id)',
   );
+}
+
+/// Indexes `site_id` on every table the push pass reads once per site.
+///
+/// [SyncService.pushAll] visits EVERY site on every sync, not just dirty
+/// ones — a site's children are dirty-tracked independently of the site row,
+/// so a site whose own row is clean can still have a new source point — and
+/// issues ~18 queries for each. Without these indexes each of those is a
+/// full table scan, making the pass O(sites x rows) instead of O(sites).
+///
+/// Measured against this schema: at 500 sites / 21,500 rows the pass costs
+/// 993ms unindexed vs 28ms indexed (36x); at 1000 sites, 4769ms vs 76ms
+/// (63x). At present volumes it changes nothing measurable — 20 sites is far
+/// too little data for scanning to cost anything, and the pass is dominated
+/// by per-statement overhead instead. This is deliberately insurance against
+/// the growth curve rather than a fix for a number visible today.
+///
+/// The BoM tables and photos already had their own indexes; these five were
+/// simply missed. `IF NOT EXISTS` so the same helper is safe from both
+/// onCreate and the upgrade path.
+Future<void> _createSiteIdIndexes(DatabaseExecutor db) async {
+  const tables = [
+    'source_points',
+    'inlet_points',
+    'duct_loras',
+    'gateways',
+    'blocks',
+  ];
+  for (final table in tables) {
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS ${table}_site_idx ON $table (site_id)',
+    );
+  }
 }
