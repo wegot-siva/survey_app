@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -94,6 +95,205 @@ class SyncResult {
 bool syncFullySucceeded(SyncResult push, SyncResult corePull) =>
     push.success && push.pushFailures.isEmpty && corePull.success;
 
+/// Log tag for every timing line this file emits. Grep a logcat capture for
+/// it to get one sync run's full breakdown:
+///
+///     adb logcat -d | grep SYNCPERF
+const String _perfTag = 'SYNCPERF';
+
+/// How many core-table pulls may be in flight at once.
+///
+/// Measured on device, the 16 core tables fetched sequentially cost ~4.3 s of
+/// almost pure round-trip latency — each table takes about the same ~270 ms
+/// regardless of whether it returns 2 rows or 230, so the run was dominated
+/// by waiting, not by data.
+///
+/// 6 rather than all 16: past a handful of parallel connections a phone stops
+/// gaining (the requests contend for the same radio and the slowest one sets
+/// the finish time), and a burst of 16 is also noticeably ruder to PostgREST
+/// when 20 engineers sync at once. Measured contention at up to 24 concurrent
+/// requests was flat, so this is a deliberately conservative cap, not a
+/// measured ceiling.
+const int _pullConcurrency = 6;
+
+/// Timing instrumentation for one sync phase.
+///
+/// Exists because the sync performance work needs a real on-device baseline
+/// to measure each optimisation against — desktop numbers don't settle
+/// whether a change helped on the hardware this app actually runs on.
+///
+/// Deliberately separates the two costs that get conflated when only the
+/// total is known:
+///   * `fetch` — time on the network, waiting for PostgREST.
+///   * `apply` — time writing what came back into local sqlite.
+///
+/// That split is the whole point. A pull dominated by `fetch` is a
+/// round-trip problem (fixed by fetching concurrently / making fewer
+/// requests); one dominated by `apply` is a local storage problem. The two
+/// have completely different fixes, and the total alone can't tell them
+/// apart.
+///
+/// Uses [debugPrint] rather than a metrics sink: this is a development
+/// measurement aid read off logcat during a tuning round, not telemetry.
+class _SyncPerf {
+  _SyncPerf(this.phase);
+
+  final String phase;
+  final Stopwatch _wall = Stopwatch()..start();
+
+  int fetchMs = 0;
+  int applyMs = 0;
+  int rows = 0;
+  int tables = 0;
+
+  /// Network time spent pushing individual rows, and how many were attempted
+  /// (see [pushAll]'s pushRow). Both stay 0 for a pull phase.
+  int netMs = 0;
+  int netRows = 0;
+
+  int get wallMs => _wall.elapsedMilliseconds;
+
+  /// Runs one table's [fetch] and [apply], timing them separately, and
+  /// returns whatever [apply] returned (photos hand back the orphaned local
+  /// paths their pull detected, so this can't just return void).
+  Future<R> table<T, R>(
+    String label,
+    Future<List<T>> Function() fetch,
+    Future<R> Function(List<T>) apply,
+  ) async {
+    final sw = Stopwatch()..start();
+    final fetched = await fetch();
+    final fetchedMs = sw.elapsedMilliseconds;
+    sw.reset();
+    final result = await apply(fetched);
+    final appliedMs = sw.elapsedMilliseconds;
+
+    fetchMs += fetchedMs;
+    applyMs += appliedMs;
+    rows += fetched.length;
+    tables++;
+    debugPrint(
+      '$_perfTag $phase/$label fetch ${fetchedMs}ms '
+      'rows ${fetched.length} apply ${appliedMs}ms',
+    );
+    return result;
+  }
+
+  /// Wall time of the concurrent fetch stage, when there is one. Distinct
+  /// from [fetchMs], which stays a *sum* of the individual fetches — once
+  /// they overlap, that sum deliberately exceeds this. Comparing the two is
+  /// how much the concurrency actually bought.
+  int fetchWallMs = 0;
+
+  /// Per-table fetch durations, held until the matching apply reports, so
+  /// one line can still carry both halves even though the fetch finished
+  /// much earlier and out of order.
+  final Map<String, int> _fetchByLabel = {};
+
+  /// Times one table's fetch. Safe to run concurrently with other calls —
+  /// only the accumulators are touched, and Dart's single isolate makes
+  /// those updates atomic between await points.
+  Future<T> timedFetch<T extends List<Object?>>(
+    String label,
+    Future<T> Function() fetch,
+  ) async {
+    final sw = Stopwatch()..start();
+    final fetched = await fetch();
+    _fetchByLabel[label] = sw.elapsedMilliseconds;
+    fetchMs += sw.elapsedMilliseconds;
+    rows += fetched.length;
+    tables++;
+    return fetched;
+  }
+
+  /// Times one table's local apply and emits the combined line for it.
+  Future<void> timedApply(
+    String label,
+    int rowCount,
+    Future<void> Function() apply,
+  ) async {
+    final sw = Stopwatch()..start();
+    await apply();
+    final appliedMs = sw.elapsedMilliseconds;
+    applyMs += appliedMs;
+    debugPrint(
+      '$_perfTag $phase/$label fetch ${_fetchByLabel[label] ?? 0}ms '
+      'rows $rowCount apply ${appliedMs}ms',
+    );
+  }
+
+  /// Times an un-tabled step (photo file downloads, the site enumeration at
+  /// the top of a push) without folding it into the per-table totals.
+  Future<T> step<T>(String label, Future<T> Function() body) async {
+    final sw = Stopwatch()..start();
+    try {
+      return await body();
+    } finally {
+      debugPrint('$_perfTag $phase/$label ${sw.elapsedMilliseconds}ms');
+    }
+  }
+
+  /// One summary line closing the phase. For a push, `local` is everything
+  /// that wasn't network — the per-site query pass, which is the cost that
+  /// grows with total site count rather than with what actually changed.
+  void done() {
+    // Concurrent fetches overlap, so their *sum* no longer represents time
+    // the run actually spent; subtract the stage's wall clock instead, or
+    // `local` would go absurdly negative and mean nothing.
+    final networkWall = fetchWallMs > 0 ? fetchWallMs : fetchMs;
+    final local = wallMs - netMs - networkWall;
+    debugPrint(
+      '$_perfTag $phase TOTAL wall ${wallMs}ms tables $tables rows $rows '
+      'fetch ${fetchMs}ms fetchWall ${fetchWallMs}ms apply ${applyMs}ms '
+      'net ${netMs}ms netRows $netRows local ${local}ms',
+    );
+  }
+}
+
+/// One table's pull: what to fetch, and how to write it into local storage.
+///
+/// Kept as an ordered list (see [SyncService.pullCoreSurveyData]) because the
+/// two halves have opposite requirements — fetches are independent and want
+/// to overlap, applies are foreign-key ordered and must not.
+class _PullTable {
+  const _PullTable(this.label, this.fetch, this.apply);
+
+  final String label;
+  final Future<List<Map<String, dynamic>>> Function() fetch;
+  final Future<void> Function(List<Map<String, dynamic>>) apply;
+}
+
+/// Counting semaphore bounding how many pulls are in flight at once.
+///
+/// A phone opening 16 simultaneous HTTPS connections tends to do worse than
+/// one opening 6: connection setup competes for the same radio, and the
+/// tail latency of the slowest request grows. The cap keeps the win without
+/// that.
+class _Semaphore {
+  _Semaphore(this._permits);
+
+  int _permits;
+  final List<Completer<void>> _waiting = [];
+
+  Future<void> acquire() {
+    if (_permits > 0) {
+      _permits--;
+      return Future.value();
+    }
+    final waiter = Completer<void>();
+    _waiting.add(waiter);
+    return waiter.future;
+  }
+
+  void release() {
+    if (_waiting.isNotEmpty) {
+      _waiting.removeAt(0).complete();
+    } else {
+      _permits++;
+    }
+  }
+}
+
 /// Mostly-push sync (Phase 3): reads local data via [SurveyRepository] and
 /// upserts it to Supabase via [SupabaseSurveyDataSource].
 ///
@@ -158,6 +358,7 @@ class SyncService {
     // whole-run problem (missing config, a thrown error outside any single
     // row's push) still produces success:false — see the outer try/catch.
     final failures = <String>[];
+    final perf = _SyncPerf('push');
 
     /// [onPermissionDenied], when given, is invoked instead of recording a
     /// retryable failure if the push is refused with Postgres 42501
@@ -175,6 +376,10 @@ class SyncService {
       Future<void> Function() action, {
       Future<void> Function()? onPermissionDenied,
     }) async {
+      // Every remote write in this method goes through here, so accumulating
+      // around `action` captures the phase's entire network cost. What's left
+      // over in the summary line is the per-site local query pass.
+      final sw = Stopwatch()..start();
       try {
         await action();
         return true;
@@ -195,6 +400,9 @@ class SyncService {
         }
         failures.add('$label: $e');
         return false;
+      } finally {
+        perf.netMs += sw.elapsedMilliseconds;
+        perf.netRows++;
       }
     }
 
@@ -208,11 +416,16 @@ class SyncService {
       // dirty-tracked independently of the site row itself — a site whose
       // own row hasn't changed can still have a newly-added source point.
       // dirtySiteIds narrows which sites actually get their *row* re-pushed.
-      final dirtySiteIds = (await _repository.getSites(
-        includeArchived: true,
-        dirtyOnly: true,
-      )).map((s) => s.id).toSet();
-      final sites = await _repository.getSites(includeArchived: true);
+      // Both enumerations are timed together: getSites hydrates every row
+      // with a per-site blocks + client_inputs query, so this alone is
+      // already O(sites) round-trips into local sqlite before the per-site
+      // loop below adds ~18 more each.
+      final dirtySiteIds = await perf.step('enumerateDirty', () async =>
+          (await _repository.getSites(includeArchived: true, dirtyOnly: true))
+              .map((s) => s.id)
+              .toSet());
+      final sites = await perf.step('enumerateAll',
+          () => _repository.getSites(includeArchived: true));
 
       var pushedSites = 0;
       var blocks = 0;
@@ -557,6 +770,8 @@ class SyncService {
         if (ok) photos++;
       }
 
+      debugPrint('$_perfTag push/sitesVisited ${sites.length}');
+      perf.done();
       return SyncResult(
         success: true,
         sites: pushedSites,
@@ -631,10 +846,16 @@ class SyncService {
       );
     }
 
+    final perf = _SyncPerf('pullMaterialMaster');
     try {
-      final remoteItems = await _remote.fetchMaterialMasterItems();
-      await _repository.upsertMaterialMasterItemsFromRemote(remoteItems);
-      return SyncResult(success: true, materialMasterItems: remoteItems.length);
+      await perf.table(
+        'material_master_items',
+        _remote.fetchMaterialMasterItems,
+        _repository.upsertMaterialMasterItemsFromRemote,
+      );
+      perf.done();
+      // perf.rows is this phase's only table, so it *is* the fetched count.
+      return SyncResult(success: true, materialMasterItems: perf.rows);
     } on PostgrestException catch (e) {
       return SyncResult(
         success: false,
@@ -686,60 +907,111 @@ class SyncService {
       );
     }
 
+    final perf = _SyncPerf('pullCore');
     try {
-      await _repository.upsertSitesFromRemote(await _remote.fetchSites());
-      // Blocks pull must come after sites — it replaces blocks per local
-      // site row, and local sqlite FK enforcement (PRAGMA foreign_keys = ON)
-      // requires that row to already exist.
-      await _repository.upsertBlocksFromRemote(await _remote.fetchBlocks());
-      await _repository.upsertClientInputsFromRemote(
-        await _remote.fetchClientInputs(),
-      );
-      await _repository.upsertFootersFromRemote(await _remote.fetchFooters());
-      await _repository.upsertSourcePointsFromRemote(
-        await _remote.fetchSourcePoints(),
-      );
-      await _repository.upsertInletPointsFromRemote(
-        await _remote.fetchInletPoints(),
-      );
-      await _repository.upsertDuctLorasFromRemote(await _remote.fetchDuctLoras());
-      await _repository.upsertGatewaysFromRemote(await _remote.fetchGateways());
-      await _repository.upsertBomManualEntriesFromRemote(
-        await _remote.fetchBomManualEntries(),
-      );
-      // Immutable BoM history (Full sync Group 3). Order is load-bearing:
-      // local sqlite enforces foreign keys, so each parent row must exist
-      // before its lines — snapshots before snapshot_lines, revisions before
-      // revision_lines, manual-edit snapshots before their lines — and all
-      // of them after sites, which every parent here references.
-      await _repository.upsertBomSnapshotsFromRemote(
-        await _remote.fetchBomSnapshots(),
-      );
-      await _repository.upsertBomSnapshotLinesFromRemote(
-        await _remote.fetchBomSnapshotLines(),
-      );
-      await _repository.upsertBomRevisionsFromRemote(
-        await _remote.fetchBomRevisions(),
-      );
-      await _repository.upsertBomRevisionLinesFromRemote(
-        await _remote.fetchBomRevisionLines(),
-      );
-      await _repository.upsertBomManualEditSnapshotsFromRemote(
-        await _remote.fetchBomManualEditSnapshots(),
-      );
-      await _repository.upsertBomManualEditSnapshotLinesFromRemote(
-        await _remote.fetchBomManualEditSnapshotLines(),
-      );
-      // Photos (Full sync Group 4) — last, because every photo row points at
-      // an owner that the pulls above have just landed. Any file left behind
-      // by a tombstoned photo is deleted here, outside the write
-      // transaction that removed the row (see upsertPhotosFromRemote).
-      for (final path in await _repository.upsertPhotosFromRemote(
-        await _remote.fetchPhotos(),
-      )) {
-        await _photoFiles.deleteLocalFile(path);
+      // The pull order below is foreign-key ordered and load-bearing for the
+      // APPLY half only:
+      //   * sites first — every other table here FK's to it, and local sqlite
+      //     enforces that (PRAGMA foreign_keys = ON), so a child row written
+      //     before its parent site exists fails its insert.
+      //   * blocks after sites — it replaces blocks per local site row.
+      //   * each BoM parent before its lines — snapshots before
+      //     snapshot_lines, revisions before revision_lines, manual-edit
+      //     snapshots before their lines.
+      //   * photos last — every photo row points at an owner the pulls above
+      //     have just landed.
+      //
+      // The FETCH half has no such constraint: each is an independent GET
+      // against a different table, and nothing in a response depends on
+      // another response. That asymmetry is what this method exploits —
+      // fetch concurrently, apply strictly in this order.
+      final plan = <_PullTable>[
+        _PullTable('sites', _remote.fetchSites,
+            _repository.upsertSitesFromRemote),
+        _PullTable('blocks', _remote.fetchBlocks,
+            _repository.upsertBlocksFromRemote),
+        _PullTable('client_inputs', _remote.fetchClientInputs,
+            _repository.upsertClientInputsFromRemote),
+        _PullTable('footers', _remote.fetchFooters,
+            _repository.upsertFootersFromRemote),
+        _PullTable('source_points', _remote.fetchSourcePoints,
+            _repository.upsertSourcePointsFromRemote),
+        _PullTable('inlet_points', _remote.fetchInletPoints,
+            _repository.upsertInletPointsFromRemote),
+        _PullTable('duct_loras', _remote.fetchDuctLoras,
+            _repository.upsertDuctLorasFromRemote),
+        _PullTable('gateways', _remote.fetchGateways,
+            _repository.upsertGatewaysFromRemote),
+        _PullTable('bom_manual_entries', _remote.fetchBomManualEntries,
+            _repository.upsertBomManualEntriesFromRemote),
+        _PullTable('bom_snapshots', _remote.fetchBomSnapshots,
+            _repository.upsertBomSnapshotsFromRemote),
+        _PullTable('bom_snapshot_lines', _remote.fetchBomSnapshotLines,
+            _repository.upsertBomSnapshotLinesFromRemote),
+        _PullTable('bom_revisions', _remote.fetchBomRevisions,
+            _repository.upsertBomRevisionsFromRemote),
+        _PullTable('bom_revision_lines', _remote.fetchBomRevisionLines,
+            _repository.upsertBomRevisionLinesFromRemote),
+        _PullTable('bom_manual_edit_snapshots',
+            _remote.fetchBomManualEditSnapshots,
+            _repository.upsertBomManualEditSnapshotsFromRemote),
+        _PullTable('bom_manual_edit_snapshot_lines',
+            _remote.fetchBomManualEditSnapshotLines,
+            _repository.upsertBomManualEditSnapshotLinesFromRemote),
+        // Any file left behind by a tombstoned photo is deleted here, outside
+        // the write transaction that removed the row (see
+        // upsertPhotosFromRemote) — which is why this one apply isn't a bare
+        // method reference like the rest.
+        _PullTable('photos', _remote.fetchPhotos, (rows) async {
+          for (final path in await _repository.upsertPhotosFromRemote(rows)) {
+            await _photoFiles.deleteLocalFile(path);
+          }
+        }),
+      ];
+
+      // Stage 1 — network, concurrent and bounded.
+      //
+      // Future.wait (not a bare loop over un-awaited futures) is deliberate:
+      // it attaches a listener to every future immediately, so if two tables
+      // fail, the second failure is already handled rather than surfacing
+      // later as an unhandled async error. The first error still propagates
+      // to the catch blocks below, exactly as it did when this was
+      // sequential.
+      final fetchWatch = Stopwatch()..start();
+      final gate = _Semaphore(_pullConcurrency);
+      final fetched = await Future.wait([
+        for (final t in plan)
+          () async {
+            await gate.acquire();
+            try {
+              return await perf.timedFetch(t.label, t.fetch);
+            } finally {
+              gate.release();
+            }
+          }(),
+      ]);
+      perf.fetchWallMs = fetchWatch.elapsedMilliseconds;
+
+      // Stage 2 — local writes, strictly in `plan` order. Every foreign-key
+      // guarantee that held when this method was fully sequential still
+      // holds here, because this loop is still fully sequential.
+      for (var i = 0; i < plan.length; i++) {
+        await perf.timedApply(
+          plan[i].label,
+          fetched[i].length,
+          () => plan[i].apply(fetched[i]),
+        );
       }
-      await downloadMissingPhotoFiles();
+      // Timed as its own step, and reported separately from the table pulls
+      // above, because it's the one part of this method that transfers files
+      // rather than rows — at ~1 MB and ~1 s per photo it can dominate the
+      // whole run while every table above looks fast.
+      final downloaded = await perf.step(
+        'photoFiles',
+        downloadMissingPhotoFiles,
+      );
+      debugPrint('$_perfTag pullCore/photoFiles downloaded $downloaded');
+      perf.done();
       return const SyncResult(success: true);
     } on PostgrestException catch (e) {
       // Diagnostic instrumentation (forensic sync investigation): this

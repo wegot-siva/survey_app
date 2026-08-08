@@ -313,12 +313,20 @@ class SyncController extends ChangeNotifier {
     // attempted — treating "not run" as a failure would wrongly downgrade a
     // clean push to SyncStatus.failure via syncFullySucceeded below.
     const notAttempted = SyncResult(success: true);
+    // End-to-end wall clock for the whole run, so the per-phase SYNCPERF
+    // lines emitted inside SyncService can be checked against one number the
+    // user actually waits for. See _SyncPerf in sync_service.dart.
+    final runWatch = Stopwatch()..start();
     final materialMasterPull = pushOnly
         ? notAttempted
         : await _syncService.pullMaterialMasterItems();
     final corePull =
         pushOnly ? notAttempted : await _syncService.pullCoreSurveyData();
     final push = await _syncService.pushAll();
+    debugPrint(
+      'SYNCPERF RUN TOTAL wall ${runWatch.elapsedMilliseconds}ms '
+      'manual=$manual pushOnly=$pushOnly',
+    );
 
     // "Fully synced" is NOT push.success — pushAll() isolates per-row
     // failures and still returns success:true with those rows left dirty
