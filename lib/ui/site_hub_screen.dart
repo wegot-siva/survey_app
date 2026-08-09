@@ -24,6 +24,7 @@ import 'survey_assignment_audit_log_screen.dart';
 import 'sync_scope.dart';
 import 'widgets/refresh_bar.dart';
 import 'theme/app_theme.dart';
+import 'widgets/load_error_view.dart';
 
 /// Completion state for one Site Hub section, shown as the row's trailing
 /// indicator: [empty] means nothing has been recorded, [complete] means
@@ -88,6 +89,8 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
   /// screen already has content worth keeping on screen, and a reload
   /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
   bool _refreshing = false;
 
   @override
@@ -98,25 +101,45 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
 
   Future<void> _load() async {
     if (!_loading) setState(() => _refreshing = true);
-    final site = await widget.repository.getSiteById(widget.siteId);
-    final sourcePoints = await widget.repository.getSourcePoints(widget.siteId);
-    final inletPoints = await widget.repository.getInletPoints(widget.siteId);
-    final ductLoras = await widget.repository.getDuctLoras(widget.siteId);
-    final gateways = await widget.repository.getGateways(widget.siteId);
-    final footer = await widget.repository.getFooter(widget.siteId);
-    final bomSnapshot = await widget.repository.getBomSnapshot(widget.siteId);
-    if (!mounted) return;
-    setState(() {
-      _site = site;
-      _sourcePointCount = sourcePoints.length;
-      _inletPointCount = inletPoints.length;
-      _ductLoraCount = ductLoras.length;
-      _gatewayCount = gateways.length;
-      _footerFilled = footer != null;
-      _bomGenerated = bomSnapshot != null;
-      _loading = false;
-      _refreshing = false;
-    });
+    try {
+      final site = await widget.repository.getSiteById(widget.siteId);
+      final sourcePoints = await widget.repository.getSourcePoints(widget.siteId);
+      final inletPoints = await widget.repository.getInletPoints(widget.siteId);
+      final ductLoras = await widget.repository.getDuctLoras(widget.siteId);
+      final gateways = await widget.repository.getGateways(widget.siteId);
+      final footer = await widget.repository.getFooter(widget.siteId);
+      final bomSnapshot = await widget.repository.getBomSnapshot(widget.siteId);
+      if (!mounted) return;
+      setState(() {
+        _site = site;
+        _sourcePointCount = sourcePoints.length;
+        _inletPointCount = inletPoints.length;
+        _ductLoraCount = ductLoras.length;
+        _gatewayCount = gateways.length;
+        _footerFilled = footer != null;
+        _bomGenerated = bomSnapshot != null;
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+        _refreshing = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _refreshing = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   /// Status for a count-backed section: anything recorded counts as done.
@@ -602,6 +625,8 @@ class _SiteHubScreenState extends State<SiteHubScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : site == null
           ? const Center(child: Text('Site not found.'))
           : ListView(

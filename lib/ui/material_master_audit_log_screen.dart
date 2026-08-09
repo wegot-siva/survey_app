@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
 import '../models/material_master_audit_entry.dart';
+import 'widgets/load_error_view.dart';
 
 /// Read-only Material Master change log (Admin only — reached from within
 /// the Material Master screen, which is itself gated to Admin).
@@ -26,6 +27,10 @@ class _MaterialMasterAuditLogScreenState
 
   bool _loading = true;
 
+  Object? _loadError;
+
+  bool _loadedOnce = false;
+
   @override
   void initState() {
     super.initState();
@@ -34,14 +39,33 @@ class _MaterialMasterAuditLogScreenState
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final entries = await widget.repository.getMaterialMasterAuditLog();
-    final items = await widget.repository.getMaterialMasterItems();
-    if (!mounted) return;
-    setState(() {
-      _entries = entries;
-      _namesById = {for (final i in items) i.id: i.materialName};
-      _loading = false;
-    });
+    try {
+      final entries = await widget.repository.getMaterialMasterAuditLog();
+      final items = await widget.repository.getMaterialMasterItems();
+      if (!mounted) return;
+      setState(() {
+        _entries = entries;
+        _namesById = {for (final i in items) i.id: i.materialName};
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   static String _eventLabel(MaterialMasterAuditEntry e) {
@@ -78,6 +102,8 @@ class _MaterialMasterAuditLogScreenState
       appBar: AppBar(title: const Text('Material Master change log')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : _entries.isEmpty
           ? const Center(
               child: Padding(

@@ -5,6 +5,7 @@ import '../models/bom_line.dart';
 import '../models/bom_manual_entry.dart';
 import '../models/material_master_item.dart';
 import 'bom_manual_entry_form_screen.dart';
+import 'widgets/load_error_view.dart';
 
 /// One group's (B, C, D, E, F, or G) BoM section: any auto-computed lines for
 /// that group (read-only — most Material Master rows in these groups are
@@ -52,6 +53,8 @@ class _BomGroupManualSectionScreenState
     extends State<BomGroupManualSectionScreen> {
   List<BomManualEntry> _entries = const [];
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
 
   @override
   void initState() {
@@ -61,14 +64,33 @@ class _BomGroupManualSectionScreenState
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final entries = await widget.repository.getBomManualEntries(
-      widget.surveyId,
-    );
-    if (!mounted) return;
-    setState(() {
-      _entries = entries.where((e) => e.group == widget.group).toList();
-      _loading = false;
-    });
+    try {
+      final entries = await widget.repository.getBomManualEntries(
+        widget.surveyId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _entries = entries.where((e) => e.group == widget.group).toList();
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   Future<void> _addOrEdit([BomManualEntry? existing]) async {
@@ -133,6 +155,8 @@ class _BomGroupManualSectionScreenState
             ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : (autoLines.isEmpty && _entries.isEmpty)
           ? Center(
               child: Padding(

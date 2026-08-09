@@ -6,6 +6,7 @@ import '../models/bom_revision.dart';
 import '../models/bom_snapshot.dart';
 import 'bom_revision_form_screen.dart';
 import 'bom_version_detail_screen.dart';
+import 'widgets/load_error_view.dart';
 
 /// Version history for a locked survey's BoM: v1 (the frozen snapshot) plus
 /// every revision and manual edit (v2, v3, ...), each viewable, and an "Add
@@ -38,6 +39,8 @@ class _BomRevisionsScreenState extends State<BomRevisionsScreen> {
   List<BomRevision> _revisions = const [];
   List<BomManualEditSnapshot> _manualEditSnapshots = const [];
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
 
   @override
   void initState() {
@@ -47,18 +50,37 @@ class _BomRevisionsScreenState extends State<BomRevisionsScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final snapshot = await widget.repository.getBomSnapshot(widget.surveyId);
-    final revisions = await widget.repository.getBomRevisions(widget.surveyId);
-    final manualEdits = await widget.repository.getBomManualEditSnapshots(
-      widget.surveyId,
-    );
-    if (!mounted) return;
-    setState(() {
-      _snapshot = snapshot;
-      _revisions = revisions;
-      _manualEditSnapshots = manualEdits;
-      _loading = false;
-    });
+    try {
+      final snapshot = await widget.repository.getBomSnapshot(widget.surveyId);
+      final revisions = await widget.repository.getBomRevisions(widget.surveyId);
+      final manualEdits = await widget.repository.getBomManualEditSnapshots(
+        widget.surveyId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _snapshot = snapshot;
+        _revisions = revisions;
+        _manualEditSnapshots = manualEdits;
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   Future<void> _viewSnapshot(BomSnapshot snapshot) async {
@@ -168,6 +190,8 @@ class _BomRevisionsScreenState extends State<BomRevisionsScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : snapshot == null
           ? const Center(
               child: Padding(

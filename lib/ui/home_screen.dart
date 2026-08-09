@@ -20,6 +20,7 @@ import 'site_hub_screen.dart';
 import 'sync_scope.dart';
 import 'widgets/refresh_bar.dart';
 import 'theme/app_theme.dart';
+import 'widgets/load_error_view.dart';
 
 /// Entries in the AppBar's overflow menu — Search and Sync stay directly
 /// visible (Sync via [_syncStatusButton], not a menu entry); everything else
@@ -58,6 +59,8 @@ class _HomeScreenState extends State<HomeScreen> {
   /// screen already has content worth keeping on screen, and a reload
   /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
   bool _refreshing = false;
 
   final _searchController = TextEditingController();
@@ -143,13 +146,33 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _load() async {
     if (!_loading) setState(() => _refreshing = true);
-    final sites = await widget.repository.getSites();
-    if (!mounted) return;
-    setState(() {
-      _sites = _visibleSites(sites);
-      _loading = false;
-      _refreshing = false;
-    });
+    try {
+      final sites = await widget.repository.getSites();
+      if (!mounted) return;
+      setState(() {
+        _sites = _visibleSites(sites);
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+        _refreshing = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _refreshing = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   /// Engineer sees only their own assigned surveys (Slice C, now matched by
@@ -1178,6 +1201,8 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
+                : _loadError != null
+                ? LoadErrorView(onRetry: _load, details: _loadError)
                 : _sites.isEmpty
                 ? _EmptyState(role: widget.session.currentRole)
                 : _filteredSites.isEmpty

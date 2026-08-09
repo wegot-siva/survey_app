@@ -5,6 +5,7 @@ import '../models/gateway.dart';
 import '../models/site.dart';
 import 'gateway_form_screen.dart';
 import 'widgets/refresh_bar.dart';
+import 'widgets/load_error_view.dart';
 
 /// Lists a site's gateways with add / edit / delete.
 class GatewaysListScreen extends StatefulWidget {
@@ -34,6 +35,8 @@ class _GatewaysListScreenState extends State<GatewaysListScreen> {
   /// screen already has content worth keeping on screen, and a reload
   /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
   bool _refreshing = false;
 
   @override
@@ -44,13 +47,33 @@ class _GatewaysListScreenState extends State<GatewaysListScreen> {
 
   Future<void> _load() async {
     if (!_loading) setState(() => _refreshing = true);
-    final gateways = await widget.repository.getGateways(widget.site.id);
-    if (!mounted) return;
-    setState(() {
-      _gateways = gateways;
-      _loading = false;
-      _refreshing = false;
-    });
+    try {
+      final gateways = await widget.repository.getGateways(widget.site.id);
+      if (!mounted) return;
+      setState(() {
+        _gateways = gateways;
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+        _refreshing = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _refreshing = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   Future<void> _addOrEdit([Gateway? existing]) async {
@@ -125,6 +148,8 @@ class _GatewaysListScreenState extends State<GatewaysListScreen> {
             ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : _gateways.isEmpty
           ? const Center(
               child: Padding(

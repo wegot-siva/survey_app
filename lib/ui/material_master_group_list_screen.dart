@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/survey_repository.dart';
 import '../models/material_master_item.dart';
 import 'material_master_screen.dart';
+import 'widgets/load_error_view.dart';
 
 /// Material Master's first screen: all seven groups (A–G), each with a live
 /// count of its active (non-deleted) rows. Tapping one pushes
@@ -35,6 +36,8 @@ class _MaterialMasterGroupListScreenState
     extends State<MaterialMasterGroupListScreen> {
   List<MaterialMasterItem> _items = const [];
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
 
   @override
   void initState() {
@@ -48,12 +51,31 @@ class _MaterialMasterGroupListScreenState
   /// than one query per group.
   Future<void> _load() async {
     setState(() => _loading = true);
-    final items = await widget.repository.getMaterialMasterItems();
-    if (!mounted) return;
-    setState(() {
-      _items = items;
-      _loading = false;
-    });
+    try {
+      final items = await widget.repository.getMaterialMasterItems();
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   int _countFor(MaterialGroup group) =>
@@ -83,6 +105,8 @@ class _MaterialMasterGroupListScreenState
       appBar: AppBar(title: const Text('Material Master')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : ListView.separated(
               itemCount: MaterialGroup.values.length,
               separatorBuilder: (_, _) => const Divider(height: 1),

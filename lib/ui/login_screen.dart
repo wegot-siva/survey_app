@@ -68,7 +68,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 Text(
                   'Survey App',
                   textAlign: TextAlign.center,
-                  style: AppTextStyles.title,
+                  style: AppTextStyles.title(context),
                 ),
                 const SizedBox(height: AppSpacing.lg),
                 TextField(

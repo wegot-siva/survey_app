@@ -6,6 +6,7 @@ import '../models/site.dart';
 import '../models/source_point.dart';
 import 'source_point_form_screen.dart';
 import 'widgets/refresh_bar.dart';
+import 'widgets/load_error_view.dart';
 
 /// Lists a site's source points with add / edit / delete.
 class SourcePointsListScreen extends StatefulWidget {
@@ -35,6 +36,8 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
   /// screen already has content worth keeping on screen, and a reload
   /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
   bool _refreshing = false;
 
   @override
@@ -45,13 +48,33 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
 
   Future<void> _load() async {
     if (!_loading) setState(() => _refreshing = true);
-    final points = await widget.repository.getSourcePoints(widget.site.id);
-    if (!mounted) return;
-    setState(() {
-      _points = points;
-      _loading = false;
-      _refreshing = false;
-    });
+    try {
+      final points = await widget.repository.getSourcePoints(widget.site.id);
+      if (!mounted) return;
+      setState(() {
+        _points = points;
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+        _refreshing = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _refreshing = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   Future<void> _addOrEdit([SourcePoint? existing]) async {
@@ -155,6 +178,8 @@ class _SourcePointsListScreenState extends State<SourcePointsListScreen> {
             ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : _points.isEmpty
           ? const Center(
               child: Padding(
@@ -248,8 +273,9 @@ class _IncompleteBadge extends StatelessWidget {
       ),
       child: Text(
         'Incomplete',
-        style: TextStyle(
-          fontSize: 11,
+        // labelSmall is 11/w500 in Material 3 — the same size the badge was
+        // hardcoded to, but it scales with the device's text setting.
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
           fontWeight: FontWeight.w600,
           color: Theme.of(context).colorScheme.onErrorContainer,
         ),

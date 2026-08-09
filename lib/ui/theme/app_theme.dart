@@ -55,21 +55,28 @@ class AppStatusColors {
 }
 
 /// Named text styles for reuse across screens.
+///
+/// Resolved from the ambient [TextTheme] rather than declared with a fixed
+/// `fontSize`, so they follow the device's font-size setting. A hardcoded
+/// size ignores that entirely: an engineer running large system text got
+/// the same 20px heading as everyone else, and any layout built around it
+/// clipped rather than growing. These are functions, not constants, purely
+/// because reading the theme needs a [BuildContext].
+///
+/// The Material 3 roles chosen here match what the old constants specified
+/// almost exactly — titleMedium is 16/w500 and bodyMedium 14/w400 — so
+/// scaling comes for free without redesigning anything.
 class AppTextStyles {
   AppTextStyles._();
 
-  static const TextStyle title = TextStyle(
-    fontSize: 20,
-    fontWeight: FontWeight.w600,
-  );
+  static TextStyle? title(BuildContext context) => Theme.of(context)
+      .textTheme
+      .titleLarge
+      ?.copyWith(fontWeight: FontWeight.w600);
 
-  static const TextStyle subtitle = TextStyle(
-    fontSize: 16,
-    fontWeight: FontWeight.w500,
-  );
+  static TextStyle? subtitle(BuildContext context) =>
+      Theme.of(context).textTheme.titleMedium;
 
-  static const TextStyle label = TextStyle(
-    fontSize: 14,
-    fontWeight: FontWeight.w400,
-  );
+  static TextStyle? label(BuildContext context) =>
+      Theme.of(context).textTheme.bodyMedium;
 }

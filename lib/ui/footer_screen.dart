@@ -11,6 +11,7 @@ import 'photo_markup_screen.dart';
 import 'sync_scope.dart';
 import 'widgets/form_fields.dart';
 import 'widgets/photo_capture_field.dart';
+import 'widgets/load_error_view.dart';
 
 /// The per-site "Footer" form — closing, site-wide details. One per site (like
 /// Client inputs). Surveyor name and survey date are mandatory (see
@@ -52,6 +53,10 @@ class _FooterScreenState extends State<FooterScreen> {
   final List<PhotoDraft> _sitePhotos = [];
 
   bool _loading = true;
+
+  Object? _loadError;
+
+  bool _loadedOnce = false;
   bool _saving = false;
 
   // Mandatory-field errors, set on a failed save attempt and cleared on the
@@ -80,35 +85,54 @@ class _FooterScreenState extends State<FooterScreen> {
   }
 
   Future<void> _load() async {
-    final existing = await widget.repository.getFooter(widget.site.id);
-    final photos = await widget.repository.getPhotos(
-      PhotoOwner.footer,
-      widget.site.id,
-    );
-    if (!mounted) return;
-    setState(() {
-      if (existing != null) {
-        _tds.text = existing.tdsPpm?.toString() ?? '';
-        _tss.text = existing.tssPpm?.toString() ?? '';
-        _tclServiceDetails.text = existing.tclServiceDetails;
-        _generalRemarks.text = existing.generalRemarks;
-        _surveyorName.text = existing.surveyorName;
-        _tclService = existing.tclService;
-        _surveyDate = existing.surveyDate;
-      }
-      for (final p in photos) {
-        if (p.slot == PhotoSlot.siteMedia) {
-          _sitePhotos.add(
-            PhotoDraft(
-              id: p.id,
-              localPath: p.localPath,
-              remotePath: p.remotePath,
-            ),
-          );
+    try {
+      final existing = await widget.repository.getFooter(widget.site.id);
+      final photos = await widget.repository.getPhotos(
+        PhotoOwner.footer,
+        widget.site.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        if (existing != null) {
+          _tds.text = existing.tdsPpm?.toString() ?? '';
+          _tss.text = existing.tssPpm?.toString() ?? '';
+          _tclServiceDetails.text = existing.tclServiceDetails;
+          _generalRemarks.text = existing.generalRemarks;
+          _surveyorName.text = existing.surveyorName;
+          _tclService = existing.tclService;
+          _surveyDate = existing.surveyDate;
         }
+        for (final p in photos) {
+          if (p.slot == PhotoSlot.siteMedia) {
+            _sitePhotos.add(
+              PhotoDraft(
+                id: p.id,
+                localPath: p.localPath,
+                remotePath: p.remotePath,
+              ),
+            );
+          }
+        }
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
       }
-      _loading = false;
-    });
+    }
   }
 
   void _onPhotoAdded(String localPath) {
@@ -296,6 +320,8 @@ class _FooterScreenState extends State<FooterScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [

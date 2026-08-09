@@ -4,6 +4,7 @@ import '../data/survey_repository.dart';
 import '../models/material_master_item.dart';
 import 'material_master_audit_log_screen.dart';
 import 'material_master_form_screen.dart';
+import 'widgets/load_error_view.dart';
 
 /// Entries in the AppBar's overflow menu — Search stays a directly visible
 /// icon; everything else (including the already-destructive-styled Clear
@@ -55,6 +56,8 @@ class MaterialMasterScreen extends StatefulWidget {
 class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
   List<MaterialMasterItem> _items = const [];
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
 
   final _searchController = TextEditingController();
 
@@ -104,12 +107,31 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final items = await widget.repository.getMaterialMasterItems();
-    if (!mounted) return;
-    setState(() {
-      _items = items.where((i) => i.group == widget.group).toList(growable: false);
-      _loading = false;
-    });
+    try {
+      final items = await widget.repository.getMaterialMasterItems();
+      if (!mounted) return;
+      setState(() {
+        _items = items.where((i) => i.group == widget.group).toList(growable: false);
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   Future<void> _addOrEdit([MaterialMasterItem? existing]) async {
@@ -415,6 +437,8 @@ class _MaterialMasterScreenState extends State<MaterialMasterScreen> {
             ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : _items.isEmpty
           ? Center(
               child: Padding(

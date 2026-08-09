@@ -12,6 +12,7 @@ import 'gateways_list_screen.dart';
 import 'inlet_points_list_screen.dart';
 import 'source_points_list_screen.dart';
 import 'theme/app_theme.dart';
+import 'widgets/load_error_view.dart';
 
 /// Completion state for one section row — mirrors [SiteHubScreen]'s
 /// indicator so the review screen reads the same way the engineer's hub does.
@@ -49,6 +50,8 @@ class _ApproverReviewScreenState extends State<ApproverReviewScreen> {
   bool _footerFilled = false;
   bool _bomGenerated = false;
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
   bool _approving = false;
 
   @override
@@ -59,24 +62,43 @@ class _ApproverReviewScreenState extends State<ApproverReviewScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final site = await widget.repository.getSiteById(widget.siteId);
-    final sourcePoints = await widget.repository.getSourcePoints(widget.siteId);
-    final inletPoints = await widget.repository.getInletPoints(widget.siteId);
-    final ductLoras = await widget.repository.getDuctLoras(widget.siteId);
-    final gateways = await widget.repository.getGateways(widget.siteId);
-    final footer = await widget.repository.getFooter(widget.siteId);
-    final bomSnapshot = await widget.repository.getBomSnapshot(widget.siteId);
-    if (!mounted) return;
-    setState(() {
-      _site = site;
-      _sourcePointCount = sourcePoints.length;
-      _inletPointCount = inletPoints.length;
-      _ductLoraCount = ductLoras.length;
-      _gatewayCount = gateways.length;
-      _footerFilled = footer != null;
-      _bomGenerated = bomSnapshot != null;
-      _loading = false;
-    });
+    try {
+      final site = await widget.repository.getSiteById(widget.siteId);
+      final sourcePoints = await widget.repository.getSourcePoints(widget.siteId);
+      final inletPoints = await widget.repository.getInletPoints(widget.siteId);
+      final ductLoras = await widget.repository.getDuctLoras(widget.siteId);
+      final gateways = await widget.repository.getGateways(widget.siteId);
+      final footer = await widget.repository.getFooter(widget.siteId);
+      final bomSnapshot = await widget.repository.getBomSnapshot(widget.siteId);
+      if (!mounted) return;
+      setState(() {
+        _site = site;
+        _sourcePointCount = sourcePoints.length;
+        _inletPointCount = inletPoints.length;
+        _ductLoraCount = ductLoras.length;
+        _gatewayCount = gateways.length;
+        _footerFilled = footer != null;
+        _bomGenerated = bomSnapshot != null;
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   /// Status for an open-ended count section: complete once [count] reaches
@@ -224,6 +246,8 @@ class _ApproverReviewScreenState extends State<ApproverReviewScreen> {
       appBar: AppBar(title: Text(site?.name ?? 'Review survey')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : site == null
           ? const Center(child: Text('Site not found.'))
           : ListView(

@@ -5,6 +5,7 @@ import '../models/duct_lora.dart';
 import '../models/site.dart';
 import 'duct_lora_form_screen.dart';
 import 'widgets/refresh_bar.dart';
+import 'widgets/load_error_view.dart';
 
 /// Lists a site's Duct LoRa units with add / edit / delete.
 class DuctLorasListScreen extends StatefulWidget {
@@ -35,6 +36,8 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
   /// screen already has content worth keeping on screen, and a reload
   /// shows [RefreshBar] instead of replacing it. See [_load].
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
   bool _refreshing = false;
 
   @override
@@ -45,23 +48,43 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
 
   Future<void> _load() async {
     if (!_loading) setState(() => _refreshing = true);
-    final units = await widget.repository.getDuctLoras(widget.site.id);
-    // Series options come from the Series values used on the site's inlets.
-    final inlets = await widget.repository.getInletPoints(widget.site.id);
-    final series =
-        inlets
-            .map((i) => i.series.trim())
-            .where((s) => s.isNotEmpty)
-            .toSet()
-            .toList(growable: false)
-          ..sort();
-    if (!mounted) return;
-    setState(() {
-      _units = units;
-      _availableSeries = series;
-      _loading = false;
-      _refreshing = false;
-    });
+    try {
+      final units = await widget.repository.getDuctLoras(widget.site.id);
+      // Series options come from the Series values used on the site's inlets.
+      final inlets = await widget.repository.getInletPoints(widget.site.id);
+      final series =
+          inlets
+              .map((i) => i.series.trim())
+              .where((s) => s.isNotEmpty)
+              .toSet()
+              .toList(growable: false)
+            ..sort();
+      if (!mounted) return;
+      setState(() {
+        _units = units;
+        _availableSeries = series;
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+        _refreshing = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _refreshing = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   Future<void> _addOrEdit([DuctLora? existing]) async {
@@ -135,6 +158,8 @@ class _DuctLorasListScreenState extends State<DuctLorasListScreen> {
             ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : _units.isEmpty
           ? const Center(
               child: Padding(

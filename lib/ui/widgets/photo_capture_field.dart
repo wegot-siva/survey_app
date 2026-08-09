@@ -296,16 +296,24 @@ class _PendingThumb extends StatelessWidget {
       width: 96,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       alignment: Alignment.center,
-      child: const Column(
+      child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          SizedBox(
+          const SizedBox(
             height: 18,
             width: 18,
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
-          SizedBox(height: 6),
-          Text('Downloading', style: TextStyle(fontSize: 10)),
+          const SizedBox(height: 6),
+          // Scales with the device text setting instead of a fixed 10px.
+          // The thumbnail is a fixed 96px box, so the label is also clipped
+          // rather than overflowing if it can't fit at very large sizes.
+          Text(
+            'Downloading',
+            style: Theme.of(context).textTheme.labelSmall,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ],
       ),
     );

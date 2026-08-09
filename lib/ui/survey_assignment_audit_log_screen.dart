@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/survey_repository.dart';
 import '../models/survey_assignment_audit_entry.dart';
+import 'widgets/load_error_view.dart';
 
 /// Read-only reassignment history for one survey — reached from the Sales
 /// survey screen (Site Hub).
@@ -26,6 +27,8 @@ class _SurveyAssignmentAuditLogScreenState
     extends State<SurveyAssignmentAuditLogScreen> {
   List<SurveyAssignmentAuditEntry> _entries = const [];
   bool _loading = true;
+  Object? _loadError;
+  bool _loadedOnce = false;
 
   @override
   void initState() {
@@ -35,14 +38,33 @@ class _SurveyAssignmentAuditLogScreenState
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final entries = await widget.repository.getSurveyAssignmentAuditLog(
-      widget.siteId,
-    );
-    if (!mounted) return;
-    setState(() {
-      _entries = entries;
-      _loading = false;
-    });
+    try {
+      final entries = await widget.repository.getSurveyAssignmentAuditLog(
+        widget.siteId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _entries = entries;
+        _loading = false;
+        _loadedOnce = true;
+        _loadError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      // A failed refresh keeps whatever is already on screen — only a
+      // first load, which has nothing to fall back to, hands over to
+      // LoadErrorView.
+      final hadContent = _loadedOnce;
+      setState(() {
+        _loading = false;
+        _loadError = hadContent ? null : error;
+      });
+      if (hadContent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Couldn't refresh: $error")),
+        );
+      }
+    }
   }
 
   static String _formatTimestamp(DateTime dt) {
@@ -57,6 +79,8 @@ class _SurveyAssignmentAuditLogScreenState
       appBar: AppBar(title: Text('Reassignment history — ${widget.siteName}')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? LoadErrorView(onRetry: _load, details: _loadError)
           : _entries.isEmpty
           ? const Center(
               child: Padding(
