@@ -462,7 +462,7 @@ class SyncService {
           final ok = await pushRow(
             'blocks/$id (delete)',
             () async {
-              await _remote.deleteBlock(id);
+              await _remote.deleteBlock(id, siteId: site.id);
               await _repository.hardDeleteBlock(id);
             },
             onPermissionDenied: () => _repository.markBlockSyncBlocked(id),
@@ -505,7 +505,7 @@ class SyncService {
           site.id,
         )) {
           final ok = await pushRow('source_points/$id (delete)', () async {
-            await _remote.deleteSourcePoint(id);
+            await _remote.deleteSourcePoint(id, siteId: site.id);
             await _repository.hardDeleteSourcePoint(id);
           });
           if (ok) sourcePoints++;
@@ -525,7 +525,7 @@ class SyncService {
           site.id,
         )) {
           final ok = await pushRow('inlet_points/$id (delete)', () async {
-            await _remote.deleteInletPoint(id);
+            await _remote.deleteInletPoint(id, siteId: site.id);
             await _repository.hardDeleteInletPoint(id);
           });
           if (ok) inletPoints++;
@@ -545,7 +545,7 @@ class SyncService {
           site.id,
         )) {
           final ok = await pushRow('duct_loras/$id (delete)', () async {
-            await _remote.deleteDuctLora(id);
+            await _remote.deleteDuctLora(id, siteId: site.id);
             await _repository.hardDeleteDuctLora(id);
           });
           if (ok) ductLoras++;
@@ -565,7 +565,7 @@ class SyncService {
           site.id,
         )) {
           final ok = await pushRow('gateways/$id (delete)', () async {
-            await _remote.deleteGateway(id);
+            await _remote.deleteGateway(id, siteId: site.id);
             await _repository.hardDeleteGateway(id);
           });
           if (ok) gateways++;
@@ -598,7 +598,7 @@ class SyncService {
           final ok = await pushRow(
             'bom_manual_entries/$id (delete)',
             () async {
-              await _remote.deleteBomManualEntry(id);
+              await _remote.deleteBomManualEntry(id, siteId: site.id);
               await _repository.hardDeleteBomManualEntry(id);
             },
           );
@@ -748,7 +748,7 @@ class SyncService {
       // the pull).
       for (final photo in await _repository.getPendingDeletePhotos()) {
         final ok = await pushRow('photos/${photo.id} (delete)', () async {
-          await _remote.deletePhoto(photo.id);
+          await _remote.deletePhoto(photo.id, siteId: photo.siteId);
           await _repository.hardDeletePhoto(photo.id);
           final localPath = photo.localPath;
           if (localPath != null && localPath.isNotEmpty) {

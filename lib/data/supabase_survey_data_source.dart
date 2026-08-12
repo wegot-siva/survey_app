@@ -25,6 +25,68 @@ import '../models/source_point.dart';
 import '../models/survey_options.dart';
 import '../models/survey_photo.dart';
 
+/// Whether a delete that PostgREST answered with zero affected rows was
+/// refused by row-level security (true) or simply had nothing to delete
+/// (false).
+///
+/// Separated from the request code so the rule can be tested directly: it is
+/// a three-input decision whose two branches are INVERTED, which is exactly
+/// the kind of thing that reads as correct and behaves as backwards.
+///
+/// Zero rows is ambiguous — the row may never have reached Supabase, or RLS
+/// may have refused the write — and the cases need opposite handling, so the
+/// probe differs by how the table's SELECT policy is scoped:
+///
+///   * [siteScoped] tables (every survey table): policies resolve through
+///     `can_access_site(site_id)`, so the probe asks whether the row's SITE
+///     is still visible. Visible means we were entitled to write it, so zero
+///     rows means the row genuinely is not there — an engineer adding a
+///     point and removing it again before the first sync, which is ordinary
+///     and must succeed. NOT visible means access was lost and the write was
+///     refused.
+///
+///   * global tables (material_master_items): SELECT is universal — every
+///     role reads the whole active catalog — so the row itself is the probe,
+///     and the sense flips. Still visible means it exists and our delete was
+///     refused; absent means it was already gone.
+bool deleteWasRefused({
+  required int rowsAffected,
+  required bool probeFound,
+  required bool siteScoped,
+}) {
+  if (rowsAffected > 0) return false;
+  return siteScoped ? !probeFound : probeFound;
+}
+
+/// Thrown when a delete/tombstone push provably did NOT reach Supabase
+/// because row-level security refused it.
+///
+/// Exists because PostgREST reports an RLS-refused UPDATE or DELETE as
+/// **200 with zero rows**, not as an error — indistinguishable from a
+/// successful write unless the affected rows are counted. Treating that as
+/// success is what let [SyncService.pushAll] hard-delete a local tombstone
+/// whose remote row was still live, so the next pull reinserted the row and
+/// the user's deletion silently undid itself.
+///
+/// Deliberately a distinct type rather than a bare [StateError]: pushAll's
+/// per-row isolation catches it, records the row as a retryable failure and
+/// leaves the local tombstone in place, so the delete is attempted again on
+/// the next sync instead of being lost.
+class DeleteRefusedException implements Exception {
+  DeleteRefusedException(this.table, this.id, {this.siteId});
+
+  final String table;
+  final String id;
+  final String? siteId;
+
+  @override
+  String toString() =>
+      'DeleteRefusedException: the delete of $table/$id was refused by '
+      'row-level security (0 rows affected)'
+      '${siteId == null ? '' : ' — site $siteId is no longer accessible to '
+          'this account'}. The local tombstone was kept for retry.';
+}
+
 /// Remote (Supabase) reads/writes for survey data.
 ///
 /// Push-only tables (bom_snapshots/bom_revisions and their line tables,
@@ -113,12 +175,8 @@ class SupabaseSurveyDataSource {
   /// propagation to other devices exactly the way absence-based deletion
   /// already proved unsafe. Idempotent: re-tombstoning an already-deleted
   /// row, or one that was somehow never pushed, is a harmless no-op update.
-  Future<void> deleteBlock(String id) async {
-    await _client
-        .from('blocks')
-        .update({'deleted_at': DateTime.now().toUtc().toIso8601String()})
-        .eq('id', id);
-  }
+  Future<void> deleteBlock(String id, {required String siteId}) =>
+      _tombstone('blocks', id, siteId: siteId);
 
   /// Upserts the Client inputs form for [siteId] (idempotent). The parent
   /// site must already have been pushed (FK).
@@ -140,8 +198,9 @@ class SupabaseSurveyDataSource {
   /// reconciliation, so the delete would propagate upward and stop there
   /// while every other device kept the row forever. Cascades to the photos
   /// it owns — see [_tombstoneWithPhotos].
-  Future<void> deleteSourcePoint(String id) =>
-      _tombstoneWithPhotos('source_points', id, PhotoOwner.sourcePoint);
+  Future<void> deleteSourcePoint(String id, {required String siteId}) =>
+      _tombstoneWithPhotos('source_points', id, PhotoOwner.sourcePoint,
+          siteId: siteId);
 
   /// Upserts an inlet point by its id (idempotent). The parent site must
   /// already have been pushed (FK).
@@ -151,8 +210,9 @@ class SupabaseSurveyDataSource {
 
   /// Marks an inlet point deleted by id — a `deleted_at` tombstone, not a
   /// real `DELETE`. See [deleteSourcePoint].
-  Future<void> deleteInletPoint(String id) =>
-      _tombstoneWithPhotos('inlet_points', id, PhotoOwner.inletPoint);
+  Future<void> deleteInletPoint(String id, {required String siteId}) =>
+      _tombstoneWithPhotos('inlet_points', id, PhotoOwner.inletPoint,
+          siteId: siteId);
 
   /// Upserts a Duct LoRa unit by its id (idempotent). Parent site must exist.
   Future<void> pushDuctLora(DuctLora d) async {
@@ -161,8 +221,9 @@ class SupabaseSurveyDataSource {
 
   /// Marks a Duct LoRa unit deleted by id — a `deleted_at` tombstone, not a
   /// real `DELETE`. See [deleteSourcePoint].
-  Future<void> deleteDuctLora(String id) =>
-      _tombstoneWithPhotos('duct_loras', id, PhotoOwner.ductLora);
+  Future<void> deleteDuctLora(String id, {required String siteId}) =>
+      _tombstoneWithPhotos('duct_loras', id, PhotoOwner.ductLora,
+          siteId: siteId);
 
   /// Upserts a gateway by its id (idempotent). Parent site must exist.
   Future<void> pushGateway(Gateway g) async {
@@ -171,8 +232,9 @@ class SupabaseSurveyDataSource {
 
   /// Marks a gateway deleted by id — a `deleted_at` tombstone, not a real
   /// `DELETE`. See [deleteSourcePoint].
-  Future<void> deleteGateway(String id) =>
-      _tombstoneWithPhotos('gateways', id, PhotoOwner.gateway);
+  Future<void> deleteGateway(String id, {required String siteId}) =>
+      _tombstoneWithPhotos('gateways', id, PhotoOwner.gateway,
+          siteId: siteId);
 
   /// Tombstones row [id] of [table], then every photos row it owns via the
   /// polymorphic ([ownerType], [ownerId]) link — one shared timestamp, so a
@@ -194,10 +256,15 @@ class SupabaseSurveyDataSource {
   Future<void> _tombstoneWithPhotos(
     String table,
     String id,
-    String ownerType,
-  ) async {
+    String ownerType, {
+    required String siteId,
+  }) async {
     final deletedAt = DateTime.now().toUtc().toIso8601String();
-    await _tombstone(table, id, deletedAt);
+    // Owner first, and it must be proven to have applied — see [_tombstone].
+    await _tombstone(table, id, siteId: siteId, deletedAt: deletedAt);
+    // The photo cascade is deliberately NOT row-count-checked: an owner with
+    // no photos legitimately affects zero rows, and the owner's tombstone
+    // above already proved this account is entitled to write this site.
     await _client
         .from('photos')
         .update({'deleted_at': deletedAt})
@@ -207,11 +274,75 @@ class SupabaseSurveyDataSource {
 
   /// Tombstones row [id] of [table] — the no-photos half of
   /// [_tombstoneWithPhotos], for a table that owns no photos at all.
-  Future<void> _tombstone(String table, String id, [String? deletedAt]) async {
-    await _client
+  /// Writes a `deleted_at` tombstone and PROVES it landed.
+  ///
+  /// The `.select()` makes this a `return=representation` request, so the
+  /// affected rows come back and can be counted. That check is the entire
+  /// point: PostgREST answers an UPDATE that RLS refused with **200 and zero
+  /// rows**, not an error. Without counting, a refused delete looked
+  /// identical to a successful one — [SyncService.pushAll] then hard-deleted
+  /// the local tombstone, destroying the only record that a delete was ever
+  /// wanted, while the remote row stayed live and the next pull reinserted
+  /// it. Verified against this project's Supabase: tombstoning a row on a
+  /// site the account cannot access returns `status=200, rows=0` and leaves
+  /// `deleted_at` null.
+  ///
+  /// Zero rows is genuinely ambiguous, and the two cases need opposite
+  /// handling, which is why [_assertRowIsAbsentNotRefused] exists rather
+  /// than a blanket throw:
+  ///   * the row never reached Supabase at all — an engineer adding a point
+  ///     and removing it again before the first sync, which is ordinary and
+  ///     must succeed, or the local tombstone would retry forever and report
+  ///     a permanent sync failure over a row nobody can see;
+  ///   * RLS refused the write — the bug above, which must fail loudly.
+  Future<void> _tombstone(
+    String table,
+    String id, {
+    required String? siteId,
+    String? deletedAt,
+  }) async {
+    final applied = await _client
         .from(table)
-        .update({'deleted_at': deletedAt ?? DateTime.now().toUtc().toIso8601String()})
-        .eq('id', id);
+        .update({
+          'deleted_at': deletedAt ?? DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', id)
+        .select('id');
+    if (applied.isNotEmpty) return;
+    await _assertRowIsAbsentNotRefused(table, id, siteId);
+  }
+
+  /// Decides whether a zero-row delete meant "already gone" or "refused",
+  /// and throws [DeleteRefusedException] for the latter.
+  ///
+  /// The discriminator is the SELECT policy that governs the table, because
+  /// RLS here is site-scoped: every child table's policies resolve through
+  /// `can_access_site(site_id)`, so losing access to a row means losing
+  /// access to its site. Asking whether the SITE is still visible therefore
+  /// answers whether we were entitled to write the row — measured on live
+  /// Supabase: an engineer sees 1 row for a site they hold and 0 for one
+  /// reassigned away.
+  ///
+  /// material_master_items has no site and its SELECT policy is universal
+  /// (every role reads the whole active catalog), so there the row itself is
+  /// the discriminator: still visible means the write was refused, absent
+  /// means it was already gone.
+  Future<void> _assertRowIsAbsentNotRefused(
+    String table,
+    String id,
+    String? siteId,
+  ) async {
+    final siteScoped = siteId != null;
+    final probeFound = siteScoped
+        ? (await _client.from('sites').select('id').eq('id', siteId)).isNotEmpty
+        : (await _client.from(table).select('id').eq('id', id)).isNotEmpty;
+    if (deleteWasRefused(
+      rowsAffected: 0,
+      probeFound: probeFound,
+      siteScoped: siteScoped,
+    )) {
+      throw DeleteRefusedException(table, id, siteId: siteId);
+    }
   }
 
   /// Upserts the per-site footer (idempotent, keyed by site_id). Parent site
@@ -233,7 +364,15 @@ class SupabaseSurveyDataSource {
   /// [SurveyRepository.getPendingDeleteMaterialMasterItemIds] confirms the
   /// row is tombstoned locally.
   Future<void> deleteMaterialMasterItem(String id) async {
-    await _client.from('material_master_items').delete().eq('id', id);
+    // A real DELETE (this table alone grants it), but verified the same way
+    // as every tombstone: PostgREST reports an RLS-refused DELETE as 200
+    // with zero rows, so an unverified call let a refused delete look like a
+    // successful one. siteId is null because the catalog is global — see
+    // _assertRowIsAbsentNotRefused for the discriminator that applies here.
+    final deleted =
+        await _client.from('material_master_items').delete().eq('id', id).select('id');
+    if (deleted.isNotEmpty) return;
+    await _assertRowIsAbsentNotRefused('material_master_items', id, null);
   }
 
   /// Fetches every Material Master row from Supabase — the pull half of
@@ -482,7 +621,8 @@ class SupabaseSurveyDataSource {
   /// before it ever uploaded, is a harmless no-op affecting zero rows.
   ///
   /// The Storage object is deliberately left in place; see [downloadPhoto].
-  Future<void> deletePhoto(String id) => _tombstone('photos', id);
+  Future<void> deletePhoto(String id, {required String? siteId}) =>
+      _tombstone('photos', id, siteId: siteId);
 
   /// Every photo metadata row this account can see (RLS scopes it by
   /// can_access_site(site_id) — Slice 2e). Includes tombstoned rows: the
@@ -519,8 +659,8 @@ class SupabaseSurveyDataSource {
   /// .deleteBomManualEntry) touches only its own table — where the Group 2
   /// deletes each additionally delete their own photos. Cascading here would
   /// mean inventing an ownership relationship the app doesn't have.
-  Future<void> deleteBomManualEntry(String id) =>
-      _tombstone('bom_manual_entries', id);
+  Future<void> deleteBomManualEntry(String id, {required String siteId}) =>
+      _tombstone('bom_manual_entries', id, siteId: siteId);
 
   /// Upserts a BoM snapshot by its id (idempotent). The parent site must
   /// already have been pushed (FK).
