@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/block.dart';
@@ -2466,9 +2467,15 @@ Map<String, Object?> _materialMasterItemToRow(MaterialMasterItem m) {
 MaterialMasterItem _materialMasterItemFromRow(Map<String, Object?> r) {
   return MaterialMasterItem(
     id: r['id']! as String,
-    group:
-        _enumByName(MaterialGroup.values, r['group_code'] as String?) ??
-        MaterialGroup.a,
+    // Same rule as the remote parser: an unrecognised code must never
+    // become Group A, the only auto-calculated group. This is the local
+    // read path, reached on every catalog load, so a value that got past
+    // the pull would otherwise re-enter Group A here anyway.
+    group: _localGroupOrUnknown(
+      materialGroupFromCode(r['group_code'] as String?),
+      r['group_code'] as String?,
+      r['id'] as String?,
+    ),
     materialName: (r['material_name'] as String?) ?? '',
     sku: (r['sku'] as String?) ?? '',
     itemLabel: (r['item_label'] as String?) ?? '',
@@ -2614,10 +2621,30 @@ BomManualEntry _bomManualEntryFromRow(Map<String, Object?> r) {
 /// snapshot line can be either an auto-computed line (A/B/C/F) or a manual
 /// entry (D/E/G), unlike bom_manual_entries rows which are always D/E/G.
 MaterialGroup _materialGroupFromAnyCode(String? code) {
-  for (final group in MaterialGroup.values) {
-    if (group.code == code) return group;
-  }
-  return MaterialGroup.a;
+  final resolved = materialGroupFromCode(code);
+  if (resolved != null) return resolved;
+  // Never Group A — see kUnknownMaterialGroupFallback. A snapshot line is
+  // already-finalised BoM history, so a bad code here cannot change a live
+  // calculation, but filing it under the auto group would still misreport
+  // what was quoted.
+  return _localGroupOrUnknown(null, code, null);
+}
+
+/// Shared unknown-group handling for the local read paths, kept identical to
+/// the remote parser's so the two cannot drift.
+MaterialGroup _localGroupOrUnknown(
+  MaterialGroup? resolved,
+  String? code,
+  String? rowId,
+) {
+  if (resolved != null) return resolved;
+  debugPrint(
+    'material_master(local): unrecognised group_code '
+    '${code == null ? '<null>' : '"$code"'} on row ${rowId ?? '<unknown id>'} '
+    '— filed under ${kUnknownMaterialGroupFallback.code} instead of Group A '
+    'so it cannot affect automatic BoM quantities.',
+  );
+  return kUnknownMaterialGroupFallback;
 }
 
 Map<String, Object?> _bomSnapshotToRow(BomSnapshot s) {

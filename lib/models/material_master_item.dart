@@ -17,6 +17,50 @@ enum MaterialGroup {
   final String label;
 }
 
+/// Resolves a stored or remote `group_code` to its [MaterialGroup], or null
+/// if it is not one this app knows.
+///
+/// Accepts either form, case-insensitively, because both are in circulation:
+/// the lowercase enum name ('c') is what this app writes, on both the local
+/// row and the pushed row, while the uppercase display letter ('C') is what
+/// the bulk SQL plumbing-catalog import used for every row it created.
+///
+/// Shared by the remote pull and the local read so the two cannot disagree
+/// about what a code means. They previously did: the local read matched only
+/// the lowercase name, so an uppercase code reaching local storage would
+/// have failed to resolve there while resolving correctly on the pull.
+///
+/// Returns null rather than guessing. No caller may substitute
+/// [MaterialGroup.a] — see [kUnknownMaterialGroupFallback].
+MaterialGroup? materialGroupFromCode(String? code) {
+  if (code == null) return null;
+  final normalized = code.toLowerCase();
+  for (final group in MaterialGroup.values) {
+    if (group.name == normalized || group.code.toLowerCase() == normalized) {
+      return group;
+    }
+  }
+  return null;
+}
+
+/// Where a material whose `group_code` this app does not recognise is put.
+///
+/// The one property that matters is that it is NOT [MaterialGroup.a].
+/// Group A is the only automatically-calculated group: the BoM engine builds
+/// its candidate set from every Group A material and resolves each survey
+/// point's `materialId` against it, so a row that lands in A can contribute
+/// real quantities to a customer-facing BoM. Every other group is manual —
+/// an unrecognised row there produces a visible line rather than a wrong
+/// number, and any point referencing it is reported as unresolved, which is
+/// exactly the loud signal wanted.
+///
+/// G ("Labour") is otherwise arbitrary, and mislabelling is a real if minor
+/// cost. The honest fix is a dedicated `unknown` member, but MaterialGroup
+/// is enumerated in 15 places including two user-facing dropdowns
+/// (`items: MaterialGroup.values`), so adding one would put "unknown" in
+/// front of users as a selectable group. Deliberately deferred.
+const MaterialGroup kUnknownMaterialGroupFallback = MaterialGroup.g;
+
 /// How a material row's quantity is computed by the BoM engine.
 enum MaterialBehaviorType {
   /// Quantity = (matching sensor count) × [MaterialMasterItem.quantityPerSensor].

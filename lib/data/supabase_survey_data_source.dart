@@ -1,6 +1,6 @@
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -957,7 +957,10 @@ Map<String, Object?> _materialMasterItemToRemoteRow(MaterialMasterItem m) {
 MaterialMasterItem _materialMasterItemFromRemoteRow(Map<String, dynamic> r) {
   return MaterialMasterItem(
     id: r['id'] as String,
-    group: _materialGroupFromRemoteCode(r['group_code'] as String?),
+    group: _materialGroupFromRemoteCode(
+      r['group_code'] as String?,
+      rowId: r['id'] as String?,
+    ),
     materialName: (r['material_name'] as String?) ?? '',
     sku: (r['sku'] as String?) ?? '',
     itemLabel: (r['item_label'] as String?) ?? '',
@@ -1001,17 +1004,34 @@ T? _enumByName<T extends Enum>(List<T> values, String? name) {
 /// e.g. 'C', for every row. `_enumByName`'s exact, case-sensitive match
 /// against `.name` silently missed all of those and fell back to A, so
 /// this accepts either form, matched case-insensitively, before falling
-/// back. Falls back to A only when truly unrecognized — same default
-/// [_enumByName] already used here.
-MaterialGroup _materialGroupFromRemoteCode(String? code) {
-  if (code == null) return MaterialGroup.a;
-  final normalized = code.toLowerCase();
-  for (final group in MaterialGroup.values) {
-    if (group.name == normalized || group.code.toLowerCase() == normalized) {
-      return group;
-    }
-  }
-  return MaterialGroup.a;
+/// back.
+///
+/// A value this app cannot resolve does NOT become Group A. It used to,
+/// which meant a typo or a newly-introduced group code silently joined the
+/// only automatically-calculated group and could put wrong quantities on a
+/// customer-facing BoM with nothing logged. It now lands in
+/// [kUnknownMaterialGroupFallback] and says so loudly, naming the offending
+/// value and the row it came from.
+///
+/// The row is deliberately KEPT rather than skipped. Dropping it here would
+/// remove it from the list handed to
+/// [SurveyRepository.upsertMaterialMasterItemsFromRemote], whose reconcile
+/// treats absence from a complete fetch as "deleted remotely" and hard
+/// deletes the local row — firing source_points.material_id's
+/// ON DELETE SET NULL and wiping the sensor selection off every point that
+/// referenced it. That is the exact mechanism of the Group A data-loss bug
+/// (commit 1e648ca); skipping a row here would reintroduce it.
+MaterialGroup _materialGroupFromRemoteCode(String? code, {String? rowId}) {
+  final resolved = materialGroupFromCode(code);
+  if (resolved != null) return resolved;
+  debugPrint(
+    'material_master: unrecognised group_code ${code == null ? '<null>' : '"$code"'} '
+    'on row ${rowId ?? '<unknown id>'} — filed under '
+    '${kUnknownMaterialGroupFallback.code} '
+    '(${kUnknownMaterialGroupFallback.label}) instead of Group A so it '
+    'cannot affect automatic BoM quantities. Fix the catalog row.',
+  );
+  return kUnknownMaterialGroupFallback;
 }
 
 Map<String, Object?> _materialMasterAuditEntryToRemoteRow(
