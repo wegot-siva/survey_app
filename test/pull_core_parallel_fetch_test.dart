@@ -145,8 +145,14 @@ class _RecordingRepository extends InMemorySurveyRepository {
   }
 
   @override
-  Future<void> upsertSitesFromRemote(List<Map<String, dynamic>> rows) =>
-      _record('sites');
+  Future<List<String>> upsertSitesFromRemote(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    await _record('sites');
+    // Nothing preserved: these tests are about ordering, not the
+    // reassignment-cascade guard (see reassignment_cascade_test.dart).
+    return const [];
+  }
   @override
   Future<void> upsertBlocksFromRemote(List<Map<String, dynamic>> rows) =>
       _record('blocks');

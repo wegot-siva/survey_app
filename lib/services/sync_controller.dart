@@ -51,6 +51,12 @@ class SyncOutcome {
   /// Standing rows this account can never push — see [SyncResult.syncBlocked].
   int get blocked => push.syncBlocked;
 
+  /// Sites kept despite dropping out of scope, because they still hold
+  /// unsynced work — see [SyncResult.preservedSites]. Named, not counted:
+  /// the whole point is telling the engineer WHICH site holds work they are
+  /// about to lose access to.
+  List<String> get preservedSites => corePull.preservedSites;
+
   int get photos => push.photos;
 
   /// Material Master rows this run pulled down, or 0 if that pull failed.
@@ -149,6 +155,15 @@ class SyncController extends ChangeNotifier {
   /// Set alongside [status] when it's [SyncStatus.partial] — the count the
   /// AppBar's "needs attention" label shows.
   int get blockedCount => _blockedCount;
+
+  List<String> _preservedSites = const [];
+
+  /// Sites the last pull kept because they still hold unsynced work despite
+  /// no longer being in this account's scope. Also drives
+  /// [SyncStatus.partial] — losing access to a site you have unpushed work
+  /// on is precisely a "needs attention" condition, so it reuses that tier
+  /// rather than inventing a fourth one.
+  List<String> get preservedSites => _preservedSites;
 
   /// Reverts [status] to [SyncStatus.idle] [successRevert] after a fully
   /// clean success, restoring the normal Sync button.
@@ -355,9 +370,15 @@ class SyncController extends ChangeNotifier {
     // touches, since pushFailures aggregates them all.
     final fullySynced = syncFullySucceeded(push, corePull);
     final blocked = push.syncBlocked;
+    // A site kept back because it still holds unsynced work is a standing
+    // condition the user must be told about, exactly like a blocked row —
+    // so it downgrades a clean run to "needs attention" rather than letting
+    // a green "Synced" imply nothing is wrong.
+    _preservedSites = corePull.preservedSites;
+    final preserved = _preservedSites.isNotEmpty;
 
     final SyncStatus outcomeStatus;
-    if (fullySynced && blocked == 0) {
+    if (fullySynced && blocked == 0 && !preserved) {
       // Clean success: everything pushable pushed, nothing standing needs
       // attention. The only tier that auto-fades back to idle.
       outcomeStatus = SyncStatus.success;

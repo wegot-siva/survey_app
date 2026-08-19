@@ -499,16 +499,26 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       case SyncStatus.partial:
         final blocked = outcome.blocked;
+        final preserved = outcome.preservedSites;
+        // A site kept back because it holds work the account can no longer
+        // push is named outright, not folded into a count — "1 item needs
+        // attention" would tell an engineer nothing about which site they
+        // are about to lose a day's work on.
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Synced, but $blocked item${blocked == 1 ? '' : 's'} '
-              '${blocked == 1 ? 'needs' : 'need'} attention.',
+              preserved.isNotEmpty
+                  ? 'Synced, but unsynced work remains on '
+                      '${preserved.length == 1 ? preserved.first : '${preserved.length} sites'} '
+                      'you no longer have access to.'
+                  : 'Synced, but $blocked item${blocked == 1 ? '' : 's'} '
+                      '${blocked == 1 ? 'needs' : 'need'} attention.',
             ),
-            duration: const Duration(seconds: 6),
+            duration: const Duration(seconds: 8),
             action: SnackBarAction(
               label: 'Details',
-              onPressed: () => _showSyncNeedsAttentionDialog(blocked),
+              onPressed: () =>
+                  _showSyncNeedsAttentionDialog(blocked, preserved),
             ),
           ),
         );
@@ -569,16 +579,52 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Explains a [_SyncStatus.partial] result — a standing set of rows this
   /// account can never push, distinct from a retryable failure (see
   /// [_syncNow]'s partial branch).
-  Future<void> _showSyncNeedsAttentionDialog(int blocked) async {
+  Future<void> _showSyncNeedsAttentionDialog(
+    int blocked, [
+    List<String> preservedSites = const [],
+  ]) async {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Needs attention'),
-        content: Text(
-          '$blocked item${blocked == 1 ? '' : 's'} on this device '
-          "can't sync with your account's permissions — usually because "
-          'they belong to a site or record you no longer have access to. '
-          "Ask your admin to check if this doesn't look right.",
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Named sites first and in full: this is unpushed field work on a
+            // site that has been reassigned away, and the engineer is the
+            // only person who knows what is in it. The data is kept on the
+            // device deliberately rather than deleted, but it can no longer
+            // be pushed — RLS refuses it — so the only useful action is to
+            // tell someone before the device is wiped or reassigned again.
+            if (preservedSites.isNotEmpty) ...[
+              Text(
+                preservedSites.length == 1
+                    ? 'Unsynced work exists for "${preservedSites.first}", '
+                        'which is no longer assigned to you.'
+                    : 'Unsynced work exists for these sites, which are no '
+                        'longer assigned to you:',
+              ),
+              if (preservedSites.length > 1) ...[
+                const SizedBox(height: 8),
+                for (final name in preservedSites) Text('  •  $name'),
+              ],
+              const SizedBox(height: 8),
+              const Text(
+                'It has been kept on this device so nothing is lost, but it '
+                'can no longer be uploaded. Contact your manager before '
+                'clearing the app or handing the device over.',
+              ),
+              if (blocked > 0) const SizedBox(height: 12),
+            ],
+            if (blocked > 0)
+              Text(
+                '$blocked item${blocked == 1 ? '' : 's'} on this device '
+                "can't sync with your account's permissions — usually because "
+                'they belong to a site or record you no longer have access to. '
+                "Ask your admin to check if this doesn't look right.",
+              ),
+          ],
         ),
         actions: [
           TextButton(
@@ -724,13 +770,18 @@ class _HomeScreenState extends State<HomeScreen> {
             // implying the run failed. Tapping still retries; retrying can't
             // fix the blocked rows themselves, but re-running is harmless and
             // may pick up anything new since.
+            // Blocked rows and preserved sites both land in this tier, and a
+            // run can carry either or both. Counting only blocked rows would
+            // render "0 need attention" for a run whose sole issue is a site
+            // kept back with unsynced work.
             final blocked = controller.blockedCount;
+            final needsAttention = blocked + controller.preservedSites.length;
             return TextButton.icon(
               onPressed: _syncNow,
               icon: Icon(Icons.cloud_done, color: AppStatusColors.partial),
               label: Text(
-                '${_lastSyncedLabel(controller.lastSyncedAt)} — $blocked '
-                '${blocked == 1 ? 'needs' : 'need'} attention',
+                '${_lastSyncedLabel(controller.lastSyncedAt)} — $needsAttention '
+                '${needsAttention == 1 ? 'needs' : 'need'} attention',
                 style: const TextStyle(color: AppStatusColors.partial),
               ),
             );

@@ -31,6 +31,8 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:survey_app/data/sqflite_survey_repository.dart';
 import 'package:survey_app/services/id_service.dart';
 
+import 'support/site_cascade_schema.dart';
+
 const _childTables = ['source_points', 'inlet_points', 'duct_loras', 'gateways'];
 
 void main() {
@@ -55,26 +57,9 @@ void main() {
         dirty INTEGER NOT NULL DEFAULT 1, sync_blocked INTEGER NOT NULL DEFAULT 0
       )
     ''');
-    for (final t in _childTables) {
-      await db.execute('''
-        CREATE TABLE $t (
-          id TEXT PRIMARY KEY, site_id TEXT NOT NULL,
-          dirty INTEGER NOT NULL DEFAULT 1,
-          pending_delete INTEGER NOT NULL DEFAULT 0,
-          FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
-        )
-      ''');
-    }
-    await db.execute('''
-      CREATE TABLE bom_manual_entries (
-        id TEXT PRIMARY KEY, survey_id TEXT NOT NULL,
-        material_name TEXT NOT NULL, unit TEXT NOT NULL, qty REAL NOT NULL,
-        group_code TEXT NOT NULL, added_by TEXT NOT NULL, added_at TEXT NOT NULL,
-        dirty INTEGER NOT NULL DEFAULT 1,
-        pending_delete INTEGER NOT NULL DEFAULT 0,
-        FOREIGN KEY (survey_id) REFERENCES sites (id) ON DELETE CASCADE
-      )
-    ''');
+    // Every table the unsynced-work guard inspects. Shared, because that
+    // guard refuses to skip a table it cannot read — see the helper's doc.
+    await createSiteCascadeTables(db);
     repo = SqfliteSurveyRepository(db, IdService());
   });
 
@@ -106,7 +91,11 @@ void main() {
 
   /// A complete, successful pull as the OLD assignee: the reassigned-away
   /// site is simply no longer among the rows RLS returns.
-  Future<void> pullWithout(String goneSiteId, {required String keepSiteId}) =>
+  /// Returns the names of any sites the pull deliberately preserved.
+  Future<List<String>> pullWithout(
+    String goneSiteId, {
+    required String keepSiteId,
+  }) =>
       repo.upsertSitesFromRemote([
         {
           'id': keepSiteId,
@@ -185,6 +174,136 @@ void main() {
       for (final t in [..._childTables, 'bom_manual_entries']) {
         expect(await db.query(t), hasLength(1), reason: '$t was wrongly cascaded');
       }
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // The gap that let BLOCKER 2 ship: every case above varies only the
+  // SITE's dirty flag, and seedSiteWithChildren always seeds children
+  // clean. But editing a source point marks the POINT dirty and leaves the
+  // site clean — so the one shape that actually loses field work was the
+  // one shape never tested.
+  // ---------------------------------------------------------------------
+
+  test(
+    'a CLEAN site whose CHILD is dirty is preserved — that unsynced '
+    'work must not be cascaded away',
+    () async {
+      await seedSiteWithChildren('gone', dirty: 0); // site itself is clean
+      await seedSiteWithChildren('keep', dirty: 0);
+      // A day in the field: the point was edited, the site row was not.
+      await db.update('source_points', {'dirty': 1},
+          where: 'id = ?', whereArgs: ['gone-source_points']);
+
+      final preserved = await pullWithout('gone', keepSiteId: 'keep');
+
+      expect(
+        await db.query('sites', where: 'id = ?', whereArgs: ['gone']),
+        hasLength(1),
+        reason: 'the site must be kept, or the cascade destroys the work',
+      );
+      expect(
+        await db.query('source_points', where: 'dirty = 1'),
+        hasLength(1),
+        reason: 'the unsynced point is the whole point of the guard',
+      );
+      expect(preserved, ['gone'],
+          reason: 'the user must be told WHICH site, by name');
+    },
+  );
+
+  test('a dirty child in ANY cascading table preserves its site', () async {
+    // One table at a time, so a guard that checks only the obvious ones
+    // (source_points) fails here rather than in the field.
+    final cases = <String, Map<String, Object?>>{
+      'inlet_points': {'id': 'x', 'site_id': 'gone', 'dirty': 1},
+      'duct_loras': {'id': 'x', 'site_id': 'gone', 'dirty': 1},
+      'gateways': {'id': 'x', 'site_id': 'gone', 'dirty': 1},
+      'blocks': {
+        'id': 'x', 'site_id': 'gone', 'position': 0, 'label': 'A', 'dirty': 1,
+      },
+      'client_inputs': {'site_id': 'gone', 'dirty': 1},
+      'footers': {'site_id': 'gone', 'dirty': 1},
+      'photos': {
+        'id': 'x', 'owner_type': 'source_point', 'owner_id': 'o',
+        'slot': 's', 'site_id': 'gone', 'dirty': 1,
+      },
+      'bom_snapshots': {'id': 'x', 'survey_id': 'gone', 'dirty': 1},
+      'bom_revisions': {'id': 'x', 'survey_id': 'gone', 'dirty': 1},
+      'bom_manual_edit_snapshots': {'id': 'x', 'survey_id': 'gone', 'dirty': 1},
+    };
+    for (final entry in cases.entries) {
+      await db.delete('sites');
+      await seedSiteWithChildren('gone', dirty: 0);
+      await seedSiteWithChildren('keep', dirty: 0);
+      await db.insert(entry.key, entry.value);
+
+      final preserved = await pullWithout('gone', keepSiteId: 'keep');
+
+      expect(
+        await db.query('sites', where: 'id = ?', whereArgs: ['gone']),
+        hasLength(1),
+        reason: 'a dirty row in ${entry.key} did not protect its site',
+      );
+      expect(preserved, ['gone'], reason: 'unreported for ${entry.key}');
+    }
+  });
+
+  test('a dirty BoM LINE preserves its site — lines are tracked separately '
+      'from the snapshot row and can be the only thing left unpushed',
+      () async {
+    await seedSiteWithChildren('gone', dirty: 0);
+    await seedSiteWithChildren('keep', dirty: 0);
+    // Snapshot row itself already pushed; only its lines are outstanding.
+    await db.insert('bom_snapshots',
+        {'id': 'snap-1', 'survey_id': 'gone', 'dirty': 0});
+    await db.insert('bom_snapshot_lines',
+        {'id': 'line-1', 'snapshot_id': 'snap-1', 'dirty': 1});
+
+    final preserved = await pullWithout('gone', keepSiteId: 'keep');
+
+    expect(
+      await db.query('sites', where: 'id = ?', whereArgs: ['gone']),
+      hasLength(1),
+    );
+    expect(preserved, ['gone']);
+  });
+
+  test(
+    'a pending_delete child also counts as unsynced work — the delete has '
+    'not reached the server yet either',
+    () async {
+      await seedSiteWithChildren('gone', dirty: 0);
+      await seedSiteWithChildren('keep', dirty: 0);
+      await db.update('source_points', {'dirty': 0, 'pending_delete': 1},
+          where: 'id = ?', whereArgs: ['gone-source_points']);
+
+      final preserved = await pullWithout('gone', keepSiteId: 'keep');
+
+      expect(
+        await db.query('sites', where: 'id = ?', whereArgs: ['gone']),
+        hasLength(1),
+      );
+      expect(preserved, ['gone']);
+    },
+  );
+
+  test(
+    'a fully clean site still cascades away exactly as before — the guard '
+    'must not turn reconcile into a no-op',
+    () async {
+      await seedSiteWithChildren('gone', dirty: 0);
+      await seedSiteWithChildren('keep', dirty: 0);
+
+      final preserved = await pullWithout('gone', keepSiteId: 'keep');
+
+      expect(await db.query('sites'), hasLength(1));
+      for (final t in [..._childTables, 'bom_manual_entries']) {
+        expect(await db.query(t), hasLength(1),
+            reason: '$t should have cascaded away with its clean site');
+      }
+      expect(preserved, isEmpty,
+          reason: 'nothing was preserved, so nothing to warn about');
     },
   );
 }

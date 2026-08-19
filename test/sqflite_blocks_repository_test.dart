@@ -11,6 +11,8 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:survey_app/data/sqflite_survey_repository.dart';
 import 'package:survey_app/services/id_service.dart';
 
+import 'support/site_cascade_schema.dart';
+
 void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
@@ -54,6 +56,10 @@ void main() {
         dirty   INTEGER NOT NULL DEFAULT 1
       )
     ''');
+    // upsertSitesFromRemote now checks every cascading table for unsynced
+    // work before deleting a site, so they all have to exist here — blocks
+    // and client_inputs are declared above in fuller form.
+    await createSiteCascadeTables(db, skip: {'blocks', 'client_inputs'});
     repo = SqfliteSurveyRepository(db, IdService());
   });
 

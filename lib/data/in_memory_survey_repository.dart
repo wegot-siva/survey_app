@@ -272,7 +272,12 @@ class InMemorySurveyRepository implements SurveyRepository {
   /// payload never carries them. archived IS carried by the remote payload
   /// as of Full sync Group 1.
   @override
-  Future<void> upsertSitesFromRemote(List<Map<String, dynamic>> remoteRows) async {
+  /// Never preserves anything: this implementation has no cascading
+  /// foreign keys, so it has no reassignment-cascade hazard to guard
+  /// against. Always returns an empty list.
+  Future<List<String>> upsertSitesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
     for (final row in remoteRows) {
       final id = row['id'] as String;
       // A sync-blocked row is NOT protected: remote is authoritative,
@@ -300,13 +305,14 @@ class InMemorySurveyRepository implements SurveyRepository {
       );
     }
 
-    if (remoteRows.isEmpty) return;
+    if (remoteRows.isEmpty) return const [];
     final remoteIds = remoteRows.map((r) => r['id'] as String).toSet();
     for (final id in _sites.keys.toList()) {
       if (remoteIds.contains(id)) continue;
       if (_dirtySiteIds.contains(id)) continue;
       _sites.remove(id);
     }
+    return const [];
   }
 
   /// Mirrors [SqfliteSurveyRepository.upsertBlocksFromRemote]: per-row

@@ -1045,6 +1045,20 @@ class SqfliteSurveyRepository implements SurveyRepository {
     // a sqlite write lock across filesystem calls would serialise every
     // other writer behind it.
     void Function(Map<String, Object?> row)? onRowDeleted,
+    // Last-chance veto on removing a row the reconcile has already decided
+    // is absent remotely and unprotected. Returning true keeps the row.
+    //
+    // Exists for one specific hazard: row-level protection is per-row, but
+    // deletion is per-tree. Every survey table declares
+    // `ON DELETE CASCADE` on its site, and with `PRAGMA foreign_keys = ON`
+    // sqlite removes the whole tree without ever reading a child's dirty or
+    // pending_delete flag. So the reconcile could delete a clean site and
+    // silently take a day of unsynced field work with it — the site's own
+    // row stays clean while its children are edited, so nothing about the
+    // site itself signals the danger. Runs inside the write transaction, so
+    // it must only read.
+    Future<bool> Function(DatabaseExecutor txn, Map<String, Object?> row)?
+        preserveWhen,
   }) async {
     Map<String, Object?> toLocalRow(Map<String, dynamic> r) {
       final row = Map<String, Object?>.from(r);
@@ -1128,6 +1142,13 @@ class SqfliteSurveyRepository implements SurveyRepository {
         final id = row[idColumn]! as String;
         if (remoteIds.contains(id)) continue;
         if (isProtected(row)) continue;
+        // isProtected only inspects THIS row's flags, which is not enough for
+        // a parent: deleting it cascades (ON DELETE CASCADE, foreign_keys =
+        // ON) and sqlite never consults the children's flags on the way
+        // down. A site whose own row is clean can still hold a full day of
+        // unsynced field work, because editing a source point marks the
+        // POINT dirty, not the site. See preserveWhen's doc.
+        if (preserveWhen != null && await preserveWhen(txn, row)) continue;
         onRowDeleted?.call(row);
         await txn.delete(table, where: '$idColumn = ?', whereArgs: [id]);
       }
@@ -1135,14 +1156,35 @@ class SqfliteSurveyRepository implements SurveyRepository {
   }
 
   @override
-  Future<void> upsertSitesFromRemote(List<Map<String, dynamic>> remoteRows) =>
-      _pullAndReconcile(
-        'sites',
-        remoteRows,
-        idColumn: 'id',
-        boolColumns: const ['bom_locked', 'archived'],
-        hasPendingDelete: false,
-        hasSyncBlocked: true,
+  Future<List<String>> upsertSitesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  ) async {
+    // Names of sites this pull refused to remove because they still hold
+    // unsynced work — surfaced to the user by SyncService, never silent.
+    final preserved = <String>[];
+    await _pullAndReconcile(
+      'sites',
+      remoteRows,
+      idColumn: 'id',
+      boolColumns: const ['bom_locked', 'archived'],
+      hasPendingDelete: false,
+      hasSyncBlocked: true,
+      captureColumnsOnDelete: const ['name'],
+      preserveWhen: (txn, row) async {
+        final id = row['id']! as String;
+        if (!await _hasUnsyncedWorkForSite(txn, id)) return false;
+        final named = await txn.query(
+          'sites',
+          columns: ['name'],
+          where: 'id = ?',
+          whereArgs: [id],
+          limit: 1,
+        );
+        preserved.add(
+          named.isEmpty ? id : (named.first['name'] as String? ?? id),
+        );
+        return true;
+      },
         // Reassignment investigation (evidence in that slice's commit):
         // reconcileDeletes was off everywhere by default because an
         // RLS-narrowed fetch used to be indistinguishable from a partial/
@@ -1157,10 +1199,91 @@ class SqfliteSurveyRepository implements SurveyRepository {
         // device (confirmed: it never self-heals otherwise, since the row
         // never appears in that account's pull again for anything to clear
         // its dirty/sync_blocked flags). isProtected() still shields any
-        // row with a genuine unpushed local edit; only a clean or
-        // already-sync_blocked row is ever removed this way.
-        reconcileDeletes: true,
+      // row with a genuine unpushed local edit; only a clean or
+      // already-sync_blocked row is ever removed this way.
+      reconcileDeletes: true,
+    );
+    return preserved;
+  }
+
+  /// Whether [siteId] still has anything unsynced hanging off it.
+  ///
+  /// Guards the reassignment cascade: every table below declares
+  /// `ON DELETE CASCADE` on its site, so removing the site removes all of
+  /// them regardless of their own dirty/pending_delete flags. The site row
+  /// itself is a useless signal here — editing a source point marks the
+  /// POINT dirty and leaves the site clean — so the only way to know
+  /// whether a delete would destroy real work is to ask the children.
+  ///
+  /// `photos` is included even though it has no local foreign key (so it is
+  /// orphaned rather than deleted): an unsynced photo is still unsynced work
+  /// for this site, and orphaning it is no better than losing it.
+  /// `survey_assignment_audit` is excluded — it has no dirty column and is
+  /// history, not work in progress.
+  ///
+  /// Early-exits on the first hit; every lookup is on an indexed column.
+  Future<bool> _hasUnsyncedWorkForSite(
+    DatabaseExecutor txn,
+    String siteId,
+  ) async {
+    // table -> the column linking it to its site.
+    const direct = <String, String>{
+      'blocks': 'site_id',
+      'client_inputs': 'site_id',
+      'source_points': 'site_id',
+      'inlet_points': 'site_id',
+      'duct_loras': 'site_id',
+      'gateways': 'site_id',
+      'footers': 'site_id',
+      'photos': 'site_id',
+      'bom_manual_entries': 'survey_id',
+      'bom_snapshots': 'survey_id',
+      'bom_revisions': 'survey_id',
+      'bom_manual_edit_snapshots': 'survey_id',
+    };
+    // Tables with no pending_delete column at all — dirty is the whole test.
+    const dirtyOnly = {
+      'client_inputs',
+      'footers',
+      'bom_snapshots',
+      'bom_revisions',
+      'bom_manual_edit_snapshots',
+    };
+    for (final entry in direct.entries) {
+      final unsynced = dirtyOnly.contains(entry.key)
+          ? 'dirty = 1'
+          : '(dirty = 1 OR pending_delete = 1)';
+      final hit = await txn.rawQuery(
+        'SELECT 1 FROM ${entry.key} WHERE ${entry.value} = ? AND $unsynced '
+        'LIMIT 1',
+        [siteId],
       );
+      if (hit.isNotEmpty) return true;
+    }
+    // Line tables reach their site through a parent, so they need the join —
+    // a finalized BoM's lines are dirty-tracked separately from the snapshot
+    // row and can be the only thing left unpushed.
+    const lines = <String, List<String>>{
+      'bom_snapshot_lines': ['bom_snapshots', 'snapshot_id'],
+      'bom_revision_lines': ['bom_revisions', 'revision_id'],
+      'bom_manual_edit_snapshot_lines': [
+        'bom_manual_edit_snapshots',
+        'snapshot_id',
+      ],
+    };
+    for (final entry in lines.entries) {
+      final parent = entry.value[0];
+      final fk = entry.value[1];
+      final hit = await txn.rawQuery(
+        'SELECT 1 FROM ${entry.key} l '
+        'JOIN $parent p ON l.$fk = p.id '
+        'WHERE p.survey_id = ? AND l.dirty = 1 LIMIT 1',
+        [siteId],
+      );
+      if (hit.isNotEmpty) return true;
+    }
+    return false;
+  }
 
   /// Full sync Group 1 (blocks-push rework) — now that blocks have a
   /// stable per-row id, this is exactly [_pullAndReconcile] like every

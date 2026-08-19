@@ -32,6 +32,7 @@ class SyncResult {
     this.bomManualEditSnapshots = 0,
     this.pushFailures = const [],
     this.syncBlocked = 0,
+    this.preservedSites = const [],
     this.message,
   });
 
@@ -68,6 +69,17 @@ class SyncResult {
   /// as "N rows can't sync — needs attention" rather than re-failing the
   /// sync forever. See SurveyRepository.markSiteSyncBlocked.
   final int syncBlocked;
+
+  /// Names of sites this run's pull kept rather than removing, because
+  /// they still hold unsynced child work despite having dropped out of
+  /// this account's scope (typically reassigned away).
+  ///
+  /// Deleting one would have cascaded a day of field work away without
+  /// warning — the site's own row looks clean while its children are the
+  /// edited ones. The work genuinely cannot be pushed any more (RLS will
+  /// refuse it), so this is about telling the user and keeping the data
+  /// readable, not about recovering it.
+  final List<String> preservedSites;
 
   final String? message;
 }
@@ -925,9 +937,14 @@ class SyncService {
       // against a different table, and nothing in a response depends on
       // another response. That asymmetry is what this method exploits —
       // fetch concurrently, apply strictly in this order.
+      // Sites whose delete this pull refused because they still hold
+      // unsynced work — reported to the user rather than silently cascaded
+      // away. See SyncResult.preservedSites.
+      final preservedSites = <String>[];
       final plan = <_PullTable>[
-        _PullTable('sites', _remote.fetchSites,
-            _repository.upsertSitesFromRemote),
+        _PullTable('sites', _remote.fetchSites, (rows) async {
+          preservedSites.addAll(await _repository.upsertSitesFromRemote(rows));
+        }),
         _PullTable('blocks', _remote.fetchBlocks,
             _repository.upsertBlocksFromRemote),
         _PullTable('client_inputs', _remote.fetchClientInputs,
@@ -1011,7 +1028,13 @@ class SyncService {
       // that is bandwidth-bound rather than round-trip-bound, so no amount
       // of batching or concurrency in this method would have touched it.
       perf.done();
-      return const SyncResult(success: true);
+      if (preservedSites.isNotEmpty) {
+        debugPrint(
+          'sync: kept ${preservedSites.length} out-of-scope site(s) holding '
+          'unsynced work: ${preservedSites.join(', ')}',
+        );
+      }
+      return SyncResult(success: true, preservedSites: preservedSites);
     } on PostgrestException catch (e) {
       // Diagnostic instrumentation (forensic sync investigation): this
       // detail was already captured in the returned message, but never

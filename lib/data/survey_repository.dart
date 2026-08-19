@@ -132,7 +132,16 @@ abstract class SurveyRepository {
   /// (see [SupabaseSurveyDataSource.fetchSites]'s pagination). Blocks and
   /// Client inputs are separate tables/pulls (see [upsertBlocksFromRemote],
   /// [upsertClientInputsFromRemote]), not touched here.
-  Future<void> upsertSitesFromRemote(List<Map<String, dynamic>> remoteRows);
+  /// Returns the NAMES of any sites this pull deliberately kept even though
+  /// they were absent from [remoteRows] — see
+  /// SqfliteSurveyRepository._hasUnsyncedWorkForSite. A site that dropped
+  /// out of scope (typically reassigned away) but still holds unsynced
+  /// child work is preserved rather than cascaded away, and its name is
+  /// returned so the sync layer can tell the user instead of silently
+  /// destroying a day of field work. Empty on an ordinary pull.
+  Future<List<String>> upsertSitesFromRemote(
+    List<Map<String, dynamic>> remoteRows,
+  );
 
   /// Same merge rule as [upsertSitesFromRemote], for blocks — keyed by their
   /// own stable id (not site_id) since Full sync Group 1's blocks-push
