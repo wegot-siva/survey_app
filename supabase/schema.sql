@@ -776,6 +776,32 @@ alter table public.bom_revisions
 -- Re-runnable / idempotent.
 -- ---------------------------------------------------------------------------
 
+-- SLICE 1 (security): is this caller a currently-ACTIVE account?
+--
+-- Before this, `active` was enforced nowhere in the database. It appeared in
+-- exactly one policy — "select engineer roster" — and there it filtered WHICH
+-- ROWS were listed, not whether the viewer was permitted to act. Every access
+-- helper checked `role` alone. Deactivation was therefore a client-side
+-- courtesy: SupabaseAuthRepository._resolveProfile signs an inactive user out
+-- at login, but a caller that ignores the app and talks to PostgREST directly
+-- kept every privilege of its role. A deactivated admin was still an admin to
+-- the database.
+--
+-- SECURITY DEFINER, so the read below bypasses RLS on profiles and cannot
+-- recurse when a profiles policy calls it — the same pattern is_admin() has
+-- always used in "admin selects any profile".
+create or replace function public.is_active_user()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.profiles where id = auth.uid() and active
+  );
+$$;
+
 create or replace function public.is_admin()
 returns boolean
 language sql
@@ -784,7 +810,9 @@ set search_path = public
 stable
 as $$
   select exists (
-    select 1 from public.profiles where id = auth.uid() and role = 'admin'
+    -- Slice 1: `and active` — a deactivated admin is not an admin.
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'admin' and active
   );
 $$;
 
@@ -805,7 +833,10 @@ create policy "select own profile" on public.profiles
 drop policy if exists "select engineer roster" on public.profiles;
 create policy "select engineer roster" on public.profiles
   for select to authenticated
-  using (role = 'engineer' and active = true);
+  -- Slice 1: `active = true` here filters WHICH ROWS are listed; it never
+  -- said anything about the viewer. Without is_active_user() a deactivated
+  -- account could still enumerate every active engineer's name.
+  using (role = 'engineer' and active = true and public.is_active_user());
 
 drop policy if exists "admin selects any profile" on public.profiles;
 create policy "admin selects any profile" on public.profiles
@@ -915,8 +946,10 @@ set search_path = public
 stable
 as $$
   select exists (
+    -- Slice 1: `and active` — a deactivated manager is not a manager.
     select 1 from public.profiles
     where id = auth.uid() and role in ('sales', 'approver', 'admin')
+      and active
   );
 $$;
 
@@ -928,8 +961,12 @@ set search_path = public
 stable
 as $$
   select exists (
+    -- Slice 1: is_active_user() gates BOTH branches. The
+    -- assigned_to_user_id one compares auth.uid() directly and so never
+    -- passed through is_site_manager()'s new `active` check.
     select 1 from public.sites
     where id = target_site_id
+      and public.is_active_user()
       and (assigned_to_user_id = auth.uid() or public.is_site_manager())
   );
 $$;
@@ -941,7 +978,9 @@ drop policy if exists "dev all - sites" on public.sites;
 drop policy if exists "engineer selects own assigned sites" on public.sites;
 create policy "engineer selects own assigned sites" on public.sites
   for select to authenticated
-  using (assigned_to_user_id = auth.uid());
+  -- Slice 1: compares auth.uid() directly, so it never touched any role
+  -- helper and an inactive engineer kept reading their assigned sites.
+  using (assigned_to_user_id = auth.uid() and public.is_active_user());
 
 drop policy if exists "site managers select all sites" on public.sites;
 create policy "site managers select all sites" on public.sites
@@ -959,8 +998,15 @@ create policy "site managers select all sites" on public.sites
 drop policy if exists "update sites" on public.sites;
 create policy "update sites" on public.sites
   for update to authenticated
-  using (assigned_to_user_id = auth.uid() or public.is_site_manager())
-  with check (assigned_to_user_id = auth.uid() or public.is_site_manager());
+  -- Slice 1: the is_active_user() conjunct is OUTSIDE the parentheses so it
+  -- gates both branches. Written as `A and (B or C)`, never `A and B or C`,
+  -- which Postgres would read as `(A and B) or C` and leave the manager
+  -- branch ungated.
+  using (public.is_active_user()
+         and (assigned_to_user_id = auth.uid() or public.is_site_manager()))
+  with check (public.is_active_user()
+              and (assigned_to_user_id = auth.uid()
+                   or public.is_site_manager()));
 
 create or replace function public.prevent_engineer_site_reassignment()
 returns trigger
@@ -1366,8 +1412,11 @@ set search_path = public
 stable
 as $$
   select exists (
+    -- Slice 1: same reasoning as can_access_site — the
+    -- assigned_to_user_id branch bypasses is_admin()'s `active` check.
     select 1 from public.sites
     where id = target_site_id
+      and public.is_active_user()
       and (assigned_to_user_id = auth.uid() or public.is_admin())
   );
 $$;
@@ -1400,8 +1449,9 @@ set search_path = public
 stable
 as $$
   select exists (
+    -- Slice 1: `and active`.
     select 1 from public.profiles
-    where id = auth.uid() and role in ('admin', 'approver')
+    where id = auth.uid() and role in ('admin', 'approver') and active
   );
 $$;
 
@@ -1599,7 +1649,11 @@ drop policy if exists "dev all - material_master_items" on public.material_maste
 drop policy if exists "select material_master_items for everyone" on public.material_master_items;
 create policy "select material_master_items for everyone" on public.material_master_items
   for select to authenticated
-  using (true);
+  -- Slice 1: was `using (true)`, so ANY authenticated caller — including a
+  -- deactivated or not-yet-approved account — could read the entire
+  -- catalogue. "Everyone" now means every ACTIVE user; the intent (no
+  -- role/site scoping) is unchanged.
+  using (public.is_active_user());
 
 drop policy if exists "insert material_master_items by admin" on public.material_master_items;
 create policy "insert material_master_items by admin" on public.material_master_items
