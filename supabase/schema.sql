@@ -2269,3 +2269,193 @@ select cron.schedule(
   '17 3 * * *',
   $job$ select public.purge_expired_photo_tombstones(); $job$
 );
+
+-- ---------------------------------------------------------------------------
+-- SLICE 2 — Invite codes for in-app signup
+--
+-- Distribution is a direct APK, so the anon key is in every attacker's hands.
+-- Signup therefore has to be gated by something they cannot obtain, and the
+-- gate cannot live in the client. Codes are generated server-side, stored
+-- here, and checked by a SECURITY DEFINER function — the table itself is
+-- never readable by an unauthenticated caller.
+--
+-- Single-use with an expiry, per the agreed design. `max_uses` exists so a
+-- future "invite the whole team" case does not need a migration, but every
+-- code this app issues defaults to 1.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.signup_invites (
+  id           uuid primary key default gen_random_uuid(),
+  code         text not null unique,
+  -- Must match profiles.role's check constraint, or approving a request
+  -- created from this code would fail at the last step. Deliberately allows
+  -- admin/approver: an Admin can invite anyone, and Slice 4 is what decides
+  -- who may APPROVE such a request.
+  role_allowed text not null check (role_allowed in ('sales', 'engineer', 'approver', 'admin')),
+  created_by   uuid not null references public.profiles (id) on delete cascade,
+  created_at   timestamptz not null default now(),
+  expires_at   timestamptz,
+  max_uses     integer not null default 1 check (max_uses > 0),
+  uses         integer not null default 0 check (uses >= 0),
+  revoked_at   timestamptz
+);
+
+create index if not exists signup_invites_code_idx on public.signup_invites (code);
+
+alter table public.signup_invites enable row level security;
+
+-- SELECT: Admin only.
+--
+-- Approver deliberately gets NO access. An Approver can already approve
+-- Engineer/Sales requests (Slice 4); letting them also read invite codes
+-- would let them issue an invite AND approve the account it produces — a
+-- complete self-service path to creating accounts with no Admin involved.
+-- Issuing invites is not part of the approver role.
+--
+-- anon gets nothing, which is the point: RLS default-denies a command with no
+-- matching policy, so an unauthenticated caller cannot read a single row.
+drop policy if exists "admin selects signup_invites" on public.signup_invites;
+create policy "admin selects signup_invites" on public.signup_invites
+  for select to authenticated
+  using (public.is_admin());
+
+-- No INSERT/UPDATE/DELETE policy exists, for ANY role, on purpose. Every
+-- write goes through the SECURITY DEFINER functions below, so a code cannot
+-- be minted, edited or un-revoked by a direct table write — not even by an
+-- Admin, who could otherwise reset `uses` to defeat single-use.
+
+-- ---------------------------------------------------------------------------
+-- Generation — Admin only, server-side.
+--
+-- Never generated client-side: the APK is inspectable, and an attacker who
+-- knows the algorithm can mint their own codes. Randomness comes from
+-- gen_random_uuid(), which is PG13+ built-in (no pgcrypto dependency, so no
+-- search_path exposure to a non-trusted schema).
+--
+-- 20 hex characters drawn from two v4 UUIDs. Each UUID carries ~122 bits from
+-- the server CSPRNG, so any 20-hex-char slice is comfortably over 70 bits of
+-- entropy — brute-forcing it through validate_signup_invite() is not
+-- feasible, which matters because that function is callable by anon.
+-- ---------------------------------------------------------------------------
+create or replace function public.create_signup_invite(
+  p_role_allowed text,
+  p_expires_at   timestamptz default null,
+  p_max_uses     integer default 1
+)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_code text;
+  v_attempt int := 0;
+begin
+  if not public.is_admin() then
+    raise exception 'Only an admin can create an invite code.'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  loop
+    v_attempt := v_attempt + 1;
+    v_code := upper(substring(
+      replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')
+      from 1 for 20));
+    begin
+      insert into public.signup_invites
+        (code, role_allowed, created_by, expires_at, max_uses)
+      values
+        (v_code, p_role_allowed, auth.uid(), p_expires_at,
+         coalesce(p_max_uses, 1));
+      return v_code;
+    exception when unique_violation then
+      -- Astronomically unlikely at this entropy; retry rather than fail.
+      if v_attempt >= 5 then raise; end if;
+    end;
+  end loop;
+end;
+$fn$;
+
+-- ---------------------------------------------------------------------------
+-- Revocation — Admin only. Sets revoked_at and nothing else, so the audit
+-- trail (who created it, when, how many times it was used) stays intact.
+-- Idempotent: revoking an already-revoked code keeps the original timestamp.
+-- ---------------------------------------------------------------------------
+create or replace function public.revoke_signup_invite(p_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_rows int;
+begin
+  if not public.is_admin() then
+    raise exception 'Only an admin can revoke an invite code.'
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  update public.signup_invites
+     set revoked_at = now()
+   where id = p_id and revoked_at is null;
+  get diagnostics v_rows = row_count;
+  return v_rows > 0;
+end;
+$fn$;
+
+-- ---------------------------------------------------------------------------
+-- Validation — callable by anon, because Slice 3's signup screen has no
+-- session yet.
+--
+-- Returns ONLY (valid, role_allowed). It must never become an enumeration
+-- oracle, so every failure — unknown code, expired, revoked, exhausted —
+-- produces the identical result: valid = false, role_allowed = null. No
+-- error, no message, nothing that distinguishes "wrong code" from "expired
+-- code". The row itself is never returned.
+--
+-- Read-only: it does NOT consume a use. Consumption belongs with the request
+-- that actually uses the code (Slice 3), so that merely checking a code
+-- cannot burn it — and so a user who mistypes their name afterwards is not
+-- locked out by their own retry.
+--
+-- Input is normalised (case, spaces, dashes) so a code can be read aloud or
+-- copied with formatting without failing.
+-- ---------------------------------------------------------------------------
+create or replace function public.validate_signup_invite(p_code text)
+returns table (valid boolean, role_allowed text)
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_norm text;
+  v_role text;
+begin
+  v_norm := upper(regexp_replace(coalesce(p_code, ''), '[^A-Za-z0-9]', '', 'g'));
+
+  select i.role_allowed into v_role
+  from public.signup_invites i
+  where i.code = v_norm
+    and i.revoked_at is null
+    and (i.expires_at is null or i.expires_at > now())
+    and i.uses < i.max_uses
+  limit 1;
+
+  if v_role is null then
+    -- Single indistinguishable failure for every reason.
+    return query select false, null::text;
+  else
+    return query select true, v_role;
+  end if;
+end;
+$fn$;
+
+-- Explicit grants. Admin-gated functions are still executable by any signed-in
+-- user — they check is_admin() internally and raise otherwise — but anon must
+-- never reach them. Only validation is exposed to anon.
+revoke all on function public.create_signup_invite(text, timestamptz, integer) from public, anon;
+revoke all on function public.revoke_signup_invite(uuid) from public, anon;
+revoke all on function public.validate_signup_invite(text) from public;
+grant execute on function public.create_signup_invite(text, timestamptz, integer) to authenticated;
+grant execute on function public.revoke_signup_invite(uuid) to authenticated;
+grant execute on function public.validate_signup_invite(text) to anon, authenticated;

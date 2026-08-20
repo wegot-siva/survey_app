@@ -15,6 +15,7 @@ import 'approver_review_screen.dart';
 import 'assign_survey_screen.dart';
 import 'create_site_screen.dart';
 import 'edit_site_details_screen.dart';
+import 'invite_codes_screen.dart';
 import 'material_master_group_list_screen.dart';
 import 'site_hub_screen.dart';
 import 'sync_scope.dart';
@@ -28,7 +29,12 @@ import 'widgets/load_error_view.dart';
 /// Material Master's own AppBar. Each item is individually conditional
 /// (role/build-type gated) in [_HomeScreenState.build] — new admin actions
 /// added later go here too, rather than back onto the AppBar itself.
-enum _HomeMoreMenuAction { materialMaster, testConnection, logout }
+enum _HomeMoreMenuAction {
+  materialMaster,
+  inviteCodes,
+  testConnection,
+  logout,
+}
 
 /// Which quick action a Site card's long-press bottom sheet resolved to —
 /// null means the user tapped Cancel or dismissed it.
@@ -385,6 +391,12 @@ class _HomeScreenState extends State<HomeScreen> {
       const SnackBar(content: Text('Site deleted.')),
     );
     await _load();
+  }
+
+  Future<void> _openInviteCodes() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const InviteCodesScreen()),
+    );
   }
 
   Future<void> _openMaterialMaster() async {
@@ -1193,6 +1205,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     switch (action) {
                       case _HomeMoreMenuAction.materialMaster:
                         _openMaterialMaster();
+                      case _HomeMoreMenuAction.inviteCodes:
+                        _openInviteCodes();
                       case _HomeMoreMenuAction.testConnection:
                         _testSupabase();
                       case _HomeMoreMenuAction.logout:
@@ -1204,6 +1218,14 @@ class _HomeScreenState extends State<HomeScreen> {
                       const PopupMenuItem(
                         value: _HomeMoreMenuAction.materialMaster,
                         child: Text('Material Master'),
+                      ),
+                    // Admin-only, but this menu gate is convenience, not the
+                    // control: create/revoke re-check is_admin() server-side
+                    // and the table's only policy grants SELECT to Admins.
+                    if (widget.session.currentRole == UserRole.admin)
+                      const PopupMenuItem(
+                        value: _HomeMoreMenuAction.inviteCodes,
+                        child: Text('Invite codes'),
                       ),
                     // Developer diagnostic — compiled out of release builds
                     // entirely. This is a build-type concern (dev vs field),
