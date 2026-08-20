@@ -620,12 +620,20 @@ create table if not exists public.profiles (
 -- Auto-creates a profiles row whenever a new auth.users row is inserted (i.e.
 -- every time an account is created via the Dashboard's Auth panel), so a
 -- fresh Auth user is never left without a matching profile. full_name/role
--- are read from the new user's metadata if the Dashboard's "User Metadata"
--- field was filled in (e.g. {"full_name": "Ravi Kumar", "role": "engineer"});
--- otherwise full_name falls back to the email and role to 'engineer' so the
--- insert can never fail the NOT NULL/check constraints above — a failing
--- trigger would abort the auth.users insert itself, since both run in the
--- same transaction.
+-- are read from the new user's metadata; otherwise full_name falls back to
+-- the email and role to 'engineer' so the insert can never fail the NOT
+-- NULL/check constraints above — a failing trigger would abort the
+-- auth.users insert itself, since both run in the same transaction.
+--
+-- WHICH metadata matters, and is a security boundary (Slice 0): `role` is
+-- read ONLY from raw_app_meta_data, which a client cannot set. The
+-- Dashboard's "User Metadata" box writes raw_user_meta_data and is
+-- therefore NO LONGER a way to grant a role — filling it in produces an
+-- inactive account, exactly as leaving it blank does. Setting a role by
+-- hand now means writing app_metadata (Admin API, or
+-- `update auth.users set raw_app_meta_data = ...` in the SQL Editor), or
+-- simply correcting profiles.role/active afterwards in the Table Editor as
+-- before. The in-app approval flow removes the need for either.
 --
 -- active defaults to false whenever role metadata wasn't actually supplied
 -- (Slice 2c fix — was unconditionally true). Before this, a forgotten
@@ -647,13 +655,36 @@ language plpgsql
 security definer set search_path = public
 as $$
 declare
-  meta_role text := new.raw_user_meta_data ->> 'role';
+  -- SLICE 0 (security): role is read from raw_APP_meta_data, never from
+  -- raw_USER_meta_data.
+  --
+  -- raw_user_meta_data is populated verbatim from the `data` field of a
+  -- client's signUp call, so it is attacker-controlled. Reading `role` from
+  -- it meant anyone holding the anon key -- which ships inside the APK, and
+  -- with public sign-up enabled -- could create a fully ACTIVE ADMIN by
+  -- calling signUp(email, password, data: {'role': 'admin'}). No invite, no
+  -- approval, no manual step. That was live.
+  --
+  -- raw_app_meta_data cannot be set by a client: GoTrue only accepts it via
+  -- the Admin API (service_role) or a direct database write, both of which
+  -- are already trusted. Moving one word closes the hole without touching
+  -- any policy or any other trigger.
+  --
+  -- full_name deliberately still comes from raw_user_meta_data: it is a
+  -- display string, carries no privilege, and letting a user state their own
+  -- name is the point.
+  meta_role text := new.raw_app_meta_data ->> 'role';
 begin
   insert into public.profiles (id, full_name, role, active)
   values (
     new.id,
     coalesce(new.raw_user_meta_data ->> 'full_name', new.email),
     coalesce(meta_role, 'engineer'),
+    -- Unchanged, and still the point: no TRUSTED role means the account is
+    -- created inactive and cannot sign in (SupabaseAuthRepository
+    -- ._resolveProfile rejects it). Hardening the source of `role` makes
+    -- this fail-closed default apply to attackers too, not just to an admin
+    -- who forgot the metadata field.
     meta_role is not null
   );
   return new;
