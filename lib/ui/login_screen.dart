@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/session_controller.dart';
+import 'signup_request_screen.dart';
 import 'theme/app_theme.dart';
 
 /// Email/password sign-in shown at app start (Slice 1b). Role is never
@@ -106,6 +107,20 @@ class _LoginScreenState extends State<LoginScreen> {
                         )
                       : const Icon(Icons.login),
                   label: const Text('Sign in'),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                // No account yet? Requests are invite-gated and grant
+                // nothing by themselves — an Admin or Approver still has to
+                // approve, and the account is only created then.
+                TextButton(
+                  onPressed: _submitting
+                      ? null
+                      : () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const SignupRequestScreen(),
+                            ),
+                          ),
+                  child: const Text('Request an account'),
                 ),
               ],
             ),

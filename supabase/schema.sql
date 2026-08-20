@@ -2459,3 +2459,176 @@ revoke all on function public.validate_signup_invite(text) from public;
 grant execute on function public.create_signup_invite(text, timestamptz, integer) to authenticated;
 grant execute on function public.revoke_signup_invite(uuid) to authenticated;
 grant execute on function public.validate_signup_invite(text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- SLICE 3 — Signup requests
+--
+-- A request is NOT an account. Deliberately its own table rather than a status
+-- column on profiles: a pending or rejected request has no auth.users row and
+-- no profiles row, so there is nothing to authenticate with and nothing for
+-- is_admin() or can_access_site() to match. Pending users are inert by
+-- construction, not by every future policy remembering to filter them.
+--
+-- The Auth account is created only at approval (Slice 4), via the Admin API.
+--
+-- There is NO password column, in any form — not plaintext, not a hash. The
+-- Admin API takes a plaintext password and has no parameter for a
+-- pre-computed one, so a stored hash could only be used by hand-writing
+-- bcrypt straight into GoTrue's own table. A hash here would also just be an
+-- offline-crackable credential store guarded by RLS. Approval instead issues
+-- an invite link and the user sets their own password, so it never exists
+-- anywhere but GoTrue.
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.signup_requests (
+  id               uuid primary key default gen_random_uuid(),
+  full_name        text not null,
+  email            text not null,
+  -- CHECK constraints on both enum-valued columns. This schema had exactly
+  -- one CHECK before the pre-production audit, and unconstrained enum text is
+  -- what allowed material_master_items.behavior_type to fill with a value the
+  -- app cannot parse.
+  requested_role   text not null check (requested_role in ('sales', 'engineer', 'approver', 'admin')),
+  invite_code_used text not null,
+  status           text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  created_at       timestamptz not null default now(),
+  reviewed_by      uuid references public.profiles (id) on delete set null,
+  reviewed_at      timestamptz,
+  rejection_reason text
+);
+
+create index if not exists signup_requests_status_idx
+  on public.signup_requests (status, created_at desc);
+
+-- One outstanding request per email, enforced by the database rather than
+-- only by the RPC's check. A partial unique index allows any number of
+-- historical approved/rejected rows for the same person while permitting
+-- exactly one pending. Lowercased so casing cannot be used to slip past it.
+create unique index if not exists signup_requests_one_pending_per_email
+  on public.signup_requests (lower(email)) where status = 'pending';
+
+alter table public.signup_requests enable row level security;
+
+-- Admin and Approver both review the queue (Slice 4), so both need SELECT.
+-- Its own helper rather than reusing can_edit_bom(), which happens to cover
+-- the same two roles today: coupling them would mean a future change to who
+-- may edit a BoM silently changing who can read applicants' names and email
+-- addresses.
+create or replace function public.is_signup_reviewer()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $fn$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role in ('admin', 'approver') and active
+  );
+$fn$;
+
+drop policy if exists "reviewers select signup_requests" on public.signup_requests;
+create policy "reviewers select signup_requests" on public.signup_requests
+  for select to authenticated
+  using (public.is_signup_reviewer());
+
+-- No INSERT/UPDATE/DELETE policy for any role. Submission goes through
+-- request_signup() below; review will go through Slice 4's RPCs. anon has no
+-- policy at all, so an unauthenticated caller cannot read a single row.
+
+-- ---------------------------------------------------------------------------
+-- Submission — callable with the anon key, because the applicant has no
+-- session and (by design) never gets one from this slice.
+--
+-- Returns a bare boolean. Every rejection reason collapses into the same
+-- `false`: unknown, expired, revoked or exhausted code, and a role the code
+-- does not permit. Nothing distinguishes them, so this cannot be used to
+-- probe which codes exist or what they are for.
+--
+-- DELIBERATE DEVIATION, worth understanding before changing it: an email that
+-- is already registered, or that already has a pending request, returns
+-- **true** and silently writes nothing. Returning false there would satisfy
+-- "all failures look alike" while defeating its purpose — anyone holding one
+-- valid invite code could then submit requests to learn which email addresses
+-- have accounts. Collapsing those two cases into the success response removes
+-- that oracle entirely: with a valid code, EVERY email answers the same way.
+-- The cost is that someone who already has an account gets a confirmation and
+-- no further contact, which the screen's wording covers.
+--
+-- Does NOT consume the invite code. Consumption happens at approval, so a
+-- rejected or mistyped request cannot burn a code and an attacker cannot
+-- destroy one by submitting junk against it.
+--
+-- Creates no auth.users row and no profiles row, under any circumstance.
+-- ---------------------------------------------------------------------------
+create or replace function public.request_signup(
+  p_full_name      text,
+  p_email          text,
+  p_requested_role text,
+  p_code           text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_valid boolean;
+  v_role  text;
+  v_email text;
+  v_name  text;
+begin
+  v_email := lower(trim(coalesce(p_email, '')));
+  v_name  := trim(coalesce(p_full_name, ''));
+
+  if v_email = '' or v_name = '' or coalesce(p_requested_role, '') = '' then
+    return false;
+  end if;
+
+  -- Reuses the Slice 2 validation path rather than re-implementing expiry /
+  -- revocation / exhaustion, so the two can never disagree about what makes a
+  -- code usable.
+  select v.valid, v.role_allowed
+    into v_valid, v_role
+    from public.validate_signup_invite(p_code) v;
+
+  if not coalesce(v_valid, false) then
+    return false;
+  end if;
+
+  -- The code decides the role. A request for anything else is refused, and
+  -- refused identically to a bad code.
+  if v_role is distinct from p_requested_role then
+    return false;
+  end if;
+
+  -- Email-status checks. See the deviation note above: these return true.
+  if exists (select 1 from auth.users u where lower(u.email) = v_email) then
+    return true;
+  end if;
+  if exists (
+    select 1 from public.signup_requests r
+    where lower(r.email) = v_email and r.status = 'pending'
+  ) then
+    return true;
+  end if;
+
+  insert into public.signup_requests
+    (full_name, email, requested_role, invite_code_used)
+  values
+    (v_name, v_email, p_requested_role, upper(regexp_replace(p_code, '[^A-Za-z0-9]', '', 'g')));
+
+  return true;
+exception
+  -- Belt and braces for the partial unique index: two simultaneous
+  -- submissions for the same email race past the exists() check above, and
+  -- the loser must look exactly like every other outcome.
+  when unique_violation then
+    return true;
+end;
+$fn$;
+
+revoke all on function public.is_signup_reviewer() from public, anon;
+grant execute on function public.is_signup_reviewer() to authenticated;
+revoke all on function public.request_signup(text, text, text, text) from public;
+grant execute on function public.request_signup(text, text, text, text) to anon, authenticated;
