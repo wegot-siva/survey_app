@@ -40,7 +40,7 @@ SignupRequest _request({
       createdAt: DateTime(2026, 8, 1),
       reviewedAt: null,
       rejectionReason: null,
-      createdUserId: null,
+      reviewedBy: null,
     );
 
 /// Records what the screen sent, and answers however the test needs.

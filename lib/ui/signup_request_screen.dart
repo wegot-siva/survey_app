@@ -135,6 +135,19 @@ class _SignupRequestScreenState extends State<SignupRequestScreen> {
 
   /// Worded to be true whether a row was written or the email already had an
   /// account — the server does not say which, and neither does this.
+  ///
+  /// It also has to be true for a request that is eventually REJECTED, and
+  /// that is the hard part. A rejected applicant is never told: there is no
+  /// rejection email, no status screen, and no in-app signal of any kind —
+  /// deliberately, because anything keyed to the email address would turn
+  /// request_signup() into an oracle for "has this person applied / does this
+  /// account exist", which is exactly what Slice 3's design prevents. See
+  /// SignupRequestsScreen's history view: telling a rejected applicant is a
+  /// MANUAL job for the reviewer.
+  ///
+  /// So this wording promises nothing it cannot keep. It says silence is the
+  /// normal experience, and points at a human — because a human is genuinely
+  /// the only channel that can tell them anything.
   Future<void> _showSubmitted() async {
     await showDialog<void>(
       context: context,
@@ -142,9 +155,13 @@ class _SignupRequestScreenState extends State<SignupRequestScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Request sent'),
         content: const Text(
-          'Your request is waiting for review.\n\n'
-          "You'll get an email with a link to set your password once it's "
-          'approved. If you already have an account, sign in instead.',
+          'Your request is waiting for review by an administrator.\n\n'
+          "You won't hear anything while it's waiting — there's no status "
+          'to check here, and no reminder email. If it is approved, you '
+          'will get an email with a link to set your password.\n\n'
+          "If you've heard nothing after a few days, contact your "
+          'administrator directly and ask. If you already have an account, '
+          'sign in instead.',
         ),
         actions: [
           TextButton(

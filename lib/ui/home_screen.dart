@@ -281,6 +281,20 @@ class _HomeScreenState extends State<HomeScreen> {
       widget.session.currentRole == UserRole.admin ||
       widget.session.currentRole == UserRole.approver;
 
+  /// The client-side mirror of the database's `is_operational_admin()`.
+  ///
+  /// Admin and Approver are operationally equivalent by deliberate decision
+  /// (Slice 5) — same menu, same screens, same actions. Keep this in step
+  /// with that SQL helper: if one gains a role the other must too, or the UI
+  /// will offer something the database then refuses.
+  ///
+  /// This is a VISIBILITY gate only. Every action behind it is independently
+  /// enforced server-side, so a wrong answer here is a cosmetic bug, never a
+  /// security hole.
+  bool get _isOperationalAdmin =>
+      widget.session.currentRole == UserRole.admin ||
+      widget.session.currentRole == UserRole.approver;
+
   /// Long-press quick actions for a Site card — Edit/Delete/Cancel. Mirrors
   /// Site Hub's "Manage site" overflow menu, just reachable without opening
   /// the site first.
@@ -1288,25 +1302,27 @@ class _HomeScreenState extends State<HomeScreen> {
                     }
                   },
                   itemBuilder: (context) => [
-                    if (widget.session.currentRole == UserRole.admin)
+                    // Admin and Approver see an IDENTICAL operational menu.
+                    // Slice 5's final decision: the two roles differ only by
+                    // label, never by capability, on the operational surface.
+                    // Every entry below is backed server-side by
+                    // is_operational_admin() (Material Master's RLS, invite
+                    // codes' policy and both RPCs) or by the Edge Function's
+                    // own profiles lookup (Account requests) — so these gates
+                    // decide VISIBILITY only and an Engineer or Sales user
+                    // who reached the screen anyway would still be refused by
+                    // the database.
+                    if (_isOperationalAdmin)
                       const PopupMenuItem(
                         value: _HomeMoreMenuAction.materialMaster,
                         child: Text('Material Master'),
                       ),
-                    // Admin-only, but this menu gate is convenience, not the
-                    // control: create/revoke re-check is_admin() server-side
-                    // and the table's only policy grants SELECT to Admins.
-                    if (widget.session.currentRole == UserRole.admin)
+                    if (_isOperationalAdmin)
                       const PopupMenuItem(
                         value: _HomeMoreMenuAction.inviteCodes,
                         child: Text('Invite codes'),
                       ),
-                    // Admin AND Approver — reviewing the signup queue is the
-                    // one privileged action an Approver has. Same caveat as
-                    // above: the Edge Function re-derives the caller's role
-                    // from profiles, so this entry decides visibility only.
-                    if (widget.session.currentRole == UserRole.admin ||
-                        widget.session.currentRole == UserRole.approver)
+                    if (_isOperationalAdmin)
                       const PopupMenuItem(
                         value: _HomeMoreMenuAction.signupRequests,
                         child: Text('Account requests'),
@@ -1325,19 +1341,25 @@ class _HomeScreenState extends State<HomeScreen> {
                     // account is currently logged in; see
                     // lib/dev/slice4_verification.dart. Delete alongside
                     // that file once verification is done.
-                    if (kDebugMode)
+                    //
+                    // kDebugMode AND a reviewer role: these were previously
+                    // shown to every role in a debug build, which put a
+                    // fixture-seeding tool in front of Engineer and Sales
+                    // users. The harness only does anything useful for a
+                    // reviewer anyway — it refuses to run under any other
+                    // role — so hiding it is honesty, not a permission fix.
+                    // The backend is unchanged by this gate.
+                    if (kDebugMode && _isOperationalAdmin)
                       const PopupMenuItem(
                         value: _HomeMoreMenuAction.slice4AdminPass,
                         child: Text('DEV: Slice4 admin pass'),
                       ),
-                    if (kDebugMode)
+                    if (kDebugMode && _isOperationalAdmin)
                       const PopupMenuItem(
                         value: _HomeMoreMenuAction.slice4ApproverPass,
                         child: Text('DEV: Slice4 approver pass'),
                       ),
-                    if (widget.session.currentRole == UserRole.admin ||
-                        widget.session.currentRole == UserRole.approver ||
-                        kDebugMode)
+                    if (_isOperationalAdmin || kDebugMode)
                       const PopupMenuDivider(),
                     const PopupMenuItem(
                       value: _HomeMoreMenuAction.logout,

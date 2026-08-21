@@ -17,7 +17,7 @@ class SignupRequest {
     required this.createdAt,
     required this.reviewedAt,
     required this.rejectionReason,
-    required this.createdUserId,
+    required this.reviewedBy,
   });
 
   factory SignupRequest.fromRow(Map<String, dynamic> r) => SignupRequest(
@@ -32,7 +32,7 @@ class SignupRequest {
             ? null
             : DateTime.parse(r['reviewed_at'] as String),
         rejectionReason: r['rejection_reason'] as String?,
-        createdUserId: r['created_user_id'] as String?,
+        reviewedBy: r['reviewed_by'] as String?,
       );
 
   final String id;
@@ -48,14 +48,22 @@ class SignupRequest {
   final String status;
   final DateTime createdAt;
   final DateTime? reviewedAt;
+
+  /// Why a request was rejected. Recorded for the REVIEWER's benefit only —
+  /// the applicant is never sent this, and there is no mechanism that could
+  /// send it (see [SignupReviewDataSource] for why that is deliberate).
+  /// Telling them is a manual job.
   final String? rejectionReason;
 
-  /// The account this request produced, once approved. The audit trail that
-  /// answers "which account came from which request" without needing the
-  /// person who ran the approval.
-  final String? createdUserId;
+  /// Who reviewed it, as a profiles id. Resolve with
+  /// [SignupReviewDataSource.reviewerNames] — and note that an Approver
+  /// cannot resolve an Admin's id, because profiles' RLS only lets a
+  /// non-admin see their own row plus active engineers.
+  final String? reviewedBy;
 
   bool get isPending => status == 'pending';
+  bool get isApproved => status == 'approved';
+  bool get isRejected => status == 'rejected';
 }
 
 /// The result of an approve/reject attempt.
@@ -120,6 +128,35 @@ class ReviewOutcome {
 
 /// Reviewer-side operations on the signup queue.
 ///
+/// TWO THINGS THE AUDIT TRAIL CANNOT TELL YOU, both worth knowing before you
+/// rely on it as the record of who was let into the system:
+///
+///  1. THE GRANTED ROLE IS NOT STORED. approve_signup_request() takes
+///     p_granted_role, uses it to set profiles.role, and returns it — but
+///     never writes it to signup_requests. So the history shows what was
+///     REQUESTED, not what was actually granted, and those legitimately
+///     differ (the reviewer chooses). Given that both Admin and Approver can
+///     grant all four roles, "who was made an admin, and by whom" is NOT
+///     answerable from this table. Fixing it means adding a granted_role
+///     column and one assignment in that function.
+///
+///  2. THERE IS NO LINK TO THE CREATED ACCOUNT. A created_user_id column was
+///     designed but never applied to the live database, and the assignment
+///     was removed from approve_signup_request() after it broke every
+///     approval. Matching a request to its account is by email or full_name
+///     only. See the note in schema.sql above may_approve_role().
+///
+/// REJECTION IS NEVER COMMUNICATED TO THE APPLICANT. There is no rejection
+/// email and no in-app status they can check, deliberately: any signal keyed
+/// to the email address would turn request_signup() into an oracle for
+/// "does this account exist / has this person applied". rejection_reason is
+/// recorded for the reviewer, and telling the applicant is a MANUAL step
+/// somebody has to actually perform.
+///
+/// A rejected applicant can also silently re-apply — the uniqueness index is
+/// scoped `where status = 'pending'`, so rejecting frees the email again.
+/// Repeat requests from somebody already rejected are expected, not a bug.
+///
 /// Reads go straight to the table (RLS does the gating). **Writes do not**:
 /// approve and reject both go through the `review-signup` Edge Function, and
 /// the underlying RPCs are granted to `service_role` alone, so there is no
@@ -144,6 +181,26 @@ class SignupReviewDataSource {
   /// Requests awaiting review, oldest first — a queue, not a feed, so the
   /// person who has been waiting longest is at the top.
   Future<List<SignupRequest>> fetchPending() => _fetch(status: 'pending');
+
+  /// Maps profiles id -> display name, for the ids in [ids].
+  ///
+  /// IMPORTANT ASYMMETRY, and it is RLS doing it, not a bug here: profiles'
+  /// SELECT policies are (own row) OR (active engineers) OR (everything, if
+  /// is_admin()). So an ADMIN resolves every reviewer, while an APPROVER
+  /// resolves only themselves — an Admin colleague's id comes back empty.
+  /// The history view shows the raw id in that case rather than pretending
+  /// the reviewer is unknown. Widening profiles' RLS to "fix" this would
+  /// expose every account to every reviewer; showing an id is the cheaper
+  /// trade.
+  Future<Map<String, String>> reviewerNames(Iterable<String> ids) async {
+    final unique = ids.toSet().toList(growable: false);
+    if (unique.isEmpty) return const {};
+    final rows =
+        await _client.from('profiles').select('id, full_name').inFilter('id', unique);
+    return {
+      for (final r in rows) r['id'] as String: (r['full_name'] as String?) ?? '',
+    };
+  }
 
   /// Everything already dealt with, newest first. This is the audit view.
   Future<List<SignupRequest>> fetchReviewed() async {

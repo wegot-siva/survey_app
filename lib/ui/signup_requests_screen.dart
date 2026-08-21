@@ -35,6 +35,14 @@ class _SignupRequestsScreenState extends State<SignupRequestsScreen> {
   List<SignupRequest> _pending = const [];
   List<SignupRequest> _reviewed = const [];
 
+  /// profiles id -> reviewer name. Partial by design for an Approver, who
+  /// cannot read an Admin's profile row — see
+  /// [SignupReviewDataSource.reviewerNames].
+  Map<String, String> _reviewers = const {};
+
+  /// null = show everything reviewed; otherwise 'approved' or 'rejected'.
+  String? _historyFilter;
+
   /// What this reviewer may grant. An Approver gets sales/engineer; an Admin
   /// gets all four. Empty until loaded, which is why the approve dialog waits
   /// for it rather than guessing.
@@ -61,10 +69,16 @@ class _SignupRequestsScreenState extends State<SignupRequestsScreen> {
         _review.fetchReviewed(),
         _review.grantableRoles(),
       ]);
+      final pending = results[0] as List<SignupRequest>;
+      final reviewed = results[1] as List<SignupRequest>;
+      final reviewers = await _review.reviewerNames(
+        reviewed.map((r) => r.reviewedBy).whereType<String>(),
+      );
       if (!mounted) return;
       setState(() {
-        _pending = results[0] as List<SignupRequest>;
-        _reviewed = results[1] as List<SignupRequest>;
+        _pending = pending;
+        _reviewed = reviewed;
+        _reviewers = reviewers;
         _grantable = results[2] as List<String>;
         _loading = false;
       });
@@ -276,6 +290,14 @@ class _SignupRequestsScreenState extends State<SignupRequestsScreen> {
     );
   }
 
+  /// The audit trail: every request that has been dealt with, who dealt with
+  /// it, when, and — for rejections — why.
+  ///
+  /// Two things it deliberately does NOT claim to show, because the database
+  /// does not store them (see [SignupReviewDataSource]'s class comment): the
+  /// role actually GRANTED, which can differ from the role requested, and any
+  /// link to the account that was created. The tile says "asked for X" rather
+  /// than "granted X" so nobody mistakes one for the other.
   Widget _reviewedList() {
     if (_reviewed.isEmpty) {
       return const Center(
@@ -285,30 +307,87 @@ class _SignupRequestsScreenState extends State<SignupRequestsScreen> {
         ),
       );
     }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView.separated(
-        itemCount: _reviewed.length,
-        separatorBuilder: (_, _) => const Divider(height: 1),
-        itemBuilder: (context, i) {
-          final r = _reviewed[i];
-          final approved = r.status == 'approved';
-          return ListTile(
-            isThreeLine: true,
-            leading: Icon(
-              approved ? Icons.check_circle_outline : Icons.block,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-            title: Text(r.fullName),
-            subtitle: Text(
-              '${r.email}\n${approved ? 'Approved' : 'Rejected'}'
-              '${r.reviewedAt == null ? '' : ' ${_date(r.reviewedAt!)}'}'
-              '${r.rejectionReason == null ? '' : ' · ${r.rejectionReason}'}',
-            ),
-          );
-        },
+    final visible = _historyFilter == null
+        ? _reviewed
+        : _reviewed.where((r) => r.status == _historyFilter).toList();
+
+    return Column(
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              for (final f in <(String, String?)>[
+                ('All (${_reviewed.length})', null),
+                ('Approved (${_reviewed.where((r) => r.isApproved).length})',
+                    'approved'),
+                ('Rejected (${_reviewed.where((r) => r.isRejected).length})',
+                    'rejected'),
+              ]) ...[
+                ChoiceChip(
+                  label: Text(f.$1),
+                  selected: _historyFilter == f.$2,
+                  onSelected: (_) => setState(() => _historyFilter = f.$2),
+                ),
+                const SizedBox(width: 8),
+              ],
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: visible.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Text('Nothing here.', textAlign: TextAlign.center),
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView.separated(
+                    itemCount: visible.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, i) => _historyTile(visible[i]),
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _historyTile(SignupRequest r) {
+    final scheme = Theme.of(context).colorScheme;
+    final approved = r.isApproved;
+    return ListTile(
+      isThreeLine: true,
+      leading: Icon(
+        approved ? Icons.check_circle_outline : Icons.block,
+        color: approved ? scheme.primary : scheme.error,
+      ),
+      title: Text(r.fullName),
+      subtitle: Text(
+        '${r.email}\n'
+        '${approved ? 'Approved' : 'Rejected'} by ${_reviewerLabel(r)}'
+        '${r.reviewedAt == null ? '' : ' on ${_date(r.reviewedAt!)}'}\n'
+        'asked for ${r.requestedRole} · code ${r.inviteCodeUsed} · '
+        'applied ${_date(r.createdAt)}'
+        '${r.rejectionReason == null ? '' : '\nReason: ${r.rejectionReason}'}',
       ),
     );
+  }
+
+  /// The reviewer's name, or their raw id when RLS did not return a profile
+  /// for it — which is the normal case for an Approver looking at something
+  /// an Admin reviewed. Never silently blank: who reviewed it is the whole
+  /// point of the record.
+  String _reviewerLabel(SignupRequest r) {
+    final id = r.reviewedBy;
+    if (id == null) return 'an unrecorded reviewer';
+    final name = _reviewers[id];
+    if (name == null || name.isEmpty) return id;
+    return name;
   }
 
   static String _date(DateTime d) {

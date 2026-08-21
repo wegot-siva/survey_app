@@ -28,6 +28,7 @@ SignupInvite invite({
       id: 'i1',
       code: 'ABCDEFGHIJKLMNOPQRST',
       roleAllowed: 'engineer',
+      createdBy: 'admin-uuid',
       createdAt: DateTime(2026, 1, 1),
       expiresAt: expiresAt,
       maxUses: maxUses,

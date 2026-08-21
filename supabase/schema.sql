@@ -816,6 +816,55 @@ as $$
   );
 $$;
 
+-- ---------------------------------------------------------------------------
+-- ADMIN AND APPROVER ARE DELIBERATELY EQUIVALENT FOR DAY-TO-DAY OPERATIONS.
+--
+-- Slice 5 final decision by the project owner: the two roles keep separate
+-- labels, but there is to be no Admin-vs-Approver capability difference in
+-- the operational surface — invite codes, the review queue and its history,
+-- Material Master, and BoM revisions. Anywhere an Admin can act on the
+-- running application, an Approver can too.
+--
+-- Its OWN helper rather than reusing is_signup_reviewer() or can_edit_bom(),
+-- which happen to cover the same two roles today. Same reasoning that gave
+-- is_signup_reviewer() its own function: coupling them means a future change
+-- to who may review signups silently changes who may edit Material Master.
+-- These are different questions that currently share an answer.
+--
+-- SECURITY IMPLICATION, stated plainly because it is the whole point:
+-- an Approver is now, in practice, an Admin. Combined with the widened
+-- may_approve_role() (Approver may grant all four roles, admin included) and
+-- read/write access to invite codes, an Approver can mint an invite code,
+-- have a request submitted against it, approve that request, and grant it
+-- admin — entirely unassisted. The earlier "Approver cannot obtain a code"
+-- limit, previously the last structural check on the role, is GONE by
+-- deliberate choice. Treat an Approver account as exactly as sensitive as an
+-- Admin one when deciding who gets it.
+--
+-- ONE ASYMMETRY REMAINS, and it is intentional: profiles.role/active can
+-- still only be rewritten directly by an Admin ("update own or any as admin"
+-- plus prevent_self_role_escalation). No in-app screen uses that path — it
+-- exists for Dashboard/SQL-editor administration — so it is not part of the
+-- operational surface this helper governs. Widening it would additionally
+-- let an Approver re-role or deactivate EXISTING users, which approval flow
+-- cannot do.
+-- ---------------------------------------------------------------------------
+create or replace function public.is_operational_admin()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role in ('admin', 'approver') and active
+  );
+$$;
+
+revoke all on function public.is_operational_admin() from public, anon;
+grant execute on function public.is_operational_admin() to authenticated, service_role;
+
 alter table public.profiles enable row level security;
 
 -- SELECT: three independent PERMISSIVE policies for the same command, which
@@ -841,7 +890,7 @@ create policy "select engineer roster" on public.profiles
 drop policy if exists "admin selects any profile" on public.profiles;
 create policy "admin selects any profile" on public.profiles
   for select to authenticated
-  using (public.is_admin());
+  using (public.is_operational_admin());
 
 -- UPDATE: row-level gate only (own row, or admin on any row) — RLS
 -- USING/WITH CHECK clauses can't restrict which *columns* an UPDATE touches,
@@ -1412,12 +1461,19 @@ set search_path = public
 stable
 as $$
   select exists (
-    -- Slice 1: same reasoning as can_access_site — the
-    -- assigned_to_user_id branch bypasses is_admin()'s `active` check.
+    -- Slice 1: same reasoning as can_access_site — the assigned_to_user_id
+    -- branch compares auth.uid() directly and so bypasses the role helper's
+    -- own `active` check, hence the explicit is_active_user() conjunct.
+    --
+    -- Slice 5: was is_admin(); widened to is_operational_admin() so Approver
+    -- matches Admin. This also FIXED a live mismatch — BomPreviewScreen's
+    -- "Add revision" FAB is gated on `locked` only, never on role, so an
+    -- Approver was already being offered the action while the database
+    -- refused the write.
     select 1 from public.sites
     where id = target_site_id
       and public.is_active_user()
-      and (assigned_to_user_id = auth.uid() or public.is_admin())
+      and (assigned_to_user_id = auth.uid() or public.is_operational_admin())
   );
 $$;
 
@@ -1658,30 +1714,30 @@ create policy "select material_master_items for everyone" on public.material_mas
 drop policy if exists "insert material_master_items by admin" on public.material_master_items;
 create policy "insert material_master_items by admin" on public.material_master_items
   for insert to authenticated
-  with check (public.is_admin());
+  with check (public.is_operational_admin());
 
 drop policy if exists "update material_master_items by admin" on public.material_master_items;
 create policy "update material_master_items by admin" on public.material_master_items
   for update to authenticated
-  using (public.is_admin())
-  with check (public.is_admin());
+  using (public.is_operational_admin())
+  with check (public.is_operational_admin());
 
 drop policy if exists "delete material_master_items by admin" on public.material_master_items;
 create policy "delete material_master_items by admin" on public.material_master_items
   for delete to authenticated
-  using (public.is_admin());
+  using (public.is_operational_admin());
 
 drop policy if exists "dev all - material_master_audit" on public.material_master_audit;
 
 drop policy if exists "select material_master_audit by admin" on public.material_master_audit;
 create policy "select material_master_audit by admin" on public.material_master_audit
   for select to authenticated
-  using (public.is_admin());
+  using (public.is_operational_admin());
 
 drop policy if exists "insert material_master_audit by admin" on public.material_master_audit;
 create policy "insert material_master_audit by admin" on public.material_master_audit
   for insert to authenticated
-  with check (public.is_admin());
+  with check (public.is_operational_admin());
 
 -- No UPDATE, no DELETE on material_master_audit — see the doc block above.
 
@@ -2304,20 +2360,34 @@ create index if not exists signup_invites_code_idx on public.signup_invites (cod
 
 alter table public.signup_invites enable row level security;
 
--- SELECT: Admin only.
+-- SELECT: Admin AND Approver (is_operational_admin()).
 --
--- Approver deliberately gets NO access. An Approver can already approve
--- Engineer/Sales requests (Slice 4); letting them also read invite codes
--- would let them issue an invite AND approve the account it produces — a
--- complete self-service path to creating accounts with no Admin involved.
--- Issuing invites is not part of the approver role.
+-- HISTORY, because this reversed twice and the reasoning matters more than
+-- the current value:
+--
+--   Originally Admin-only, specifically to stop an Approver from both
+--   issuing an invite and approving the account it produced. When
+--   may_approve_role() was widened so an Approver could grant all four
+--   roles, this policy briefly became the last structural check on the role
+--   — an Approver could grant admin, but could not obtain a code to start
+--   the process with.
+--
+--   Slice 5's final decision removed that check ON PURPOSE: Admin and
+--   Approver are to be operationally equivalent (see is_operational_admin()
+--   for the full statement). So an Approver can now mint a code, have a
+--   request submitted against it, approve it, and grant admin — unassisted.
+--
+-- That is the accepted consequence, not an oversight. The control that
+-- remains is WHO YOU GIVE AN APPROVER ACCOUNT TO: it is now exactly as
+-- powerful as an Admin account. Engineer and Sales are unaffected and still
+-- see nothing here.
 --
 -- anon gets nothing, which is the point: RLS default-denies a command with no
 -- matching policy, so an unauthenticated caller cannot read a single row.
 drop policy if exists "admin selects signup_invites" on public.signup_invites;
 create policy "admin selects signup_invites" on public.signup_invites
   for select to authenticated
-  using (public.is_admin());
+  using (public.is_operational_admin());
 
 -- No INSERT/UPDATE/DELETE policy exists, for ANY role, on purpose. Every
 -- write goes through the SECURITY DEFINER functions below, so a code cannot
@@ -2351,8 +2421,11 @@ declare
   v_code text;
   v_attempt int := 0;
 begin
-  if not public.is_admin() then
-    raise exception 'Only an admin can create an invite code.'
+  -- Admin OR Approver: the two roles are operationally equivalent by
+  -- deliberate decision (see is_operational_admin()). Engineer and Sales are
+  -- still refused here, server-side, regardless of what any UI offers.
+  if not public.is_operational_admin() then
+    raise exception 'Only an admin or approver can create an invite code.'
       using errcode = 'insufficient_privilege';
   end if;
 
@@ -2390,8 +2463,8 @@ as $fn$
 declare
   v_rows int;
 begin
-  if not public.is_admin() then
-    raise exception 'Only an admin can revoke an invite code.'
+  if not public.is_operational_admin() then
+    raise exception 'Only an admin or approver can revoke an invite code.'
       using errcode = 'insufficient_privilege';
   end if;
 
@@ -2894,6 +2967,21 @@ $fn$;
 -- ---------------------------------------------------------------------------
 -- Rejection. Postgres only — no account, no code consumed, no GoTrue call —
 -- so this one really is atomic, and a double rejection touches zero rows.
+--
+-- THE APPLICANT IS NEVER TOLD. Nothing here, and nothing in the Edge
+-- Function's reject branch, sends any notification. That is deliberate: an
+-- in-app status screen or a "you were rejected" response keyed to the email
+-- address would turn request_signup() into an oracle for whether an account
+-- or a prior request exists — precisely the leak Slice 3's design avoids.
+-- rejection_reason below is recorded for the REVIEWER to read in the history
+-- view; passing it to the applicant is a MANUAL step a human must perform.
+--
+-- REJECTING FREES THE EMAIL. signup_requests_one_pending_per_email is scoped
+-- `where status = 'pending'`, so once a request is rejected the same address
+-- can submit a new one and will get the same neutral confirmation. A reviewer
+-- seeing repeat requests from somebody they already turned down is expected
+-- behaviour, not a bug — and the applicant has no way to know they were
+-- rejected, so they have every reason to try again.
 --
 -- Routed through the Edge Function alongside approve() rather than exposed to
 -- `authenticated` directly, even though it needs no elevated privilege. One

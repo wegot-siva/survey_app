@@ -10,6 +10,7 @@ class SignupInvite {
     required this.id,
     required this.code,
     required this.roleAllowed,
+    required this.createdBy,
     required this.createdAt,
     required this.expiresAt,
     required this.maxUses,
@@ -21,6 +22,7 @@ class SignupInvite {
         id: r['id'] as String,
         code: r['code'] as String,
         roleAllowed: r['role_allowed'] as String,
+        createdBy: r['created_by'] as String?,
         createdAt: DateTime.parse(r['created_at'] as String),
         expiresAt: r['expires_at'] == null
             ? null
@@ -35,6 +37,12 @@ class SignupInvite {
   final String id;
   final String code;
   final String roleAllowed;
+
+  /// The Admin who issued this code, as a profiles id. Nullable only for
+  /// safety — the column is NOT NULL, but a hand-seeded row could surprise us.
+  /// Resolve to a name with [SignupInviteDataSource.creatorNames].
+  final String? createdBy;
+
   final DateTime createdAt;
   final DateTime? expiresAt;
   final int maxUses;
@@ -59,6 +67,32 @@ class SignupInvite {
   bool get isUsable => inactiveReason == null;
 }
 
+/// How a code list is narrowed in the UI. Applied client-side: the whole
+/// table is a handful of rows and RLS has already scoped it to Admins, so
+/// filtering here avoids a round trip per tab change.
+enum InviteFilter {
+  all('All'),
+  active('Active'),
+  expired('Expired'),
+  revoked('Revoked'),
+  consumed('Used');
+
+  const InviteFilter(this.label);
+  final String label;
+
+  bool matches(SignupInvite i) => switch (this) {
+        InviteFilter.all => true,
+        InviteFilter.active => i.isUsable,
+        InviteFilter.revoked => i.revokedAt != null,
+        // Expired/consumed deliberately exclude revoked ones, so the four
+        // filters partition the list rather than double-counting a code that
+        // is both revoked and expired. inactiveReason applies the same
+        // precedence for the same reason.
+        InviteFilter.expired => i.inactiveReason == 'Expired',
+        InviteFilter.consumed => i.inactiveReason == 'Used',
+      };
+}
+
 /// Admin-side invite code operations.
 ///
 /// Deliberately its own data source rather than another method cluster on
@@ -70,6 +104,27 @@ class SignupInvite {
 /// edited by a direct write — not even by an Admin, who could otherwise reset
 /// `uses` and defeat single-use. The functions re-check `is_admin()`
 /// themselves, so the client is never the thing enforcing this.
+///
+/// ===========================================================================
+/// ADMIN AND APPROVER — deliberately equivalent, not an accident.
+///
+/// This was Admin-only until Slice 5's final decision made the two roles
+/// operationally identical. Server-side that is `is_operational_admin()`:
+/// signup_invites' SELECT policy, create_signup_invite and
+/// revoke_signup_invite all use it, so an Approver reaching this class is
+/// genuinely authorised rather than slipping past a UI gate.
+///
+/// KNOW WHAT THIS MEANS BEFORE HANDING OUT AN APPROVER ACCOUNT. An Approver
+/// can grant all four roles (may_approve_role) AND now mint invite codes. So
+/// an Approver can create a code, have a request submitted against it,
+/// approve that request, and grant it admin — with no Admin involved at any
+/// step. An Approver account is exactly as sensitive as an Admin account.
+/// The separation between the two labels is organisational, not a security
+/// boundary.
+///
+/// Engineer and Sales remain fully excluded, and that IS still a security
+/// boundary enforced in the database, not here.
+/// ===========================================================================
 class SignupInviteDataSource {
   SupabaseClient get _client => Supabase.instance.client;
 
@@ -103,6 +158,22 @@ class SignupInviteDataSource {
       params: {'p_id': id},
     );
     return ok == true;
+  }
+
+  /// Maps profiles id -> display name, for the ids in [ids].
+  ///
+  /// Only the caller's RLS view of `profiles` is visible. For an Admin that
+  /// is every row ("admin selects any profile"), so every issuer resolves.
+  /// An id that does not resolve is simply absent from the map — the UI
+  /// shows the raw id rather than inventing a name.
+  Future<Map<String, String>> creatorNames(Iterable<String> ids) async {
+    final unique = ids.toSet().toList(growable: false);
+    if (unique.isEmpty) return const {};
+    final rows =
+        await _client.from('profiles').select('id, full_name').inFilter('id', unique);
+    return {
+      for (final r in rows) r['id'] as String: (r['full_name'] as String?) ?? '',
+    };
   }
 
   /// Every code, newest first. Returns empty for a non-Admin — RLS filters

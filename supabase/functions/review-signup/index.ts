@@ -57,6 +57,45 @@
 // just makes it easier to forget there are two.
 //
 // Deploying is a manual step after any change here. There is no CI.
+//
+// WHO MAY APPROVE WHAT — A DELIBERATE DECISION WITH A REAL IMPLICATION
+// -------------------------------------------------------------------
+// Both Admin AND Approver can approve requests for ALL FOUR roles, including
+// admin and approver. That is intentional and was chosen by the project
+// owner; it is NOT an oversight to be "corrected". The rule lives in
+// may_approve_role() in schema.sql, which this function calls rather than
+// deciding anything itself.
+//
+// The implication, stated plainly because whoever inherits this needs it:
+// an Approver can create an Admin account. The granted role is the
+// reviewer's choice and is NOT bound by what the applicant requested, so any
+// pending request can be approved as 'admin'.
+//
+// Slice 5 went further and made the two roles operationally equivalent
+// outright (see is_operational_admin() in schema.sql): an Approver can now
+// also mint and revoke invite codes. There is therefore NO structural limit
+// left between Approver and Admin on the operational surface — an Approver
+// can issue a code, get a request submitted against it, approve it, and
+// grant admin, unassisted. That is deliberate. The control is who you give
+// an Approver account to; treat it as an Admin account.
+//
+// The one remaining asymmetry is that only an Admin can directly rewrite
+// profiles.role/active (no in-app screen does this — it is for
+// Dashboard/SQL administration).
+//
+// REJECTION IS SILENT, ON PURPOSE
+// -------------------------------
+// The reject path below writes the database row and sends NOTHING. There is
+// no rejection email and no in-app status an applicant can check, because
+// any signal keyed to an email address would turn request_signup() into an
+// oracle for "does this account exist / has this person applied" — the exact
+// leak Slice 3 was built to avoid. rejection_reason is recorded for the
+// REVIEWER; telling the applicant is a manual, human step.
+//
+// A rejected applicant can also silently re-apply: the uniqueness index on
+// signup_requests is scoped `where status = 'pending'`, so rejecting frees
+// the email again. Repeat requests from somebody already turned down are
+// expected behaviour, not a bug.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
 

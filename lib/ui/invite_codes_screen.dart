@@ -5,13 +5,19 @@ import '../data/signup_invite_data_source.dart';
 import '../models/user_role.dart';
 import 'widgets/load_error_view.dart';
 
-/// Admin-only screen for issuing, reviewing and revoking signup invite codes.
+/// Screen for issuing, reviewing and revoking signup invite codes. Open to
+/// Admin AND Approver, who are operationally equivalent by deliberate
+/// decision (Slice 5).
 ///
-/// Reachable only from the Admin overflow menu, but the gate that matters is
-/// not this screen: `create_signup_invite` and `revoke_signup_invite` both
-/// re-check `is_admin()` server-side and raise otherwise, and the table's
-/// only policy grants SELECT to Admins alone. A non-Admin who reached this
-/// screen would see an empty list and get an error on every action.
+/// The gate that matters is not this screen: `create_signup_invite` and
+/// `revoke_signup_invite` both re-check `is_operational_admin()` server-side
+/// and raise otherwise, and the table's only SELECT policy uses the same
+/// helper. An Engineer or Sales user who somehow reached this screen would
+/// see an empty list and get an error on every action.
+///
+/// See [SignupInviteDataSource] for what giving an Approver this access
+/// implies — in short, an Approver account is now as powerful as an Admin
+/// one, and should be handed out on that basis.
 class InviteCodesScreen extends StatefulWidget {
   const InviteCodesScreen({super.key, this.invites});
 
@@ -28,6 +34,12 @@ class _InviteCodesScreenState extends State<InviteCodesScreen> {
       widget.invites ?? SignupInviteDataSource();
 
   List<SignupInvite> _codes = const [];
+
+  /// profiles id -> display name for whoever issued each code. Empty for any
+  /// id RLS would not show us; the tile falls back to the raw id.
+  Map<String, String> _creators = const {};
+
+  InviteFilter _filter = InviteFilter.all;
   bool _loading = true;
   Object? _loadError;
 
@@ -44,9 +56,13 @@ class _InviteCodesScreenState extends State<InviteCodesScreen> {
     });
     try {
       final codes = await _invites.fetchInvites();
+      final creators = await _invites.creatorNames(
+        codes.map((c) => c.createdBy).whereType<String>(),
+      );
       if (!mounted) return;
       setState(() {
         _codes = codes;
+        _creators = creators;
         _loading = false;
       });
     } catch (e) {
@@ -57,6 +73,13 @@ class _InviteCodesScreenState extends State<InviteCodesScreen> {
       });
     }
   }
+
+  List<SignupInvite> get _visible =>
+      _codes.where(_filter.matches).toList(growable: false);
+
+  /// Counts come from the unfiltered list, so each chip shows its own total
+  /// rather than a count of what is already on screen.
+  int _countFor(InviteFilter f) => _codes.where(f.matches).length;
 
   Future<void> _generate() async {
     final result = await showDialog<_NewInvite>(
@@ -200,16 +223,53 @@ class _InviteCodesScreenState extends State<InviteCodesScreen> {
                         ),
                       ),
                     )
-                  : RefreshIndicator(
-                      onRefresh: _load,
-                      child: ListView.separated(
-                        itemCount: _codes.length,
-                        separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (context, i) => _tile(_codes[i]),
-                      ),
+                  : Column(
+                      children: [
+                        _filterBar(),
+                        const Divider(height: 1),
+                        Expanded(
+                          child: _visible.isEmpty
+                              ? Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(32),
+                                    child: Text(
+                                      'No ${_filter.label.toLowerCase()} codes.',
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                )
+                              : RefreshIndicator(
+                                  onRefresh: _load,
+                                  child: ListView.separated(
+                                    itemCount: _visible.length,
+                                    separatorBuilder: (_, _) =>
+                                        const Divider(height: 1),
+                                    itemBuilder: (context, i) =>
+                                        _tile(_visible[i]),
+                                  ),
+                                ),
+                        ),
+                      ],
                     ),
     );
   }
+
+  Widget _filterBar() => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            for (final f in InviteFilter.values) ...[
+              ChoiceChip(
+                label: Text('${f.label} (${_countFor(f)})'),
+                selected: _filter == f,
+                onSelected: (_) => setState(() => _filter = f),
+              ),
+              const SizedBox(width: 8),
+            ],
+          ],
+        ),
+      );
 
   Widget _tile(SignupInvite invite) {
     final reason = invite.inactiveReason;
@@ -223,10 +283,12 @@ class _InviteCodesScreenState extends State<InviteCodesScreen> {
           color: reason == null ? null : scheme.onSurfaceVariant,
         ),
       ),
+      isThreeLine: true,
       subtitle: Text(
         '${invite.roleAllowed} · '
-        '${reason ?? _remaining(invite)}'
-        '${invite.expiresAt == null ? '' : ' · expires ${_date(invite.expiresAt!)}'}',
+        '${reason ?? 'Active'} · ${invite.uses}/${invite.maxUses} used'
+        '${invite.expiresAt == null ? ' · no expiry' : ' · expires ${_date(invite.expiresAt!)}'}'
+        '\nissued by ${_creatorLabel(invite)} on ${_date(invite.createdAt)}',
       ),
       trailing: invite.isUsable
           ? TextButton(
@@ -237,8 +299,16 @@ class _InviteCodesScreenState extends State<InviteCodesScreen> {
     );
   }
 
-  static String _remaining(SignupInvite i) =>
-      i.maxUses == 1 ? 'unused' : '${i.uses}/${i.maxUses} used';
+  /// The issuing Admin's name, or the bare id when RLS did not return a
+  /// profile for it. Never blank — "who issued this" is the point of the
+  /// field, so an unresolved id is still more useful than an empty string.
+  String _creatorLabel(SignupInvite i) {
+    final id = i.createdBy;
+    if (id == null) return 'unknown';
+    final name = _creators[id];
+    if (name == null || name.isEmpty) return id;
+    return name;
+  }
 
   static String _date(DateTime d) {
     final l = d.toLocal();
