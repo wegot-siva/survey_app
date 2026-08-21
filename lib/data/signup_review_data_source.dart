@@ -18,6 +18,7 @@ class SignupRequest {
     required this.reviewedAt,
     required this.rejectionReason,
     required this.reviewedBy,
+    required this.grantedRole,
   });
 
   factory SignupRequest.fromRow(Map<String, dynamic> r) => SignupRequest(
@@ -33,6 +34,7 @@ class SignupRequest {
             : DateTime.parse(r['reviewed_at'] as String),
         rejectionReason: r['rejection_reason'] as String?,
         reviewedBy: r['reviewed_by'] as String?,
+        grantedRole: r['granted_role'] as String?,
       );
 
   final String id;
@@ -60,6 +62,14 @@ class SignupRequest {
   /// cannot resolve an Admin's id, because profiles' RLS only lets a
   /// non-admin see their own row plus active engineers.
   final String? reviewedBy;
+
+  /// The role actually granted at approval — which can differ from
+  /// [requestedRole], since the reviewer chooses it. Null for a pending or
+  /// rejected request, and null forever for anything approved before this
+  /// column existed (it is written once, at approval time, never
+  /// backfilled). A non-null value here is the only reliable answer to "what
+  /// did this person actually become".
+  final String? grantedRole;
 
   bool get isPending => status == 'pending';
   bool get isApproved => status == 'approved';
@@ -128,23 +138,19 @@ class ReviewOutcome {
 
 /// Reviewer-side operations on the signup queue.
 ///
-/// TWO THINGS THE AUDIT TRAIL CANNOT TELL YOU, both worth knowing before you
-/// rely on it as the record of who was let into the system:
+/// ONE THING THE AUDIT TRAIL STILL CANNOT TELL YOU, worth knowing before you
+/// rely on it as the record of who was let into the system: THERE IS NO LINK
+/// TO THE CREATED ACCOUNT. A created_user_id column was designed but never
+/// applied to the live database, and the assignment was removed from
+/// approve_signup_request() after it broke every approval. Matching a
+/// request to its account is by email or full_name only. See the note in
+/// schema.sql above may_approve_role().
 ///
-///  1. THE GRANTED ROLE IS NOT STORED. approve_signup_request() takes
-///     p_granted_role, uses it to set profiles.role, and returns it — but
-///     never writes it to signup_requests. So the history shows what was
-///     REQUESTED, not what was actually granted, and those legitimately
-///     differ (the reviewer chooses). Given that both Admin and Approver can
-///     grant all four roles, "who was made an admin, and by whom" is NOT
-///     answerable from this table. Fixing it means adding a granted_role
-///     column and one assignment in that function.
-///
-///  2. THERE IS NO LINK TO THE CREATED ACCOUNT. A created_user_id column was
-///     designed but never applied to the live database, and the assignment
-///     was removed from approve_signup_request() after it broke every
-///     approval. Matching a request to its account is by email or full_name
-///     only. See the note in schema.sql above may_approve_role().
+/// [SignupRequest.grantedRole] closes the OTHER half of this gap: given that
+/// both Admin and Approver may grant all four roles (may_approve_role, Slice
+/// 5), "who was made an admin, and by whom" is now answerable from this
+/// table for any approval made after that column existed. It stays null,
+/// forever, for anything approved before.
 ///
 /// REJECTION IS NEVER COMMUNICATED TO THE APPLICANT. There is no rejection
 /// email and no in-app status they can check, deliberately: any signal keyed

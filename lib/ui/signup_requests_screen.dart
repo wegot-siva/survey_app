@@ -293,11 +293,12 @@ class _SignupRequestsScreenState extends State<SignupRequestsScreen> {
   /// The audit trail: every request that has been dealt with, who dealt with
   /// it, when, and — for rejections — why.
   ///
-  /// Two things it deliberately does NOT claim to show, because the database
-  /// does not store them (see [SignupReviewDataSource]'s class comment): the
-  /// role actually GRANTED, which can differ from the role requested, and any
-  /// link to the account that was created. The tile says "asked for X" rather
-  /// than "granted X" so nobody mistakes one for the other.
+  /// One thing it still deliberately does NOT claim to show, because the
+  /// database does not store it (see [SignupReviewDataSource]'s class
+  /// comment): any link to the account that was created. Matching a request
+  /// to its account is by email or full_name only.
+  ///
+  /// The role actually GRANTED is shown when known — see [_roleLine].
   Widget _reviewedList() {
     if (_reviewed.isEmpty) {
       return const Center(
@@ -371,11 +372,30 @@ class _SignupRequestsScreenState extends State<SignupRequestsScreen> {
         '${r.email}\n'
         '${approved ? 'Approved' : 'Rejected'} by ${_reviewerLabel(r)}'
         '${r.reviewedAt == null ? '' : ' on ${_date(r.reviewedAt!)}'}\n'
-        'asked for ${r.requestedRole} · code ${r.inviteCodeUsed} · '
+        '${_roleLine(r)} · code ${r.inviteCodeUsed} · '
         'applied ${_date(r.createdAt)}'
         '${r.rejectionReason == null ? '' : '\nReason: ${r.rejectionReason}'}',
       ),
     );
+  }
+
+  /// What to say about role, given what the row actually has.
+  ///
+  /// Rejected: nothing was ever granted, so "asked for X" is the whole
+  /// story. Approved with grantedRole recorded: shown plainly, and called
+  /// out separately from requestedRole whenever the reviewer chose
+  /// something different — that divergence is exactly the fact this column
+  /// exists to capture. Approved but grantedRole is null: this request was
+  /// approved before that column existed and was never backfilled — say so
+  /// rather than silently implying "asked for X" was what happened.
+  String _roleLine(SignupRequest r) {
+    if (!r.isApproved) return 'asked for ${r.requestedRole}';
+    final granted = r.grantedRole;
+    if (granted == null) {
+      return 'asked for ${r.requestedRole} (granted role not recorded)';
+    }
+    if (granted == r.requestedRole) return 'granted $granted';
+    return 'asked for ${r.requestedRole}, granted $granted';
   }
 
   /// The reviewer's name, or their raw id when RLS did not return a profile

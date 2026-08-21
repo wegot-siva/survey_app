@@ -41,6 +41,7 @@ SignupRequest _request({
       reviewedAt: null,
       rejectionReason: null,
       reviewedBy: null,
+      grantedRole: null,
     );
 
 /// Records what the screen sent, and answers however the test needs.

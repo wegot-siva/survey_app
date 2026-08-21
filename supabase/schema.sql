@@ -2757,6 +2757,25 @@ grant execute on function public.request_signup(text, text, text, text) to anon,
 -- If the audit link is ever wanted back, BOTH halves have to return: this
 -- ALTER *and* the assignment in approve_signup_request(). Restoring only one
 -- reproduces exactly the failure above.
+--
+-- granted_role is the ANSWER to the gap created_user_id left behind, not a
+-- repeat of it. requested_role is what the applicant's invite code allowed;
+-- it is NOT what they were granted — the reviewer's choice at approval time
+-- can differ, and given both Admin and Approver may grant all four roles
+-- (may_approve_role, Slice 5), "who was made an admin, and by whom" was NOT
+-- answerable from this table alone. This column, and the matching assignment
+-- inside approve_signup_request() below, close that gap.
+--
+-- Nullable, and stays null forever for a pending or rejected request — it is
+-- written exactly once, inside the same transaction that flips status to
+-- 'approved', so it can never point at a grant that did not actually happen.
+-- APPLY THIS BEFORE (or together with) approve_signup_request()'s updated
+-- definition below — the function assigns to this column, and doing it in
+-- the wrong order reproduces the exact created_user_id failure this comment
+-- is warning about.
+alter table public.signup_requests
+  add column if not exists granted_role text
+    check (granted_role in ('sales', 'engineer', 'approver', 'admin'));
 
 -- ---------------------------------------------------------------------------
 -- The approval authority matrix, in one place so the Edge Function and the
@@ -2905,9 +2924,10 @@ begin
   -- produced. "Which account came from which request" is answerable only by
   -- matching email, or full_name, between signup_requests and profiles.
   update public.signup_requests r
-     set status      = 'approved',
-         reviewed_by = p_reviewer_id,
-         reviewed_at = now()
+     set status       = 'approved',
+         reviewed_by  = p_reviewer_id,
+         reviewed_at  = now(),
+         granted_role = p_granted_role
    where r.id = p_request_id
      and r.status = 'pending'
   returning r.* into v_req;
