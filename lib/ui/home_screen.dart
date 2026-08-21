@@ -2,6 +2,7 @@ import 'dart:async' show unawaited;
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data/survey_repository.dart';
 import '../models/site.dart';
@@ -13,9 +14,11 @@ import '../services/sync_controller.dart';
 import '../services/sync_service.dart';
 import 'approver_review_screen.dart';
 import 'assign_survey_screen.dart';
+import '../dev/slice4_verification.dart';
 import 'create_site_screen.dart';
 import 'edit_site_details_screen.dart';
 import 'invite_codes_screen.dart';
+import 'signup_requests_screen.dart';
 import 'material_master_group_list_screen.dart';
 import 'site_hub_screen.dart';
 import 'sync_scope.dart';
@@ -30,8 +33,11 @@ import 'widgets/load_error_view.dart';
 /// (role/build-type gated) in [_HomeScreenState.build] — new admin actions
 /// added later go here too, rather than back onto the AppBar itself.
 enum _HomeMoreMenuAction {
+  slice4AdminPass,
+  slice4ApproverPass,
   materialMaster,
   inviteCodes,
+  signupRequests,
   testConnection,
   logout,
 }
@@ -399,6 +405,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _openSignupRequests() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const SignupRequestsScreen()),
+    );
+  }
+
   Future<void> _openMaterialMaster() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -441,17 +453,73 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// TEMPORARY — runs the Slice 4 verification harness as whichever account
+  /// is currently logged in. Results go to the debug console only (PASS/FAIL
+  /// lines with HTTP status/body — never a token); this dialog just reports
+  /// pass/fail counts and whether it crashed, so you don't have to be
+  /// watching the console to know it finished. See
+  /// lib/dev/slice4_verification.dart.
+  Future<void> _runSlice4Pass({required bool admin}) async {
+    final messenger = ScaffoldMessenger.of(context)
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            'Running Slice4 ${admin ? 'admin' : 'approver'} pass — watch '
+            'the debug console…',
+          ),
+        ),
+      );
+
+    final runner = Slice4VerificationRunner();
+    String outcome;
+    try {
+      if (admin) {
+        await runner.runAdminPass();
+      } else {
+        await runner.runApproverPass();
+      }
+      outcome = 'Finished — see debug console for PASS/FAIL detail.';
+    } catch (e) {
+      outcome = 'Harness threw: $e';
+    }
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Slice4 ${admin ? 'admin' : 'approver'} pass'),
+        content: SingleChildScrollView(child: SelectableText(outcome)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _logout() async {
     final name = widget.session.currentUserName?.trim();
     final roleLabel = widget.session.currentRole?.label ?? 'a role';
     final identity = (name == null || name.isEmpty)
         ? 'signed in as $roleLabel'
         : 'signed in as $name ($roleLabel)';
+    // TEMPORARY DEBUG — shows which Supabase account is actually signed in,
+    // for identity verification while diagnosing the Slice 4 harness. No
+    // token, no secret — just the plain email, and only in debug builds.
+    // Remove once the identity question is settled.
+    final debugEmail =
+        kDebugMode ? Supabase.instance.client.auth.currentUser?.email : null;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Log out?'),
-        content: Text('You are $identity. Log out to switch roles?'),
+        content: Text(
+          'You are $identity. Log out to switch roles?'
+          '${debugEmail == null ? '' : '\n\n[DEBUG] signed in as: $debugEmail'}',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -1207,8 +1275,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         _openMaterialMaster();
                       case _HomeMoreMenuAction.inviteCodes:
                         _openInviteCodes();
+                      case _HomeMoreMenuAction.signupRequests:
+                        _openSignupRequests();
                       case _HomeMoreMenuAction.testConnection:
                         _testSupabase();
+                      case _HomeMoreMenuAction.slice4AdminPass:
+                        _runSlice4Pass(admin: true);
+                      case _HomeMoreMenuAction.slice4ApproverPass:
+                        _runSlice4Pass(admin: false);
                       case _HomeMoreMenuAction.logout:
                         _logout();
                     }
@@ -1227,6 +1301,16 @@ class _HomeScreenState extends State<HomeScreen> {
                         value: _HomeMoreMenuAction.inviteCodes,
                         child: Text('Invite codes'),
                       ),
+                    // Admin AND Approver — reviewing the signup queue is the
+                    // one privileged action an Approver has. Same caveat as
+                    // above: the Edge Function re-derives the caller's role
+                    // from profiles, so this entry decides visibility only.
+                    if (widget.session.currentRole == UserRole.admin ||
+                        widget.session.currentRole == UserRole.approver)
+                      const PopupMenuItem(
+                        value: _HomeMoreMenuAction.signupRequests,
+                        child: Text('Account requests'),
+                      ),
                     // Developer diagnostic — compiled out of release builds
                     // entirely. This is a build-type concern (dev vs field),
                     // not a role/permission one, so kDebugMode is the right
@@ -1236,7 +1320,23 @@ class _HomeScreenState extends State<HomeScreen> {
                         value: _HomeMoreMenuAction.testConnection,
                         child: Text('Test Supabase connection'),
                       ),
+                    // TEMPORARY — Slice 4 verification harness. Runs against
+                    // the deployed review-signup function using whichever
+                    // account is currently logged in; see
+                    // lib/dev/slice4_verification.dart. Delete alongside
+                    // that file once verification is done.
+                    if (kDebugMode)
+                      const PopupMenuItem(
+                        value: _HomeMoreMenuAction.slice4AdminPass,
+                        child: Text('DEV: Slice4 admin pass'),
+                      ),
+                    if (kDebugMode)
+                      const PopupMenuItem(
+                        value: _HomeMoreMenuAction.slice4ApproverPass,
+                        child: Text('DEV: Slice4 approver pass'),
+                      ),
                     if (widget.session.currentRole == UserRole.admin ||
+                        widget.session.currentRole == UserRole.approver ||
                         kDebugMode)
                       const PopupMenuDivider(),
                     const PopupMenuItem(

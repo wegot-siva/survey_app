@@ -2632,3 +2632,372 @@ revoke all on function public.is_signup_reviewer() from public, anon;
 grant execute on function public.is_signup_reviewer() to authenticated;
 revoke all on function public.request_signup(text, text, text, text) from public;
 grant execute on function public.request_signup(text, text, text, text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- SLICE 4 — Review queue: approve / reject a signup request
+--
+-- Approval spans TWO systems: GoTrue (creating auth.users, issuing the link)
+-- and Postgres (the invite code, the request row, the profile). They are
+-- separate services reached over HTTP, so no single transaction can cover
+-- both and true atomicity is impossible. What is guaranteed instead:
+--
+--   every intermediate state is INERT — granting nothing, consuming nothing,
+--   claiming nothing — and every step is individually re-runnable.
+--
+-- The ordering that buys this:
+--
+--   1. Edge Function verifies the caller's JWT and reads their role from
+--      profiles SERVER-SIDE. Never from the request body.
+--   2. Create the Auth user with NO `role` in raw_app_meta_data. Slice 0's
+--      handle_new_user then writes a profile with role='engineer',
+--      active=false, and Slice 1 makes active=false mean no data access at
+--      all. A half-finished approval is therefore a login that can see
+--      nothing.
+--   3. approve_signup_request() below — ONE transaction consuming the code,
+--      flipping the request pending->approved, and activating the profile.
+--      All three or none.
+--   4. generateLink, after the database is already consistent.
+--
+-- Failing at step 3 leaves an inactive, role-less account and a still-pending
+-- request: visible, harmless, and fixed by simply approving again. The
+-- opposite ordering ("reserve the code first") would instead leave a dead
+-- code and a request reading `approved` with no account behind it — silently
+-- and permanently wrong. Failing toward "not yet done" is the whole point.
+--
+-- WHY AN EDGE FUNCTION AND NOT JUST THIS RPC: creating an auth.users row and
+-- minting a link are GoTrue operations. SECURITY DEFINER grants Postgres
+-- privileges, not GoTrue ones, so no amount of SQL can do it. See
+-- supabase/functions/review-signup/index.ts.
+-- ---------------------------------------------------------------------------
+
+-- created_user_id (an audit-trail link from a request to the account it
+-- produced) was specified here but never actually applied to the live
+-- database. approve_signup_request() below wrote to it, so EVERY approval
+-- failed with `column "created_user_id" ... does not exist` until that
+-- assignment was removed.
+--
+-- The ALTER is deliberately NOT reinstated: the decision was to drop the
+-- column rather than add it. Removing the statement keeps this file honest —
+-- re-applying schema.sql must not silently recreate a column the deployed
+-- function no longer writes and nothing reads.
+--
+-- If the audit link is ever wanted back, BOTH halves have to return: this
+-- ALTER *and* the assignment in approve_signup_request(). Restoring only one
+-- reproduces exactly the failure above.
+
+-- ---------------------------------------------------------------------------
+-- The approval authority matrix, in one place so the Edge Function and the
+-- RPC cannot disagree about it.
+--
+--   Admin     may grant any of the four roles.
+--   Approver  may grant any of the four roles.
+--   Engineer  may grant nothing.
+--   Sales     may grant nothing.
+--
+-- So the two reviewer roles now have IDENTICAL granting authority; the
+-- distinction between Admin and Approver carries no weight here any more,
+-- only elsewhere (notably signup_invites, which Approver still cannot read —
+-- see that table's SELECT policy).
+--
+-- CHANGED DELIBERATELY, by the project owner's explicit decision, from an
+-- earlier stricter rule where Approver could grant only sales/engineer. That
+-- earlier rule existed to stop privilege escalation by proxy, and dropping it
+-- has real consequences worth understanding before relying on it:
+--
+--   * this function is the authority approve_signup_request() itself checks,
+--     so an Approver can now genuinely CREATE an Admin account, not merely be
+--     offered the option in the UI;
+--   * the granted role is the reviewer's choice and is NOT bound by what the
+--     request asked for, so any pending request — even one submitted for
+--     'sales' — can be approved as 'admin';
+--   * Approver still cannot mint an invite code, so bootstrapping an account
+--     from nothing still needs an Admin-issued code to exist first. That is
+--     now the only remaining structural limit on an Approver.
+--
+-- Rejection is held to the same matrix (reject_signup_request calls this too),
+-- so an Approver can likewise now dispose of an admin/approver request.
+-- ---------------------------------------------------------------------------
+create or replace function public.may_approve_role(p_reviewer_role text, p_target_role text)
+returns boolean
+language sql
+immutable
+as $fn$
+  select case
+    when p_reviewer_role = 'admin'    then p_target_role in ('sales', 'engineer', 'approver', 'admin')
+    when p_reviewer_role = 'approver' then p_target_role in ('sales', 'engineer', 'approver', 'admin')
+    else false
+  end;
+$fn$;
+
+-- ---------------------------------------------------------------------------
+-- Looks up the Auth account for an email. Needed by the Edge Function's
+-- orphan-recovery path, which must be able to find the inert account a
+-- previous failed attempt left behind.
+--
+-- Its own function rather than GoTrue's listUsers, which pages: this answers
+-- exactly, in one round trip, and cannot silently miss a user past the end of
+-- the first page as the project grows.
+--
+-- service_role only. auth.users is not readable by any client role, and this
+-- deliberately does not change that.
+-- ---------------------------------------------------------------------------
+create or replace function public.auth_user_id_for_email(p_email text)
+returns uuid
+language sql
+security definer
+set search_path = public
+stable
+as $fn$
+  select u.id from auth.users u
+  where lower(u.email) = lower(trim(coalesce(p_email, '')))
+  limit 1;
+$fn$;
+
+-- ---------------------------------------------------------------------------
+-- Step 3: the whole database side of an approval, in one transaction.
+--
+-- Called ONLY by the Edge Function, with the service_role key. That is not a
+-- convention — it is load-bearing. prevent_self_role_escalation refuses any
+-- change to profiles.role/active unless auth.uid() is null or the caller is
+-- an admin, and an APPROVER is neither. Under service_role there is no `sub`
+-- claim, auth.uid() is null, and the trigger exempts the write. That trigger
+-- is doing exactly its job and is not weakened here.
+--
+-- Because auth.uid() is null, this function cannot discover its caller. The
+-- reviewer's id is therefore a parameter — but one the Edge Function has
+-- ALREADY verified by validating the JWT against GoTrue. This function still
+-- re-derives that reviewer's role and authority from profiles rather than
+-- trusting anything passed in.
+--
+-- It also refuses to trust the Edge Function about WHICH account to activate:
+-- the account's email must match the request's, and the account must still be
+-- inactive. So even a buggy or compromised Edge Function cannot use this to
+-- activate or re-role an existing live user.
+--
+-- Returns a jsonb outcome for the expected "nothing to do" case, and RAISES
+-- for anything that must roll the transaction back.
+-- ---------------------------------------------------------------------------
+create or replace function public.approve_signup_request(
+  p_request_id  uuid,
+  p_reviewer_id uuid,
+  p_user_id     uuid,
+  p_granted_role text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_reviewer_role   text;
+  v_reviewer_active boolean;
+  v_req             public.signup_requests%rowtype;
+  v_account_email   text;
+begin
+  if p_granted_role not in ('sales', 'engineer', 'approver', 'admin') then
+    raise exception 'unknown_role' using errcode = '22023';
+  end if;
+
+  -- Reviewer authority, re-derived here rather than accepted from the caller.
+  select p.role, p.active into v_reviewer_role, v_reviewer_active
+    from public.profiles p where p.id = p_reviewer_id;
+
+  if v_reviewer_role is null or not coalesce(v_reviewer_active, false) then
+    raise exception 'not_a_reviewer' using errcode = '42501';
+  end if;
+
+  -- The granted role comes from the approver's action. It is NOT taken from
+  -- requested_role, and it is NOT bounded by the invite code's role_allowed
+  -- (an Admin may legitimately approve someone at a different level than the
+  -- code they were sent). It IS bounded by what this reviewer may grant.
+  if not public.may_approve_role(v_reviewer_role, p_granted_role) then
+    raise exception 'role_above_reviewer' using errcode = '42501';
+  end if;
+
+  -- Compare-and-swap on the request. Zero rows means somebody already
+  -- reviewed it; nothing else in this transaction has run yet, so returning
+  -- here has written nothing at all.
+  --
+  -- created_user_id is deliberately NOT written here. The column was
+  -- specified in this file but never applied to the live database, so the
+  -- assignment failed every approval outright with
+  -- `column "created_user_id" of relation "signup_requests" does not exist`.
+  -- Removed rather than adding the column, by explicit decision: it was an
+  -- audit-trail nicety, and nothing in the approval contract depends on it.
+  -- p_user_id is still used below (email match, profile activation) and is
+  -- still part of this function's signature.
+  --
+  -- CONSEQUENCE, worth knowing before someone tries to reconstruct history:
+  -- there is now no stored link from a signup_request to the account it
+  -- produced. "Which account came from which request" is answerable only by
+  -- matching email, or full_name, between signup_requests and profiles.
+  update public.signup_requests r
+     set status      = 'approved',
+         reviewed_by = p_reviewer_id,
+         reviewed_at = now()
+   where r.id = p_request_id
+     and r.status = 'pending'
+  returning r.* into v_req;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'already_reviewed');
+  end if;
+
+  -- The account being activated must be the account for THIS request's
+  -- email. Without this, a caller that passed the wrong user id could hand
+  -- someone else's account a new role.
+  select lower(u.email) into v_account_email from auth.users u where u.id = p_user_id;
+  if v_account_email is null or v_account_email is distinct from lower(v_req.email) then
+    raise exception 'account_email_mismatch' using errcode = '42501';
+  end if;
+
+  -- Consume the invite code, re-evaluating the SAME predicate
+  -- validate_signup_invite() applies — so a code revoked, expired or used up
+  -- between submission and approval is caught here rather than at submission
+  -- time. UPDATE takes a row lock and, under READ COMMITTED, re-checks this
+  -- WHERE clause against the updated row after waiting: two approvals racing
+  -- for one single-use code cannot both pass `uses < max_uses`.
+  update public.signup_invites i
+     set uses = i.uses + 1
+   where i.code = v_req.invite_code_used
+     and i.revoked_at is null
+     and (i.expires_at is null or i.expires_at > now())
+     and i.uses < i.max_uses;
+
+  if not found then
+    -- Rolls back the approval above. The request stays pending and can be
+    -- approved again once a usable code is issued.
+    raise exception 'invite_unusable' using errcode = 'P0001';
+  end if;
+
+  -- Activate. `and not active` is the guarantee that this only ever finishes
+  -- an account THIS flow created and left inert — never adopts a live one.
+  update public.profiles p
+     set role = p_granted_role, active = true
+   where p.id = p_user_id
+     and not p.active;
+
+  if not found then
+    raise exception 'account_not_inert' using errcode = '42501';
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'request_id', v_req.id,
+    'user_id', p_user_id,
+    'email', v_req.email,
+    'granted_role', p_granted_role
+  );
+end;
+$fn$;
+
+-- ---------------------------------------------------------------------------
+-- Rejection. Postgres only — no account, no code consumed, no GoTrue call —
+-- so this one really is atomic, and a double rejection touches zero rows.
+--
+-- Routed through the Edge Function alongside approve() rather than exposed to
+-- `authenticated` directly, even though it needs no elevated privilege. One
+-- authority boundary and one audit path is worth more here than saving a
+-- round trip: whoever inherits this should not have to discover that two
+-- superficially similar actions are gated in two different places.
+-- ---------------------------------------------------------------------------
+create or replace function public.reject_signup_request(
+  p_request_id  uuid,
+  p_reviewer_id uuid,
+  p_reason      text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_reviewer_role   text;
+  v_reviewer_active boolean;
+  v_req             public.signup_requests%rowtype;
+begin
+  select p.role, p.active into v_reviewer_role, v_reviewer_active
+    from public.profiles p where p.id = p_reviewer_id;
+
+  if v_reviewer_role is null or not coalesce(v_reviewer_active, false) then
+    raise exception 'not_a_reviewer' using errcode = '42501';
+  end if;
+
+  select r.* into v_req from public.signup_requests r where r.id = p_request_id;
+  if v_req.id is null then
+    return jsonb_build_object('ok', false, 'reason', 'already_reviewed');
+  end if;
+
+  -- Same matrix as approval: an Approver cannot dispose of a request they
+  -- could not have granted.
+  if not public.may_approve_role(v_reviewer_role, v_req.requested_role) then
+    raise exception 'role_above_reviewer' using errcode = '42501';
+  end if;
+
+  update public.signup_requests r
+     set status           = 'rejected',
+         reviewed_by      = p_reviewer_id,
+         reviewed_at      = now(),
+         rejection_reason = nullif(trim(coalesce(p_reason, '')), '')
+   where r.id = p_request_id
+     and r.status = 'pending';
+
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'already_reviewed');
+  end if;
+
+  return jsonb_build_object('ok', true, 'request_id', p_request_id);
+end;
+$fn$;
+
+-- ---------------------------------------------------------------------------
+-- Grants. Both review RPCs are service_role ONLY: they are reachable through
+-- the Edge Function and nowhere else. An Approver holding their own JWT
+-- cannot call them directly, which is what stops the reviewer id from being
+-- something a client simply asserts.
+--
+-- may_approve_role() is granted to authenticated too — it is a pure lookup
+-- table with no side effects, and the client uses it to avoid offering a
+-- reviewer a grant the server would only refuse.
+-- ---------------------------------------------------------------------------
+revoke all on function public.approve_signup_request(uuid, uuid, uuid, text) from public, anon, authenticated;
+revoke all on function public.reject_signup_request(uuid, uuid, text)         from public, anon, authenticated;
+revoke all on function public.auth_user_id_for_email(text)                    from public, anon, authenticated;
+grant execute on function public.approve_signup_request(uuid, uuid, uuid, text) to service_role;
+grant execute on function public.reject_signup_request(uuid, uuid, text)        to service_role;
+grant execute on function public.auth_user_id_for_email(text)                   to service_role;
+
+-- The Edge Function pre-flights the invite code BEFORE creating an account,
+-- so an obviously-dead code never leaves an inert orphan behind. It reuses
+-- THIS function rather than re-implementing the predicate, which means the
+-- pre-flight and the consumption inside approve_signup_request() cannot
+-- disagree. Read-only, and it consumes nothing.
+grant execute on function public.validate_signup_invite(text) to service_role;
+
+revoke all on function public.may_approve_role(text, text) from public, anon;
+grant execute on function public.may_approve_role(text, text) to authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- Which roles the CURRENT reviewer may grant. Takes no parameter on purpose:
+-- it reads auth.uid() itself, so a client cannot ask "what could an admin
+-- grant?" and act on the answer. Used only to avoid offering a reviewer a
+-- choice the server would refuse — approve_signup_request() is still the
+-- authority, and still re-checks.
+-- ---------------------------------------------------------------------------
+create or replace function public.grantable_roles()
+returns text[]
+language sql
+security definer
+set search_path = public
+stable
+as $fn$
+  select coalesce(array_agg(r order by r), '{}'::text[])
+  from unnest(array['admin', 'approver', 'engineer', 'sales']) as r
+  where public.may_approve_role(
+    (select p.role from public.profiles p where p.id = auth.uid() and p.active),
+    r
+  );
+$fn$;
+
+revoke all on function public.grantable_roles() from public, anon;
+grant execute on function public.grantable_roles() to authenticated;
